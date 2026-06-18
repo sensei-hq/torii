@@ -1,0 +1,7 @@
+{"name":"chat","category":"text","description":"Conversational AI and text generation","modified_at":"2026-01-01T00:00:00+00:00"}
+{"name":"embedding","category":"vector","description":"Generate vector embeddings for text","modified_at":"2026-01-01T00:00:00+00:00"}
+{"name":"image","category":"image","description":"Generate images from text descriptions","modified_at":"2026-01-01T00:00:00+00:00"}
+{"name":"vision","category":"vision","description":"Analyze images and visual content","modified_at":"2026-01-01T00:00:00+00:00"}
+{"name":"audio","category":"audio","description":"Speech-to-text and text-to-speech","modified_at":"2026-01-01T00:00:00+00:00"}
+{"name":"agent","category":"agent","description":"Autonomous tool-using agents","modified_at":"2026-01-01T00:00:00+00:00"}
+{"name":"video","category":"video","description":"Generate videos from text descriptions","modified_at":"2026-01-01T00:00:00+00:00"}

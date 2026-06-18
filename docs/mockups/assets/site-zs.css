@@ -1,0 +1,178 @@
+/* ─────────────────────────────────────────────────────────────
+   Strategos · site-zs.css
+   Zen-Sumi skin for the marketing site. Loaded AFTER
+   colors_and_type.css — re-points every Marginalia token at the
+   console's washi / sumi / vermillion values so the site and the
+   app share one theme. Values mirror app/zs.css.
+   ───────────────────────────────────────────────────────────── */
+
+@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@500;600;700&family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* paper ladder (washi) */
+  --paper:       oklch(0.975 0.008 85);
+  --paper-card:  oklch(0.955 0.010 85);
+  --paper-inset: oklch(0.920 0.012 85);
+  --paper-well:  oklch(0.920 0.012 85);
+  --canvas:      oklch(0.975 0.008 85);
+
+  /* ink ladder (sumi) — marginalia's "mute" reads as secondary text */
+  --ink:        oklch(0.220 0.012 50);
+  --ink-mute:   oklch(0.380 0.012 50);
+  --ink-soft:   oklch(0.580 0.010 50);
+  --ink-faint:  oklch(0.750 0.008 50);
+
+  /* hairlines */
+  --line:        oklch(0.880 0.015 85);
+  --line-strong: oklch(0.790 0.015 70);
+
+  /* the verb: moss → 朱 vermillion */
+  --moss:       oklch(0.580 0.150 35);
+  --moss-hover: oklch(0.540 0.150 35);
+  --moss-fg:    oklch(0.975 0.008 85);
+  --moss-line:  oklch(0.580 0.150 35);
+  --moss-soft:  oklch(0.580 0.150 35 / 0.12);
+
+  /* pencil accent → washi-friendly indigo (provider-hue family) */
+  --sky:      oklch(0.560 0.100 250);
+  --sky-soft: oklch(0.560 0.100 250 / 0.12);
+
+  --success: oklch(0.620 0.080 160);
+  --warn:    oklch(0.720 0.120 75);
+  --error:   oklch(0.550 0.180 28);
+
+  /* type — Fraunces display, Inter body, JetBrains mono */
+  --font-display: 'Fraunces', 'Iowan Old Style', Georgia, serif;
+  --font-body:    'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:    'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --font-hand:    'Caveat', 'Fraunces', Georgia, cursive; /* pencil layer — true handwriting */
+
+  /* radii — zen-sumi budget: 4 / 6 / 10 / pill */
+  --radius-sm:   4px;
+  --radius-md:   6px;
+  --radius-lg:   10px;
+  --radius-pill: 9999px;
+  --radius-canvas: 2px;
+
+  /* hairlines over shadows */
+  --shadow-sm: none;
+  --shadow-md: 0 1px 3px oklch(0.22 0.012 50 / 0.06), 0 8px 24px oklch(0.22 0.012 50 / 0.06);
+  --shadow-lg: 0 24px 60px oklch(0.22 0.012 50 / 0.16);
+  --shadow-pop: 0 24px 60px oklch(0.22 0.012 50 / 0.18);
+}
+
+[data-theme="dark"] {
+  --paper:       oklch(0.170 0.010 50);
+  --paper-card:  oklch(0.210 0.012 50);
+  --paper-inset: oklch(0.250 0.012 50);
+  --paper-well:  oklch(0.250 0.012 50);
+  --canvas:      oklch(0.170 0.010 50);
+
+  --ink:        oklch(0.940 0.008 85);
+  --ink-mute:   oklch(0.780 0.008 85);
+  --ink-soft:   oklch(0.600 0.010 85);
+  --ink-faint:  oklch(0.420 0.012 85);
+
+  --line:        oklch(0.300 0.010 50);
+  --line-strong: oklch(0.380 0.010 50);
+
+  --moss:       oklch(0.700 0.150 35);
+  --moss-hover: oklch(0.740 0.150 35);
+  --moss-fg:    oklch(0.170 0.010 50);
+  --moss-line:  oklch(0.700 0.150 35);
+  --moss-soft:  oklch(0.700 0.150 35 / 0.18);
+
+  --sky:      oklch(0.680 0.100 250);
+  --sky-soft: oklch(0.680 0.100 250 / 0.16);
+
+  --success: oklch(0.720 0.090 160);
+  --warn:    oklch(0.780 0.120 75);
+
+  --shadow-sm: none;
+  --shadow-md: 0 1px 3px oklch(0 0 0 / 0.3), 0 8px 24px oklch(0 0 0 / 0.3);
+  --shadow-lg: 0 24px 60px oklch(0 0 0 / 0.5);
+  --shadow-pop: 0 24px 60px oklch(0 0 0 / 0.55);
+}
+
+/* ── Zen-Sumi adjustments on site chrome ──────────────────── */
+
+/* display face is a serif now — soften the tracking site.css set for Inter Tight */
+.section-hd h2, .hero-copy h1, .brand .word {
+  letter-spacing: -0.02em !important;
+  font-weight: 500 !important;
+}
+.brand .word b { font-weight: 600; }
+.stat .n { font-weight: 500; letter-spacing: -0.01em; }
+
+/* pencil layer → quiet handwritten script, ink not crayon */
+.hand { font-style: normal; font-weight: 600; letter-spacing: 0; }
+
+/* the gateway core block: ink, not accent — vermillion is never a
+   background fill at scale in zen-sumi */
+.gw-core { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.gw-core .gc-t { color: var(--paper); font-weight: 500; }
+
+/* eyebrows pick up the zen-sumi uppercase-mono treatment */
+.eyebrow { letter-spacing: 0.18em; }
+
+/* pills should never wrap (mono runs wider than the old face) */
+.pill { white-space: nowrap; }
+
+/* a few section headings read best on a single line at desktop widths;
+   released below the tablet breakpoint so they never overflow on mobile */
+@media (min-width: 941px) {
+  #governance .section-hd h2,
+  #enterprise .section-hd h2,
+  #playground .section-hd h2 { white-space: nowrap; }
+}
+
+/* ── Tables ───────────────────────────────────────────────────
+   The site references `.table` but never defined it. Port the
+   console's hairline-row table (app/zs-app.css .tbl) so the
+   Requests & audit ledger matches the app exactly. */
+.table { width: 100%; border-collapse: collapse; }
+.table th {
+  text-align: left; font-family: var(--font-mono); font-weight: 500;
+  font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--ink-soft); padding: 10px 16px;
+  border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+.table td {
+  padding: 12px 16px; border-bottom: 1px solid var(--line);
+  font-size: 13px; color: var(--ink-mute); vertical-align: middle;
+}
+.table tbody tr { cursor: pointer; transition: background 120ms ease; }
+.table tbody tr:hover,
+.table tbody tr.sel { background: var(--paper-inset); }
+.table tbody tr:last-child td { border-bottom: none; }
+.table .num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.table .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* ── Card header + trace timeline ─────────────────────────────
+   Ported from the console (app/zs-app.css .card-hd / .trace) so the
+   "Why this model" panel matches the Requests screen exactly. */
+.card-hd {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 18px; border-bottom: 1px solid var(--line);
+}
+.card-hd .mono { white-space: nowrap; }
+.trace { display: flex; flex-direction: column; }
+.tstep { position: relative; padding-left: 38px; padding-bottom: 16px; }
+.tstep:last-child { padding-bottom: 0; }
+.tstep::before { content: ""; position: absolute; left: 13px; top: 26px; bottom: 0; width: 1px; background: var(--line); }
+.tstep:last-child::before { display: none; }
+.tnode {
+  position: absolute; left: 0; top: 0; width: 27px; height: 27px;
+  border-radius: var(--radius-md); display: grid; place-items: center;
+  border: 1px solid var(--line); background: var(--paper-card);
+}
+.thead {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em;
+  text-transform: uppercase; color: var(--ink-mute); padding-top: 5px;
+}
+.tbody { font-size: 13px; line-height: 1.4; color: var(--ink-soft); margin-top: 3px; }
+.tbody b { color: var(--ink); font-weight: 600; }
+.tbody code {
+  font-family: var(--font-mono); font-size: 12px; background: var(--paper-inset);
+  padding: 1px 5px; border-radius: var(--radius-sm); color: var(--ink); border: 1px solid var(--line);
+}

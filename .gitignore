@@ -1,0 +1,55 @@
+# dependencies (bun install)
+node_modules
+
+# output
+out
+dist
+*.tgz
+
+# code coverage
+coverage
+*.lcov
+
+# logs
+logs
+# Keep SvelteKit route directories named 'logs'
+!**/routes/**/logs/
+!**/routes/**/logs/**
+_.log
+report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
+
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# convex generated
+_generated/
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# IntelliJ based IDEs
+.idea
+
+# Finder (MacOS) folder config
+.DS_Store
+strategos.config.yaml
+.env.md
+
+# Tesseract OCR trained data (downloaded at runtime)
+*.traineddata
+
+# Temporary files (screenshots, test docs, Playwright MCP output)
+.tmp/
+.playwright-mcp/
+*.png
+*.jpg
+*.jpeg
+firebase-debug.log
+.sensei/
+.worktrees/

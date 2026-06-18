@@ -1,0 +1,43 @@
+project:
+  name: strategos
+  database: PostgreSQL
+  extensionSchema: extensions
+  staging:
+    - staging
+  dbdocs:
+    exclude:
+      schemas:
+        - staging
+        - migrate
+        - extensions
+        - history
+
+schemas:
+  - core:
+      grants:
+        service_role: [usage, select]
+  - config:
+      grants:
+        anon: [usage, select]
+        authenticated: [usage, select]
+        service_role: [usage, all]
+  - extensions
+  - history
+  - public:
+      grants:
+        anon: [usage, select]
+        authenticated: [usage, select]
+        service_role: [usage, all]
+  - staging
+  - migrate
+
+extensions:
+  - uuid-ossp
+  - vector
+
+import:
+  options:
+    truncate: true
+    nullValue: ''
+  after:
+    - import/loader.sql

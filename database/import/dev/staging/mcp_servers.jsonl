@@ -1,0 +1,2 @@
+{"name":"strategos","label":"Strategos MCP Server","transport":"stdio","command":"bun","args":["run","solution/services/mcp/src/index.ts"],"env":{},"is_active":true}
+{"name":"filesystem","label":"Filesystem Demo Server","transport":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","."],"env":{},"is_active":true}

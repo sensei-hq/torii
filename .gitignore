@@ -53,3 +53,8 @@ strategos.config.yaml
 firebase-debug.log
 .sensei/
 .worktrees/
+
+# Keep mockup reference assets (override the *.png/*.jpg/*.jpeg ignore above)
+!docs/mockups/**/*.png
+!docs/mockups/**/*.jpg
+!docs/mockups/**/*.jpeg

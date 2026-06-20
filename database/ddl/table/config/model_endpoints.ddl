@@ -22,6 +22,7 @@ create table if not exists model_endpoints (
 , max_concurrent_requests        integer default 1
 , supports_streaming             boolean default true
 , supports_function_calls        boolean default false
+, local_capable                  boolean not null default false
 , connection_config              jsonb
 , headers                        jsonb
 , authentication_config          jsonb
@@ -59,4 +60,5 @@ comment on table model_endpoints IS
 - Moved from public to config schema — reference data, not tenant-specific
 - Links AI models to specific router services with router-specific pricing
 - Supports multiple endpoints per model through different routers
-- Includes circuit breaker patterns, health checks, and failover configuration';
+- Includes circuit breaker patterns, health checks, and failover configuration
+- local_capable: true if this endpoint can run on-device (gateway-embedded) for the split-plane router';

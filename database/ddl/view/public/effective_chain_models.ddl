@@ -18,6 +18,7 @@ select
 , fcm.sequence_order
 , fcm.max_retries
 , fcm.is_active
+, fcm.plane
 from public.fallback_chains fc
 join public.fallback_chain_models fcm
   on  fcm.tenant_id         = fc.tenant_id
@@ -42,6 +43,7 @@ select
 , pfcm.sequence_order
 , pfcm.max_retries
 , pfcm.is_active
+, pfcm.plane
 from core.tenants t
 cross join core.tenants pt          -- one platform tenant expected; cross join is safe
 join public.fallback_chains pfc

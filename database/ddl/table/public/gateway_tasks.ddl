@@ -25,6 +25,8 @@ create table if not exists gateway_tasks (
 , currency           varchar(3)  not null default 'USD'
 , final_router       varchar(100)
 , final_model        varchar(100)
+, execution_location varchar(10)
+    check (execution_location in ('local', 'cloud'))
 , response_preview   text
 , error_category     varchar(100)
 , error_message      text
@@ -48,4 +50,5 @@ comment on table gateway_tasks is
 - tenant_id: partition key (renamed+retyped from organization_id varchar(100))
 - (tenant_id, task_id) unique index required for composite FK from child tables
 - One row per gateway request with input, execution summary, cost, and result
-- started_at/completed_at are timestamptz; duration is an interval';
+- started_at/completed_at are timestamptz; duration is an interval
+- execution_location: where the call ran (cloud = central gateway, local = on-device)';

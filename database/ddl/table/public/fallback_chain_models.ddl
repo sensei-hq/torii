@@ -11,6 +11,8 @@ create table if not exists fallback_chain_models (
 , sequence_order     integer not null
 , max_retries        integer not null default 1
 , is_active          boolean not null default true
+, plane              text    not null default 'cloud'
+    check (plane in ('local', 'cloud'))
 , created_at         timestamptz not null default now()
 , modified_at        timestamptz not null default now()
 , modified_by        varchar not null
@@ -35,4 +37,5 @@ comment on table fallback_chain_models is
 'Ordered router-model sequence for tenant fallback chains.
 - tenant_id: partition key matching parent fallback_chains row
 - Composite FK to fallback_chains(tenant_id, id) ensures cross-tenant safety
-- sequence_order defines fallback priority within the chain';
+- sequence_order defines fallback priority within the chain
+- plane: which execution plane this step runs on (cloud = central gateway, local = on-device)';

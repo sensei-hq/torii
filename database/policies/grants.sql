@@ -27,7 +27,8 @@ begin
     ('public', 'sessions'),
     ('public', 'session_logs'),
     ('public', 'spaces'),
-    ('public', 'space_members')
+    ('public', 'space_members'),
+    ('public', 'budget_nodes')
   ) as x(sch, tbl)
   loop
     execute format('grant select, insert, update, delete on %I.%I to authenticated', r.sch, r.tbl);

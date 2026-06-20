@@ -25,7 +25,8 @@ begin
       ('public', 'sessions'),
       ('public', 'session_logs'),
       ('public', 'spaces'),
-      ('public', 'space_members')
+      ('public', 'space_members'),
+      ('public', 'budget_nodes')
     ) as x(sch, tbl)
   loop
     execute format('alter table %I.%I enable row level security', r.sch, r.tbl);

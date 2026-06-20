@@ -13,8 +13,8 @@ create table if not exists gateway_task_logs (
 , capability        varchar(50) not null
 , status            varchar(20) not null
     check (status in ('success', 'failed', 'skipped'))
-, started_at        bigint      not null
-, duration_ms       bigint      not null
+, started_at        timestamptz not null default now()
+, duration          interval    not null
 , input_tokens      integer
 , output_tokens     integer
 , cost_incurred     decimal(10,6)
@@ -31,7 +31,7 @@ create table if not exists gateway_task_logs (
 , unique (tenant_id, gateway_task_id, sequence)
 , foreign key (tenant_id, gateway_task_id)
     references gateway_tasks(tenant_id, task_id) on delete cascade
-) partition by list (tenant_id);
+);
 
 create index if not exists gateway_task_logs_idx1
   on gateway_task_logs(tenant_id, gateway_task_id);
@@ -41,4 +41,4 @@ comment on table gateway_task_logs is
 - tenant_id: new column, partition key
 - gateway_task_id: renamed from task_id; composite FK to gateway_tasks(tenant_id, task_id)
 - One row per attempt/event (attempt, skip, fallback, quota_check, circuit_breaker)
-- Timestamps are epoch milliseconds';
+- started_at is timestamptz; duration is an interval';

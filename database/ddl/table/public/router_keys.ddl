@@ -15,7 +15,7 @@ create table if not exists router_keys (
 , modified_at       timestamptz not null default now()
 , modified_by       varchar     not null
 , primary key (tenant_id, id)
-) partition by list (tenant_id);
+);
 
 create unique index if not exists router_keys_tenant_router_ukey
   on router_keys(tenant_id, router_id);

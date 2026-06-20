@@ -12,7 +12,7 @@ create table if not exists group_levels_lang (
 , primary key (tenant_id, group_level_id, language)
 , foreign key (tenant_id, group_level_id)
     references group_levels(tenant_id, id) on delete cascade
-) partition by list (tenant_id);
+);
 
 comment on table group_levels_lang is
 'Translated names and descriptions for group_levels.

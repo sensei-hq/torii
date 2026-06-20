@@ -18,7 +18,7 @@ create table if not exists fallback_chains (
 , modified_at                  timestamptz not null default now()
 , modified_by                  varchar     not null
 , primary key (tenant_id, id)
-) partition by list (tenant_id);
+);
 
 create unique index if not exists fallback_chains_tenant_name_ukey
   on fallback_chains(tenant_id, name);

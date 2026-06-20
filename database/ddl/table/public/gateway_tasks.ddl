@@ -14,9 +14,9 @@ create table if not exists gateway_tasks (
 , total_attempts     integer     not null default 0
 , successful_attempt integer
 , candidate_models   text[]      not null default '{}'
-, started_at         bigint      not null
-, completed_at       bigint
-, duration_ms        bigint
+, started_at         timestamptz not null default now()
+, completed_at       timestamptz
+, duration           interval
 , estimated_cost     decimal(10,6)
 , actual_cost        decimal(10,6)
 , input_tokens       integer
@@ -33,9 +33,9 @@ create table if not exists gateway_tasks (
 , modified_at        timestamptz not null default now()
 , modified_by        varchar
 , primary key (tenant_id, id)
-) partition by list (tenant_id);
+);
 
--- Required for composite FK targets from gateway_task_logs and planned_tasks
+-- Required for composite FK targets from gateway_task_logs
 create unique index if not exists gateway_tasks_tenant_task_ukey
   on gateway_tasks(tenant_id, task_id);
 
@@ -48,4 +48,4 @@ comment on table gateway_tasks is
 - tenant_id: partition key (renamed+retyped from organization_id varchar(100))
 - (tenant_id, task_id) unique index required for composite FK from child tables
 - One row per gateway request with input, execution summary, cost, and result
-- Timestamps are epoch milliseconds (matching Convex convention)';
+- started_at/completed_at are timestamptz; duration is an interval';

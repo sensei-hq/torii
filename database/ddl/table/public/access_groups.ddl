@@ -16,7 +16,7 @@ create table if not exists access_groups (
     references group_levels(tenant_id, id) on delete restrict
 , foreign key (tenant_id, parent_id)
     references access_groups(tenant_id, id) on delete restrict
-) partition by list (tenant_id);
+);
 
 create index if not exists idx_access_groups_level
   on access_groups(tenant_id, level_id);

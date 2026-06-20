@@ -22,7 +22,7 @@ create table if not exists documents (
 , completed_at       timestamptz
 , modified_at        timestamptz  default now()
 , primary key (tenant_id, id)
-) partition by list (tenant_id);
+);
 
 create index if not exists idx_documents_scope
   on documents(scope, tenant_id, profile_id);

@@ -11,7 +11,7 @@ select
 , s.status
 , s.created_at
 , s.completed_at
-, s.duration_ms
+, s.duration
 from sessions s;
 
 comment on view user_accessible_sessions is

@@ -27,7 +27,12 @@ comment on table tenants is
   split_part(email, ''@'', 2) against this column.
 - is_platform: exactly one tenant may have this set to true — the Strategos
   platform tenant. Users of this tenant can also manage the config schema
-  (providers, models, routers, shared MCP servers). All other capabilities
-  (agentic chat, agents) are identical to any other tenant.
-- add_tenant_partitions_trigger fires after insert to create per-tenant
-  partitions across all public list-partitioned tables.';
+  (providers, models, routers). All other capabilities are identical to any
+  other tenant.
+- Tenant isolation is enforced via RLS (see policies/), not partitioning.';
+
+-- Bootstrap the single platform tenant at apply time (idempotent). It owns
+-- platform-default catalog (e.g. fallback chains) and must exist before seed import.
+insert into tenants (id, name, slug, is_platform, status, modified_by)
+values ('00000000-0000-0000-0000-000000000000', 'Strategos Platform', 'platform', true, 'active', 'seed')
+on conflict (id) do nothing;

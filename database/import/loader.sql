@@ -29,4 +29,3 @@ call staging.import_features();
 call staging.import_tenants();
 call staging.import_tenant_keys();
 call staging.import_router_keys();
-call staging.import_mcp_servers();

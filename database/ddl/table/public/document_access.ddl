@@ -10,7 +10,7 @@ create table if not exists document_access (
     references documents(tenant_id, id) on delete cascade
 , foreign key (tenant_id, group_id)
     references access_groups(tenant_id, id) on delete cascade
-) partition by list (tenant_id);
+);
 
 create index if not exists idx_document_access_document
   on document_access(tenant_id, document_id);

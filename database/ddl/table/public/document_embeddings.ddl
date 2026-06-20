@@ -9,7 +9,7 @@ create table if not exists document_embeddings (
 , document_id    uuid    not null
 , chunk_sequence integer not null
 , content        text    not null
-, embedding      vector(384) not null
+, embedding      vector(1024) not null
 , token_count    integer
 , start_position integer
 , end_position   integer
@@ -19,7 +19,7 @@ create table if not exists document_embeddings (
 , unique (tenant_id, document_id, chunk_sequence)
 , foreign key (tenant_id, document_id)
     references documents(tenant_id, id) on delete cascade
-) partition by list (tenant_id);
+);
 
 create index if not exists idx_embeddings_hnsw
   on document_embeddings using hnsw (embedding vector_cosine_ops)
@@ -28,6 +28,6 @@ create index if not exists idx_embeddings_hnsw
 comment on table document_embeddings is
 'Chunked text embeddings for vector similarity search.
 - tenant_id: new column, partition key
-- 384-dimensional vectors (matches all-MiniLM-L6-v2 / text-embedding-3-small)
+- 1024-dimensional vectors (central ingestion embedding model; see C5)
 - HNSW index for fast approximate nearest neighbor search
 - Composite FK to documents(tenant_id, id) — cascades on delete';

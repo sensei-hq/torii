@@ -17,7 +17,7 @@ create table if not exists fallback_chain_models (
 , primary key (tenant_id, id)
 , foreign key (tenant_id, fallback_chain_id)
     references fallback_chains(tenant_id, id) on delete cascade
-) partition by list (tenant_id);
+);
 
 create unique index if not exists fallback_chain_models_seq_ukey
   on fallback_chain_models(tenant_id, fallback_chain_id, sequence_order);

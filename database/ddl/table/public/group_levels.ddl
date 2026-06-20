@@ -15,7 +15,7 @@ create table if not exists group_levels (
 , unique (tenant_id, code)
 , foreign key (tenant_id, parent_level_id)
     references group_levels(tenant_id, id) on delete restrict
-) partition by list (tenant_id);
+);
 
 create index if not exists idx_group_levels_depth
   on group_levels(tenant_id, depth);

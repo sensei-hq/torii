@@ -8,7 +8,7 @@ create table if not exists profile_groups (
 , primary key (tenant_id, profile_id, group_id)
 , foreign key (tenant_id, group_id)
     references access_groups(tenant_id, id) on delete cascade
-) partition by list (tenant_id);
+);
 
 create index if not exists idx_profile_groups_profile
   on profile_groups(tenant_id, profile_id);

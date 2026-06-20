@@ -12,6 +12,9 @@ create table if not exists documents (
 , scope              varchar(20)  not null default 'user'
     check (scope in ('system', 'tenant', 'user'))
 , profile_id         uuid
+, space_id           uuid
+, classification     varchar(20)  not null default 'internal'
+    check (classification in ('public', 'internal', 'confidential', 'restricted'))
 , status             varchar(20)  not null default 'uploaded'
     check (status in ('uploaded', 'processing', 'completed', 'failed'))
 , chunk_count        integer
@@ -22,6 +25,8 @@ create table if not exists documents (
 , completed_at       timestamptz
 , modified_at        timestamptz  default now()
 , primary key (tenant_id, id)
+, foreign key (tenant_id, space_id)
+    references spaces(tenant_id, id) on delete set null
 );
 
 create index if not exists idx_documents_scope
@@ -34,6 +39,5 @@ comment on table documents is
 'Document metadata for the vector pipeline.
 - tenant_id: partition key (renamed from organization_id)
 - scope: system (global), tenant (shared within tenant), user (private)
-  NOTE: scope value ''organization'' renamed to ''tenant'' — data migration required
-  for any existing rows before altering the check constraint on a live database
-- Partitioned by tenant_id — one partition per tenant created automatically';
+- space_id: optional FK to spaces; classification governs confidentiality
+- Access (incl. confidential/restricted) is enforced via RLS in policies/knowledge.sql';

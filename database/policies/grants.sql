@@ -25,7 +25,9 @@ begin
     ('public', 'group_levels_lang'),
     ('public', 'profile_groups'),
     ('public', 'sessions'),
-    ('public', 'session_logs')
+    ('public', 'session_logs'),
+    ('public', 'spaces'),
+    ('public', 'space_members')
   ) as x(sch, tbl)
   loop
     execute format('grant select, insert, update, delete on %I.%I to authenticated', r.sch, r.tbl);

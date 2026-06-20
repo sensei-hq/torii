@@ -15,8 +15,6 @@ begin
       ('public', 'access_groups'),
       ('public', 'access_groups_lang'),
       ('public', 'document_access'),
-      ('public', 'document_embeddings'),
-      ('public', 'documents'),
       ('public', 'fallback_chains'),
       ('public', 'fallback_chain_models'),
       ('public', 'gateway_tasks'),
@@ -25,7 +23,9 @@ begin
       ('public', 'group_levels_lang'),
       ('public', 'profile_groups'),
       ('public', 'sessions'),
-      ('public', 'session_logs')
+      ('public', 'session_logs'),
+      ('public', 'spaces'),
+      ('public', 'space_members')
     ) as x(sch, tbl)
   loop
     execute format('alter table %I.%I enable row level security', r.sch, r.tbl);

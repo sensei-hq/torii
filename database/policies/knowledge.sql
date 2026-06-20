@@ -45,3 +45,24 @@ create policy document_embeddings_access on public.document_embeddings for all t
     )
   )
   with check (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid);
+
+-- document_versions / document_assets inherit parent document access (same pattern).
+alter table public.document_versions enable row level security;
+drop policy if exists document_versions_access on public.document_versions;
+create policy document_versions_access on public.document_versions for all to authenticated
+  using (
+    tenant_id = (auth.jwt() ->> 'tenant_id')::uuid
+    and exists (select 1 from public.documents d
+                where d.tenant_id = document_versions.tenant_id and d.id = document_versions.document_id)
+  )
+  with check (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid);
+
+alter table public.document_assets enable row level security;
+drop policy if exists document_assets_access on public.document_assets;
+create policy document_assets_access on public.document_assets for all to authenticated
+  using (
+    tenant_id = (auth.jwt() ->> 'tenant_id')::uuid
+    and exists (select 1 from public.documents d
+                where d.tenant_id = document_assets.tenant_id and d.id = document_assets.document_id)
+  )
+  with check (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid);

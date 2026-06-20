@@ -29,7 +29,10 @@ begin
     ('public', 'spaces'),
     ('public', 'space_members'),
     ('public', 'budget_nodes'),
-    ('public', 'settings')
+    ('public', 'settings'),
+    ('public', 'document_collections'),
+    ('public', 'document_versions'),
+    ('public', 'document_assets')
   ) as x(sch, tbl)
   loop
     execute format('grant select, insert, update, delete on %I.%I to authenticated', r.sch, r.tbl);

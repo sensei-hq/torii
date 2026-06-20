@@ -13,6 +13,7 @@ create table if not exists documents (
     check (scope in ('system', 'tenant', 'user'))
 , profile_id         uuid
 , space_id           uuid
+, collection_id      uuid
 , classification     varchar(20)  not null default 'internal'
     check (classification in ('public', 'internal', 'confidential', 'restricted'))
 , status             varchar(20)  not null default 'uploaded'
@@ -27,6 +28,8 @@ create table if not exists documents (
 , primary key (tenant_id, id)
 , foreign key (tenant_id, space_id)
     references spaces(tenant_id, id) on delete set null
+, foreign key (tenant_id, collection_id)
+    references document_collections(tenant_id, id) on delete set null
 );
 
 create index if not exists idx_documents_scope

@@ -1,43 +1,36 @@
 project:
   name: strategos
-  database: PostgreSQL
-  extensionSchema: extensions
-  staging:
-    - staging
-  dbdocs:
-    exclude:
-      schemas:
-        - staging
-        - migrate
-        - extensions
-        - history
-
+source:
+  dialect: postgresql
+target:
+  supabase:
+    url: $DATABASE_URL
+    extensions:
+      - name: uuid-ossp
+        schema: extensions
+      - name: vector
+        schema: extensions
 schemas:
-  - core:
-      grants:
-        service_role: [usage, select]
-  - config:
-      grants:
-        anon: [usage, select]
-        authenticated: [usage, select]
-        service_role: [usage, all]
+  - core
+  - config
   - extensions
   - history
-  - public:
-      grants:
-        anon: [usage, select]
-        authenticated: [usage, select]
-        service_role: [usage, all]
+  - public
   - staging
   - migrate
-
-extensions:
-  - uuid-ossp
-  - vector
-
 import:
+  staging:
+    - staging
   options:
     truncate: true
-    nullValue: ''
+    null_value: ""
   after:
     - import/loader.sql
+dbml:
+  exclude:
+    schemas:
+      - staging
+      - migrate
+      - extensions
+      - history
+ignore: []

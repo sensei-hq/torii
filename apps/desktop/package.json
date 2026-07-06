@@ -14,6 +14,11 @@
   "dependencies": {
     "@strategos/ui": "workspace:*",
     "@strategos/core": "workspace:*",
+    "kavach": "link:kavach",
+    "@kavach/adapter-supabase": "link:@kavach/adapter-supabase",
+    "@kavach/ui": "link:@kavach/ui",
+    "@kavach/sentry": "link:@kavach/sentry",
+    "@supabase/supabase-js": "^2.101.1",
     "@rokkit/states": "link:@rokkit/states",
     "@rokkit/actions": "link:@rokkit/actions",
     "@rokkit/app": "link:@rokkit/app",

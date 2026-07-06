@@ -1,3 +1,8 @@
 export { default as Pill } from './lib/Pill.svelte'
 export { default as ExecBadge } from './lib/ExecBadge.svelte'
 export { default as AppShell } from './lib/AppShell.svelte'
+export { env } from './lib/env.svelte.js'
+export { default as EnvChip } from './lib/EnvChip.svelte'
+export { default as DeviceFooter } from './lib/DeviceFooter.svelte'
+export { default as OfflineBanner } from './lib/OfflineBanner.svelte'
+export { default as DesktopOnlyNote } from './lib/DesktopOnlyNote.svelte'

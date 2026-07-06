@@ -49,6 +49,16 @@ export default tseslint.config(
 		}
 	},
 
+	// Svelte rune modules (*.svelte.ts / *.svelte.js) — plain TypeScript files
+	// that use Svelte runes ($state, $derived, etc.) outside of a .svelte component.
+	// They need the TypeScript parser but NOT the svelte-eslint-parser.
+	{
+		files: ['**/*.svelte.ts'],
+		languageOptions: {
+			parser: tseslint.parser
+		}
+	},
+
 	// Globals: browser (SvelteKit client code) + Node (server routes, config files)
 	{
 		languageOptions: {

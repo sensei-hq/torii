@@ -1,0 +1,39 @@
+{
+  "name": "@strategos/admin",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev --port 5273",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check",
+    "lint": "prettier --check . && eslint ."
+  },
+  "dependencies": {
+    "@strategos/ui": "workspace:*",
+    "@strategos/core": "workspace:*",
+    "kavach": "link:kavach",
+    "@kavach/adapter-supabase": "link:@kavach/adapter-supabase",
+    "@kavach/logger": "link:@kavach/logger",
+    "@kavach/ui": "link:@kavach/ui",
+    "@kavach/vite": "link:@kavach/vite",
+    "@kavach/sentry": "link:@kavach/sentry",
+    "@supabase/supabase-js": "^2.101.1",
+    "@rokkit/states": "link:@rokkit/states",
+    "@rokkit/actions": "link:@rokkit/actions",
+    "@rokkit/app": "link:@rokkit/app",
+    "@rokkit/ui": "link:@rokkit/ui",
+    "@rokkit/unocss": "link:@rokkit/unocss"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-cloudflare": "^7.0.0",
+    "@sveltejs/kit": "^2.55.0",
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "svelte": "^5.55.1",
+    "svelte-check": "^4.4.6",
+    "unocss": "^66.6.7",
+    "@unocss/reset": "^66.6.7",
+    "vite": "^8.0.3"
+  }
+}

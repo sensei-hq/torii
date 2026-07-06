@@ -1,0 +1,22 @@
+{
+  "name": "@strategos/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "test": "vitest run",
+    "lint": "prettier --check . && eslint .",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@kavach/adapter-supabase": "link:@kavach/adapter-supabase",
+    "@supabase/supabase-js": "^2.101.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2"
+  }
+}

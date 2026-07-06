@@ -12,5 +12,8 @@
     "test": "bun run --filter '*' test",
     "lint": "bun run --filter '*' lint",
     "check": "bun run --filter '*' check"
+  },
+  "devDependencies": {
+    "@iconify-json/lucide": "^1.2.101"
   }
 }

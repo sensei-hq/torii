@@ -28,6 +28,7 @@
     "@rokkit/unocss": "link:@rokkit/unocss"
   },
   "devDependencies": {
+    "@iconify-json/lucide": "^1.2.101",
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/svelte": "^5.3.1",

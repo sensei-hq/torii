@@ -59,6 +59,9 @@ firebase-debug.log
 !docs/mockups/**/*.jpg
 !docs/mockups/**/*.jpeg
 
+# Keep Tauri app icons (override the *.png ignore above)
+!apps/desktop/src-tauri/icons/*.png
+
 # JS / SvelteKit
 node_modules/
 .svelte-kit/

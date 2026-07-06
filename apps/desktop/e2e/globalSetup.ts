@@ -27,7 +27,8 @@ export default async function globalSetup(): Promise<void> {
 	// Build the e2e bundle (frontend + Rust). First run compiles Rust — slow.
 	execFileSync('bunx', ['tauri', 'build', '--debug', '--features', 'e2e-testing'], {
 		cwd: APP_REPO,
-		stdio: 'inherit'
+		stdio: 'inherit',
+		env: { ...process.env, VITE_E2E: 'true' }
 	})
 	try {
 		execFileSync('/usr/bin/pkill', ['-f', 'strategos.app'], { stdio: 'ignore' })

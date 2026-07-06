@@ -14,7 +14,13 @@
 
 	const rules = [
 		{ path: '/signin', public: true },
-		{ path: '/', roles: '*' }
+		{ path: '/', roles: '*' },
+		{ path: '/ask', roles: '*' },
+		{ path: '/library', roles: '*' },
+		{ path: '/playground', roles: '*' },
+		{ path: '/workflows', roles: '*' },
+		{ path: '/activity', roles: '*' },
+		{ path: '/settings', roles: '*' }
 	]
 	const guard = createGuard(rules, { login: '/signin', home: '/' })
 	const sk = createStrategosKavach(SUPABASE_URL, SUPABASE_ANON_KEY)
@@ -28,7 +34,13 @@
 	}
 
 	onMount(async () => {
-		await session.init(sk)
+		if (import.meta.env.VITE_E2E === 'true') {
+			// E2E only: deterministic seeded session, no network. Never true in production builds.
+			session.ready = true
+			session.user = { id: 'e2e', email: 'e2e@strategos.test', name: 'E2E Member', role: 'member' }
+		} else {
+			await session.init(sk)
+		}
 		check(page.url.pathname)
 	})
 

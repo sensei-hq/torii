@@ -1,0 +1,14 @@
+[workspace]
+members = ["apps/desktop/src-tauri"]
+# "services/gateway" added in the Phase 2 plan
+resolver = "2"
+
+# Dev-in-place against the sibling engine repo (production consumes the pinned git tag).
+[patch."https://github.com/sensei-hq/gateway"]
+gateway          = { path = "../gateway/crates/gateway" }
+gateway-embedded = { path = "../gateway/crates/gateway-embedded" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

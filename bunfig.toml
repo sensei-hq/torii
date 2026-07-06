@@ -1,0 +1,3 @@
+[install]
+linkWorkspacePackages = true
+minimumReleaseAge = 604800

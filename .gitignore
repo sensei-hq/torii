@@ -58,3 +58,19 @@ firebase-debug.log
 !docs/mockups/**/*.png
 !docs/mockups/**/*.jpg
 !docs/mockups/**/*.jpeg
+
+# JS / SvelteKit
+node_modules/
+.svelte-kit/
+build/
+dist/
+.vercel/
+.wrangler/
+
+# Rust / Tauri
+target/
+
+# env
+.env
+.env.*
+!.env.example

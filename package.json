@@ -1,0 +1,16 @@
+{
+  "name": "strategos-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.14",
+  "workspaces": ["packages/*", "apps/*", "services/*"],
+  "scripts": {
+    "dev:admin": "bun run --filter @strategos/admin dev",
+    "dev:desktop": "bun run --filter @strategos/desktop dev",
+    "build": "bun run --filter '*' build",
+    "test": "bun run --filter '*' test",
+    "lint": "bun run --filter '*' lint",
+    "check": "bun run --filter '*' check"
+  }
+}

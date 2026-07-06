@@ -34,6 +34,7 @@ The `dev/tenant_keys.jsonl` seed file contains a DEK encrypted with the canonica
 ```
 STRATEGOS_KEK=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 ```
+
 (32 zero bytes, base64-encoded)
 
 This is for development and testing only. Production environments must use a

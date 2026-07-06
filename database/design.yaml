@@ -23,7 +23,7 @@ import:
     - staging
   options:
     truncate: true
-    null_value: ""
+    null_value: ''
   after:
     - import/loader.sql
 dbml:

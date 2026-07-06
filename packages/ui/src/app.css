@@ -4,8 +4,19 @@
 @import '@rokkit/themes/rokkit';
 
 @layer base {
-  :root { --scroll-width: 0.5rem; @apply skin-zen-sumi; }
-  html { height: 100%; }
-  body { @apply flex h-full w-full flex-col; }
-  app { @apply h-full w-full; background: var(--paper); color: var(--ink); }
+  :root {
+    --scroll-width: 0.5rem;
+    @apply skin-zen-sumi;
+  }
+  html {
+    height: 100%;
+  }
+  body {
+    @apply flex h-full w-full flex-col;
+  }
+  app {
+    @apply h-full w-full;
+    background: var(--paper);
+    color: var(--ink);
+  }
 }

@@ -29,6 +29,7 @@ dbd import
 ```
 
 The import pipeline (configured in `design.yaml`):
+
 1. Truncates staging tables
 2. Runs `import/permissions.sql` (PostgREST grants)
 3. Loads JSONL files into `staging.*` tables
@@ -43,12 +44,12 @@ The import pipeline (configured in `design.yaml`):
 
 ## Schemas
 
-| Schema | Purpose | Tables |
-|--------|---------|--------|
-| `config` | Reference data (rarely changes) | providers, models, routers, capabilities, fallback_chains, fallback_chain_models, modules, features, feature_states, mcp_servers, documents, document_embeddings |
-| `public` | Runtime data (grows with usage) | model_capabilities, model_endpoints, gateway_tasks, gateway_task_logs, sessions, session_logs, plans, planned_tasks, planned_task_interactions, documents, document_embeddings |
-| `history` | Historization (audit trail) | past_mcp_servers, past_feature_states |
-| `staging` | Import staging (truncated before loads) | mirrors of 11 importable tables |
+| Schema    | Purpose                                 | Tables                                                                                                                                                                         |
+| --------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `config`  | Reference data (rarely changes)         | providers, models, routers, capabilities, fallback_chains, fallback_chain_models, modules, features, feature_states, mcp_servers, documents, document_embeddings               |
+| `public`  | Runtime data (grows with usage)         | model_capabilities, model_endpoints, gateway_tasks, gateway_task_logs, sessions, session_logs, plans, planned_tasks, planned_task_interactions, documents, document_embeddings |
+| `history` | Historization (audit trail)             | past_mcp_servers, past_feature_states                                                                                                                                          |
+| `staging` | Import staging (truncated before loads) | mirrors of 11 importable tables                                                                                                                                                |
 
 ## Folder Structure
 
@@ -78,6 +79,7 @@ database/
 ## Import Procedure Pattern
 
 Each `staging.import_*()` procedure:
+
 - Reads from `staging.*` (no constraints, natural keys like names)
 - Joins to parent tables to resolve UUIDs
 - Upserts into `config.*` or `public.*` via `INSERT ... ON CONFLICT DO UPDATE`
@@ -86,19 +88,19 @@ Each `staging.import_*()` procedure:
 
 ## Seed Data
 
-| Table | Rows | Source |
-|-------|------|--------|
-| providers | 5 | OpenAI, Anthropic, Meta, xAI, Alibaba |
-| routers | 7 | openai, anthropic, azure_openai, aws_bedrock, openrouter, grok, ollama |
-| capabilities | 6 | chat, embedding, image, vision, audio, agent |
-| models | 24 | GPT-4/3.5/4o, Claude 3/3.5/4.5, Grok 3, Llama 2/3.1/3.2, Qwen, DALL-E, Whisper, embeddings |
-| model_endpoints | 29 | Router-model bindings with pricing, rate limits, circuit breaker config |
-| model_capabilities | 25 | Model-capability mappings with performance metrics and limitations |
-| fallback_chains | 6 | chat, generate, fast, demo, cheap, local |
-| fallback_chain_models | 26 | Ordered fallback sequences per chain |
-| modules | 4 | Curator, Analyst, Operator, Mixologist |
-| features | 14 | UI features per module |
-| mcp_servers | 2 | strategos, filesystem |
+| Table                 | Rows | Source                                                                                     |
+| --------------------- | ---- | ------------------------------------------------------------------------------------------ |
+| providers             | 5    | OpenAI, Anthropic, Meta, xAI, Alibaba                                                      |
+| routers               | 7    | openai, anthropic, azure_openai, aws_bedrock, openrouter, grok, ollama                     |
+| capabilities          | 6    | chat, embedding, image, vision, audio, agent                                               |
+| models                | 24   | GPT-4/3.5/4o, Claude 3/3.5/4.5, Grok 3, Llama 2/3.1/3.2, Qwen, DALL-E, Whisper, embeddings |
+| model_endpoints       | 29   | Router-model bindings with pricing, rate limits, circuit breaker config                    |
+| model_capabilities    | 25   | Model-capability mappings with performance metrics and limitations                         |
+| fallback_chains       | 6    | chat, generate, fast, demo, cheap, local                                                   |
+| fallback_chain_models | 26   | Ordered fallback sequences per chain                                                       |
+| modules               | 4    | Curator, Analyst, Operator, Mixologist                                                     |
+| features              | 14   | UI features per module                                                                     |
+| mcp_servers           | 2    | strategos, filesystem                                                                      |
 
 ## Design Documentation
 

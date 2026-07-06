@@ -1,5 +1,5 @@
 ---
-title: "Phase 0 · Foundations — implementation plan"
+title: 'Phase 0 · Foundations — implementation plan'
 description: Scaffold the bun + Cargo monorepo, the Rokkit design system (packages/ui), the swappable data layer (packages/core on the Kavach Supabase adapter), link the gateway + kavach stepping-stones, and boot both apps (admin web + desktop) on a shared shell + skin.
 type: plan
 status: plan
@@ -26,6 +26,7 @@ milestone: Phase-0
 **Tech Stack:** bun · SvelteKit 2.55 / Svelte 5.55 · Vite 8 · UnoCSS 66 + `@rokkit/unocss` `presetRokkit` · Rokkit (`@rokkit/*`, bun-linked) · Kavach (`kavach`, `@kavach/*`, bun-linked) · `@supabase/supabase-js` · Tauri 2 (Rust) · `gateway`/`gateway-embedded` crates (path-patched) · Vitest · Playwright.
 
 **Prerequisites (verify before Task 1):**
+
 - The sibling repos exist: `~/Developer/gateway`, `~/Developer/kavach`, and the Rokkit repo (the source of `@rokkit/*`).
 - `bun`, Rust stable + `cargo`, and the Tauri 2 system deps are installed.
 - A Supabase project / local stack is reachable (the F1 schema is applied). `PUBLIC_SUPABASE_URL` + `PUBLIC_SUPABASE_ANON_KEY` are known (see `.env.local` at the strategos repo root).
@@ -88,6 +89,7 @@ monorepo/
 ## Task 1: Monorepo workspace skeleton
 
 **Files:**
+
 - Create: `package.json`, `bunfig.toml`, `tsconfig.base.json`, `Cargo.toml`
 - Modify: `.gitignore`
 
@@ -209,19 +211,23 @@ git commit -m "chore(phase0): monorepo workspace skeleton (bun + cargo, engine p
 In the Rokkit repo (the source of `@rokkit/*`), from each published package dir, `bun link` registers it globally. Do this once per machine:
 
 Run (from the rokkit repo root):
+
 ```bash
 for p in core states actions unocss themes ui app data forms blocks; do \
   (cd "packages/$p" 2>/dev/null && bun link) ; done
 ```
+
 Expected: each prints `Success! Registered "@rokkit/<name>"`. (Adjust the dir list to the repo's actual package layout; the required set for Phase 0 is `core states actions unocss themes ui app`.)
 
 - [ ] **Step 2: Register the Kavach packages as bun links**
 
 Run (from `~/Developer/kavach`):
+
 ```bash
 for p in auth adapter-supabase logger ui vite query cookie sentry; do \
   (cd "packages/$p" 2>/dev/null || cd "adapters/$p" 2>/dev/null; [ -f package.json ] && bun link) ; done
 ```
+
 Expected: registers `kavach`, `@kavach/adapter-supabase`, `@kavach/logger`, `@kavach/ui`, `@kavach/vite`, `@kavach/sentry`, etc. (The core package's name is `kavach`; confirm each `bun link` prints the expected registered name.)
 
 - [ ] **Step 3: Record the prerequisite**
@@ -240,6 +246,7 @@ git commit -m "docs(phase0): record rokkit + kavach bun-link prerequisites"
 ## Task 3: `packages/ui` — Rokkit design system foundation
 
 **Files:**
+
 - Create: `packages/ui/package.json`, `uno.config.js`, `rokkit.config.js`, `src/app.css`, `src/index.js`
 - Test: `packages/ui/src/lib/Pill.svelte` + `packages/ui/src/lib/Pill.spec.svelte.js`
 
@@ -298,7 +305,7 @@ Expected: the oklch/hex values for each Zen-Sumi token. Record them — they are
 // Exact color values are ported from docs/mockups/app/zs.css (Step 2) via `overrides`.
 export default {
   colors: {
-    surface: 'stone',      // washi paper / sumi ink neutral ramp
+    surface: 'stone', // washi paper / sumi ink neutral ramp
     primary: 'vermillion', // the single accent (custom palette, see overrides)
     secondary: 'sky'
   },
@@ -341,9 +348,15 @@ export default defineConfig({
     --scroll-width: 0.5rem;
     @apply skin-zen-sumi;
   }
-  html { height: 100%; }
-  body { @apply flex h-full w-full flex-col; }
-  app { @apply bg-surface-z1 text-surface-z8 h-full w-full; }
+  html {
+    height: 100%;
+  }
+  body {
+    @apply flex h-full w-full flex-col;
+  }
+  app {
+    @apply bg-surface-z1 text-surface-z8 h-full w-full;
+  }
 }
 ```
 
@@ -376,7 +389,11 @@ Expected: FAIL — `Cannot find module './Pill.svelte'`.
   let { label, tone = 'ink', icon = null } = $props()
 </script>
 
-<span data-pill data-tone={tone} class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs">
+<span
+  data-pill
+  data-tone={tone}
+  class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
+>
   {#if icon}<span class={`i-lucide:${icon} h-3 w-3`}></span>{/if}
   {label}
 </span>
@@ -424,6 +441,7 @@ git commit -m "feat(ui): Rokkit design-system foundation (Zen-Sumi skin + Pill a
 ## Task 4: `packages/core` — swappable data layer
 
 **Files:**
+
 - Create: `packages/core/package.json`, `src/index.ts`, `src/types.ts`, `src/mock/fixtures.ts`, `src/mock/index.ts`, `src/supabase/index.ts`
 - Test: `src/mock/mock.spec.ts`
 
@@ -512,9 +530,33 @@ Expected: FAIL — `Cannot find module './index'`.
 import type { Model } from '../types'
 
 export const MODELS: Model[] = [
-  { id: 'claude-opus', provider: 'anthropic', route: 'anthropic', tier: 'frontier', price: 15, context: 200000, localCapable: false },
-  { id: 'gpt-4o', provider: 'openai', route: 'openai', tier: 'balanced', price: 5, context: 128000, localCapable: false },
-  { id: 'gemma-2b', provider: 'local', route: 'ollama', tier: 'local', price: 0, context: 8192, localCapable: true }
+  {
+    id: 'claude-opus',
+    provider: 'anthropic',
+    route: 'anthropic',
+    tier: 'frontier',
+    price: 15,
+    context: 200000,
+    localCapable: false
+  },
+  {
+    id: 'gpt-4o',
+    provider: 'openai',
+    route: 'openai',
+    tier: 'balanced',
+    price: 5,
+    context: 128000,
+    localCapable: false
+  },
+  {
+    id: 'gemma-2b',
+    provider: 'local',
+    route: 'ollama',
+    tier: 'local',
+    price: 0,
+    context: 8192,
+    localCapable: true
+  }
 ]
 ```
 
@@ -626,17 +668,20 @@ git commit -m "feat(core): swappable DataSource — mock + kavach-supabase adapt
 - [ ] **Step 2: Config files** — create `svelte.config.js`, `uno.config.js`, `rokkit.config.js`, `vite.config.js`
 
 `apps/admin/svelte.config.js`:
+
 ```js
 import adapter from '@sveltejs/adapter-cloudflare'
 export default { kit: { adapter: adapter() } }
 ```
 
 `apps/admin/rokkit.config.js`:
+
 ```js
 export { default } from '@strategos/ui/rokkit.config'
 ```
 
 `apps/admin/uno.config.js`:
+
 ```js
 import { defineConfig } from 'unocss'
 import { presetRokkit } from '@rokkit/unocss'
@@ -645,6 +690,7 @@ export default defineConfig({ presets: [presetRokkit(config)] })
 ```
 
 `apps/admin/vite.config.js` (kavach first, per the demo):
+
 ```js
 import { kavach } from '@kavach/vite'
 import { sveltekit } from '@sveltejs/kit/vite'
@@ -671,7 +717,7 @@ export default {
   routes: { auth: '/auth', data: '/data', logout: '/logout', home: '/' },
   rules: [
     { path: '/auth', public: true },
-    { path: '/', roles: '*' }
+    { path: '/', public: true } // Phase 0: shell boots publicly. Phase 1 tightens to roles:'*' + a real /auth page.
   ]
 }
 ```
@@ -679,12 +725,14 @@ export default {
 - [ ] **Step 4: Create `apps/admin/src/hooks.server.js`** and `src/app.html`
 
 `src/hooks.server.js`:
+
 ```js
 import { kavach } from '$kavach/auth'
 export const handle = ({ event, resolve }) => kavach.handle({ event, resolve })
 ```
 
 `src/app.html`:
+
 ```html
 <!doctype html>
 <html lang="en">
@@ -708,6 +756,7 @@ export const handle = ({ event, resolve }) => kavach.handle({ event, resolve })
 - [ ] **Step 6: Create the layout + a home route rendering the shared shell**
 
 `src/routes/+layout.server.ts`:
+
 ```ts
 import type { LayoutServerLoad } from './$types'
 export const load: LayoutServerLoad = ({ locals }) => ({
@@ -717,6 +766,7 @@ export const load: LayoutServerLoad = ({ locals }) => ({
 ```
 
 `src/routes/+layout.svelte`:
+
 ```svelte
 <script>
   import 'uno.css'
@@ -731,6 +781,7 @@ export const load: LayoutServerLoad = ({ locals }) => ({
 ```
 
 `src/routes/(app)/+layout.svelte`:
+
 ```svelte
 <script>
   import { setContext, onMount } from 'svelte'
@@ -746,10 +797,12 @@ export const load: LayoutServerLoad = ({ locals }) => ({
     kavach.onAuthChange(page.url)
   })
 </script>
+
 {@render children()}
 ```
 
 `src/routes/(app)/+page.svelte`:
+
 ```svelte
 <script>
   import { AppShell } from '@strategos/ui'
@@ -828,18 +881,21 @@ git commit -m "feat(admin): SvelteKit app boots shared shell + skin (kavach hybr
 - [ ] **Step 2: SvelteKit static config (SPA for Tauri)**
 
 `apps/desktop/svelte.config.js`:
+
 ```js
 import adapter from '@sveltejs/adapter-static'
 export default { kit: { adapter: adapter({ fallback: 'index.html' }) } }
 ```
 
 `apps/desktop/src/routes/+layout.ts`:
+
 ```ts
 export const ssr = false
 export const prerender = false
 ```
 
 `apps/desktop/vite.config.js` (no kavach vite plugin yet — client-only auth lands in Phase 1):
+
 ```js
 import { sveltekit } from '@sveltejs/kit/vite'
 import unocss from 'unocss/vite'
@@ -858,6 +914,7 @@ export default defineConfig({
 - [ ] **Step 3: Layout + home route (shared shell, desktop chrome)**
 
 `apps/desktop/src/routes/+layout.svelte`:
+
 ```svelte
 <script>
   import 'uno.css'
@@ -866,15 +923,18 @@ export default defineConfig({
   import { themable } from '@rokkit/actions'
   let { children } = $props()
 </script>
+
 <svelte:body use:themable={{ theme: vibe, storageKey: 'strategos-desktop-theme' }} />
 {@render children()}
 ```
 
 `apps/desktop/src/routes/+page.svelte`:
+
 ```svelte
 <script>
   import { AppShell } from '@strategos/ui'
 </script>
+
 <AppShell app="console" title="Workspace">
   <p class="p-4 text-surface-z6">Strategos Console — desktop shell booted.</p>
 </AppShell>
@@ -914,6 +974,7 @@ git commit -m "feat(desktop): SvelteKit static + Tauri 2 shell boots shared shel
 ## Task 7: Shared `AppShell` + `ExecBadge` in `packages/ui`
 
 **Files:**
+
 - Create: `packages/ui/src/lib/ExecBadge.svelte` (+ spec), `packages/ui/src/lib/AppShell.svelte` (+ spec)
 - Modify: `packages/ui/src/index.js`
 
@@ -950,7 +1011,11 @@ Expected: FAIL — `Cannot find module './ExecBadge.svelte'`.
   const local = $derived(plane === 'local')
 </script>
 
-<span data-exec-badge data-plane={plane} class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-surface-z6">
+<span
+  data-exec-badge
+  data-plane={plane}
+  class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-surface-z6"
+>
   <span class={local ? 'i-lucide:cpu h-3 w-3' : 'i-lucide:cloud h-3 w-3'}></span>
   {local ? 'on your device' : `via gateway · ${region}`}
 </span>
@@ -988,17 +1053,33 @@ Expected: FAIL — `Cannot find module './AppShell.svelte'`.
 <script>
   let { app = 'admin', title = '', children } = $props()
   const NAV = {
-    admin: ['Overview', 'Requests', 'Organization', 'Models', 'Routing', 'Connections', 'Governance', 'Billing', 'Settings'],
+    admin: [
+      'Overview',
+      'Requests',
+      'Organization',
+      'Models',
+      'Routing',
+      'Connections',
+      'Governance',
+      'Billing',
+      'Settings'
+    ],
     console: ['Workspace', 'Ask', 'Library', 'Playground', 'Workflows', 'Activity', 'Settings']
   }
   const items = $derived(NAV[app] ?? [])
 </script>
 
 <div data-app-shell class="grid h-full grid-cols-[13rem_1fr]">
-  <nav aria-label="Primary" class="flex flex-col gap-1 border-r border-surface-z3 bg-surface-z1 p-3">
+  <nav
+    aria-label="Primary"
+    class="flex flex-col gap-1 border-r border-surface-z3 bg-surface-z1 p-3"
+  >
     <div class="mb-3 text-sm font-semibold text-primary-500">Strategos</div>
     {#each items as item}
-      <a href={`#${item.toLowerCase()}`} class="rounded px-2 py-1 text-sm text-surface-z6 hover:bg-surface-z2">{item}</a>
+      <a
+        href={`#${item.toLowerCase()}`}
+        class="rounded px-2 py-1 text-sm text-surface-z6 hover:bg-surface-z2">{item}</a
+      >
     {/each}
   </nav>
   <section class="flex h-full flex-col">
@@ -1028,6 +1109,250 @@ export { default as AppShell } from './lib/AppShell.svelte'
 ```bash
 git add packages/ui
 git commit -m "feat(ui): shared AppShell + ExecBadge atoms"
+```
+
+---
+
+## Task 7.5: E2E Playwright harness + shell smoke tests
+
+Desktop uses the **Tauri socket harness** (`@srsholmes/tauri-playwright` + `tauri-plugin-playwright`, per the `tauri-playwright-testing` skill and the Sensei app at `~/Developer/sensei-hq/sensei/app/e2e`). Admin uses **web-mode Playwright**. Strategos has no separate daemon, so the desktop globalSetup is build → spawn → wait-for-socket → assert (no daemon-port / DB-isolation checks).
+
+### Desktop (Tauri)
+
+**Files:**
+
+- Modify: `apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/src/lib.rs`, `apps/desktop/package.json`
+- Create: `apps/desktop/e2e/{playwright.config.ts,globalSetup.ts,globalTeardown.ts,fixtures.ts,helpers.ts,tests/shell.spec.ts}`
+
+- [ ] **Step 1: Add the `e2e-testing` feature + plugin to `src-tauri/Cargo.toml`**
+
+```toml
+[features]
+e2e-testing = ["dep:tauri-plugin-playwright"]
+
+[dependencies]
+tauri-plugin-playwright = { version = "0.2", optional = true }
+```
+
+- [ ] **Step 2: Init the plugin only under the feature** — in `src-tauri/src/lib.rs`, where the Tauri `Builder` is constructed (before `.run(...)`):
+
+```rust
+#[cfg(feature = "e2e-testing")]
+let builder = builder.plugin(tauri_plugin_playwright::init());
+```
+
+- [ ] **Step 3: Add devDeps + script to `apps/desktop/package.json`**
+
+```json
+"scripts": { "test:e2e": "playwright test --config e2e/playwright.config.ts --project=tauri" },
+"devDependencies": {
+  "@playwright/test": "^1.59.1",
+  "@srsholmes/tauri-playwright": "^0.2.2"
+}
+```
+
+- [ ] **Step 4: `apps/desktop/e2e/playwright.config.ts`**
+
+```ts
+import { defineConfig } from '@playwright/test'
+
+export default defineConfig({
+  testDir: './tests',
+  timeout: 60_000,
+  retries: 0,
+  workers: 1, // WKWebView shares one window — no parallelism
+  globalSetup: './globalSetup.ts',
+  globalTeardown: './globalTeardown.ts',
+  projects: [{ name: 'tauri', use: { mode: 'tauri' } }]
+})
+```
+
+- [ ] **Step 5: `apps/desktop/e2e/fixtures.ts`**
+
+```ts
+import { createTauriTest } from '@srsholmes/tauri-playwright'
+
+export const { test, expect } = createTauriTest({
+  devUrl: 'tauri://localhost', // required by the type; unused in socket mode
+  mcpSocket: '/tmp/tauri-playwright.sock'
+})
+```
+
+- [ ] **Step 6: `apps/desktop/e2e/globalSetup.ts`** (build with the feature, spawn, wait for socket)
+
+```ts
+import { execFileSync, spawn } from 'child_process'
+import { existsSync, unlinkSync, writeFileSync } from 'fs'
+import { resolve, join } from 'path'
+import { fileURLToPath } from 'url'
+
+const __dirname = resolve(fileURLToPath(import.meta.url), '..')
+const APP_REPO = resolve(__dirname, '..')
+// Adjust the bundle name if tauri.conf.json productName differs.
+const APP_BINARY = join(
+  APP_REPO,
+  'src-tauri/target/debug/bundle/macos/strategos.app/Contents/MacOS/strategos'
+)
+const SOCKET = '/tmp/tauri-playwright.sock'
+const PID_FILE = '/tmp/strategos-e2e-pid'
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+async function waitForSocket(path, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (existsSync(path)) return
+    await sleep(500)
+  }
+  throw new Error(`Timed out waiting for ${path}`)
+}
+
+export default async function globalSetup() {
+  // Build the e2e bundle (frontend + Rust). First run compiles Rust — slow.
+  execFileSync('bunx', ['tauri', 'build', '--debug', '--features', 'e2e-testing'], {
+    cwd: APP_REPO,
+    stdio: 'inherit'
+  })
+  try {
+    execFileSync('/usr/bin/pkill', ['-f', 'strategos.app'], { stdio: 'ignore' })
+  } catch {}
+  await sleep(500)
+  try {
+    unlinkSync(SOCKET)
+  } catch {}
+  const proc = spawn(APP_BINARY, [], { detached: true, stdio: 'ignore' })
+  await new Promise((res, rej) => {
+    proc.once('error', rej)
+    proc.once('spawn', res)
+  })
+  proc.unref()
+  writeFileSync(PID_FILE, String(proc.pid))
+  await waitForSocket(SOCKET, 60_000)
+}
+```
+
+- [ ] **Step 7: `apps/desktop/e2e/globalTeardown.ts`**
+
+```ts
+import { execFileSync } from 'child_process'
+import { existsSync, readFileSync, unlinkSync } from 'fs'
+
+const PID_FILE = '/tmp/strategos-e2e-pid'
+const SOCKET = '/tmp/tauri-playwright.sock'
+
+export default async function globalTeardown() {
+  if (existsSync(PID_FILE)) {
+    const pid = Number(readFileSync(PID_FILE, 'utf8').trim())
+    if (Number.isInteger(pid) && pid > 0) {
+      try {
+        process.kill(pid, 'SIGTERM')
+      } catch {}
+    }
+    unlinkSync(PID_FILE)
+  }
+  try {
+    execFileSync('/usr/bin/pkill', ['-f', 'strategos.app'], { stdio: 'ignore' })
+  } catch {}
+  try {
+    unlinkSync(SOCKET)
+  } catch {}
+}
+```
+
+- [ ] **Step 8: `apps/desktop/e2e/helpers.ts`** (WKWebView-safe navigation, from the skill)
+
+```ts
+export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+export async function navigateTo(tauriPage, route) {
+  await tauriPage.evaluate(`
+    (async function () {
+      await new Promise((r) => setTimeout(r, 200))
+      try {
+        const nav = await import('/node_modules/@sveltejs/kit/src/runtime/app/navigation.js')
+        await nav.goto(${JSON.stringify(route)})
+      } catch {
+        const a = document.createElement('a')
+        a.href = ${JSON.stringify(route)}
+        document.body.appendChild(a)
+        a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+        document.body.removeChild(a)
+      }
+    })()
+  `)
+  await sleep(800)
+}
+```
+
+- [ ] **Step 9: `apps/desktop/e2e/tests/shell.spec.ts`** (smoke: the Console shell renders)
+
+```ts
+import { test, expect } from '../fixtures'
+
+test.describe('Desktop shell', () => {
+  test('boots and renders the Console shell', async ({ tauriPage }) => {
+    await expect(tauriPage.locator('[data-app-shell]')).toBeVisible({ timeout: 20_000 })
+    await expect(tauriPage.locator('nav[aria-label="Primary"]')).toBeVisible()
+    const title = await tauriPage.locator('header h1').textContent()
+    expect(title).toContain('Workspace')
+  })
+})
+```
+
+- [ ] **Step 10: Run the desktop E2E**
+
+Run: `cd apps/desktop && bunx playwright install chromium && bun run test:e2e`
+Expected: globalSetup builds the app (first run compiles Rust — minutes), launches it, the socket appears, the shell smoke test passes.
+
+### Admin (web-mode)
+
+**Files:** `apps/admin/playwright.config.ts`, `apps/admin/e2e/shell.spec.ts`, `apps/admin/package.json` (devDeps + script).
+
+- [ ] **Step 11: devDeps + script in `apps/admin/package.json`**
+
+```json
+"scripts": { "test:e2e": "playwright test" },
+"devDependencies": { "@playwright/test": "^1.59.1" }
+```
+
+- [ ] **Step 12: `apps/admin/playwright.config.ts`** (runs the dev server)
+
+```ts
+import { defineConfig } from '@playwright/test'
+
+export default defineConfig({
+  testDir: './e2e',
+  timeout: 30_000,
+  webServer: {
+    command: 'bun run dev -- --port 4273',
+    url: 'http://localhost:4273',
+    reuseExistingServer: !process.env.CI,
+    timeout: 120_000
+  },
+  use: { baseURL: 'http://localhost:4273' }
+})
+```
+
+- [ ] **Step 13: `apps/admin/e2e/shell.spec.ts`** (unauthenticated → sign-in gate renders with the skin)
+
+```ts
+import { test, expect } from '@playwright/test'
+
+test('admin boots and renders the shell with the Zen-Sumi skin', async ({ page }) => {
+  await page.goto('/') // Phase 0: '/' is public → shell renders directly
+  await expect(page.locator('app[data-style="rokkit"]')).toBeVisible()
+  await expect(page.locator('[data-app-shell]')).toBeVisible()
+})
+```
+
+> The admin dev server needs `apps/admin/.env` (Supabase URL + anon key) so the kavach vite plugin / hooks initialise. Locally that file exists (Task 5 Step 7); in CI it needs those as secrets. This is a render smoke test only — no real login (auth gating + the `/auth` sign-in page land in Phase 1).
+
+- [ ] **Step 14: Run** `cd apps/admin && bunx playwright install chromium && bun run test:e2e`. Expected: dev server boots, smoke test passes.
+
+- [ ] **Step 15: Commit**
+
+```bash
+git add apps/desktop/e2e apps/desktop/src-tauri apps/desktop/package.json apps/admin/e2e apps/admin/playwright.config.ts apps/admin/package.json
+git commit -m "test(phase0): E2E Playwright — Tauri socket harness (desktop) + web smoke (admin)"
 ```
 
 ---

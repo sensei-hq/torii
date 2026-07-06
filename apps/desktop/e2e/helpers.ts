@@ -1,7 +1,7 @@
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 export async function navigateTo(tauriPage: any, route: string): Promise<void> {
-  await tauriPage.evaluate(`
+	await tauriPage.evaluate(`
     (async function () {
       await new Promise((r) => setTimeout(r, 200))
       try {
@@ -16,5 +16,5 @@ export async function navigateTo(tauriPage: any, route: string): Promise<void> {
       }
     })()
   `)
-  await sleep(800)
+	await sleep(800)
 }

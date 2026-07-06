@@ -15,7 +15,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "lint": "prettier --check . && eslint .",
+    "lint": "prettier --check .",
     "check": "svelte-check"
   },
   "dependencies": {

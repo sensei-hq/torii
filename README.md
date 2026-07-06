@@ -20,11 +20,11 @@ Teams adopting AI hit the same walls:
 - **Governance.** Role-based access, four-level confidentiality, PII/tenant masking, grounded-only answers, and an immutable audit trail (SIEM-streamable).
 - **Security.** Per-tenant envelope encryption (DEK/KEK), SSO/SCIM identity, data-residency pinning.
 - **Budgets.** Cascading caps — org → department → team → user — with hard/soft limits, alerts, and automatic step-down.
-- **Knowledge.** A shared document library with markdown-first ingestion and modern RAG (hybrid + reranking + contextual retrieval) so people can *ask their documents*.
+- **Knowledge.** A shared document library with markdown-first ingestion and modern RAG (hybrid + reranking + contextual retrieval) so people can _ask their documents_.
 
 ## How it's built — the "split-plane" architecture
 
-Strategos separates the **config/governance plane** (central, the authority) from the **execution plane** (which can run centrally *or* on the device).
+Strategos separates the **config/governance plane** (central, the authority) from the **execution plane** (which can run centrally _or_ on the device).
 
 ```
    CLOUD  ── config / governance plane ──┐         ┌── DEVICE ── execution plane (Tauri) ──┐

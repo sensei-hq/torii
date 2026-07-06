@@ -8,7 +8,7 @@ Strategos is a multi-tenant **AI gateway for organizations**. An organization co
 
 ## Architecture — split-plane
 
-We separate the **config/governance plane** (central, the authority) from the **execution plane** (central *or* on-device).
+We separate the **config/governance plane** (central, the authority) from the **execution plane** (central _or_ on-device).
 
 ```
         ┌──────────────────────── CLOUD: config / governance plane ────────────────────────┐
@@ -35,15 +35,15 @@ We separate the **config/governance plane** (central, the authority) from the **
 
 ## Tech stack
 
-| Layer | Choice |
-|---|---|
+| Layer            | Choice                                                                                                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Inference engine | **`gateway`** + **`gateway-embedded`** crates — external repo [`sensei-hq/gateway`](https://github.com/sensei-hq/gateway), pinned `tag = "v0.2.18"`, `[patch]` for in-place dev |
-| Central service | **Rust + Axum** wrapping the `gateway` crate; implements `GatewayStore` against Postgres; SSE streaming; validates Supabase JWTs |
-| Desktop app | **Tauri 2 + SvelteKit (Svelte 5)**; embeds `gateway`+`gateway-embedded`; embedded Postgres/SQLite; OS keychain (patterns reused from Sensei) |
-| Web apps | **SvelteKit (Svelte 5) + Rokkit** (components, semantic-styles, skins, command palette) → **Cloudflare Pages** |
-| Backend | **Supabase** — Auth (email/OAuth → SSO/SAML), Postgres + RLS (per-tenant), Storage, Realtime (config push), Edge Functions (enroll, key re-wrap, usage ingest) |
-| Database mgmt | **dbd** — DDL apply, seed import, migrations/deploy (drives `database/`) |
-| Hosting | Cloudflare Pages (web/site) · container host (Cloud Run / Fly.io / Fargate) for the gateway · Cloudflare DNS/WAF in front |
+| Central service  | **Rust + Axum** wrapping the `gateway` crate; implements `GatewayStore` against Postgres; SSE streaming; validates Supabase JWTs                                                |
+| Desktop app      | **Tauri 2 + SvelteKit (Svelte 5)**; embeds `gateway`+`gateway-embedded`; embedded Postgres/SQLite; OS keychain (patterns reused from Sensei)                                    |
+| Web apps         | **SvelteKit (Svelte 5) + Rokkit** (components, semantic-styles, skins, command palette) → **Cloudflare Pages**                                                                  |
+| Backend          | **Supabase** — Auth (email/OAuth → SSO/SAML), Postgres + RLS (per-tenant), Storage, Realtime (config push), Edge Functions (enroll, key re-wrap, usage ingest)                  |
+| Database mgmt    | **dbd** — DDL apply, seed import, migrations/deploy (drives `database/`)                                                                                                        |
+| Hosting          | Cloudflare Pages (web/site) · container host (Cloud Run / Fly.io / Fargate) for the gateway · Cloudflare DNS/WAF in front                                                       |
 
 ## Domains
 

@@ -15,6 +15,7 @@ milestone: F1
 # F1 · Data model & schema — implementation plan
 
 ## Objective
+
 Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existing `database/` design for the Supabase SaaS — **RLS-based tenant isolation** (drop partition-per-tenant), the locked decisions (`vector(1024)`, fixed tenant-level roles, MCP + agents deferred), and the new v1 tables. Everything applies through **dbd** (`dbd reset && dbd apply && dbd import`).
 
 **Layer stack for this module** (the F1 "vertical slice"): `DDL (tables/columns) → RLS policies → JWT claims → seed → tests`. Downstream consumers (C1 gateway, web/desktop clients) are out of F1 scope. Each feature applies and is testable independently via dbd against a fresh Postgres.
@@ -22,6 +23,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
 ## Features
 
 ### Feature 1 — Schema reshape & de-partition
+
 - **Issue:** [#1](https://github.com/sensei-hq/strategos/issues/1)
 - **Layers:** DDL → seed
 - **Depends on:** —
@@ -36,6 +38,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
   - Given the applied schema, When I check the deferred objects, Then none exist.
 
 ### Feature 2 — JWT claims hook & RLS tenant foundation
+
 - **Issue:** [#2](https://github.com/sensei-hq/strategos/issues/2)
 - **Layers:** JWT claims → RLS
 - **Depends on:** Feature 1
@@ -48,6 +51,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
   - Given any tenant-scoped table, When RLS is inspected, Then it is enabled with at least one policy.
 
 ### Feature 3 — Secrets lockdown (key vault)
+
 - **Issue:** [#3](https://github.com/sensei-hq/strategos/issues/3)
 - **Layers:** RLS
 - **Depends on:** Feature 2
@@ -59,6 +63,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
   - Given the schema, When views are enumerated, Then none select from `router_keys`/`tenant_keys`.
 
 ### Feature 4 — Spaces, knowledge access & confidentiality RLS
+
 - **Issue:** [#4](https://github.com/sensei-hq/strategos/issues/4)
 - **Layers:** DDL → RLS → seed
 - **Depends on:** Feature 2
@@ -70,6 +75,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
   - Given a document, When its `space_id` references another tenant's space, Then the insert is rejected.
 
 ### Feature 5 — Budgets schema
+
 - **Issue:** [#5](https://github.com/sensei-hq/strategos/issues/5)
 - **Layers:** DDL → RLS → seed
 - **Depends on:** Feature 2
@@ -81,6 +87,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
   - Given a node, When its parent is in another tenant, Then the insert is rejected.
 
 ### Feature 6 — Governance & ops tables (audit, settings, devices)
+
 - **Issue:** [#6](https://github.com/sensei-hq/strategos/issues/6)
 - **Layers:** DDL → RLS
 - **Depends on:** Feature 2
@@ -93,6 +100,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
   - Given a device row for another user, When queried by a non-owner non-admin, Then it is not returned.
 
 ### Feature 7 — Document workspace tables (collections, versions, assets)
+
 - **Issue:** [#7](https://github.com/sensei-hq/strategos/issues/7)
 - **Layers:** DDL → RLS
 - **Depends on:** Feature 4
@@ -104,6 +112,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
   - Given an asset, When its document is in another tenant, Then the insert is rejected.
 
 ### Feature 8 — Split-plane columns
+
 - **Issue:** [#8](https://github.com/sensei-hq/strategos/issues/8)
 - **Layers:** DDL
 - **Depends on:** Feature 1
@@ -114,6 +123,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
   - Given the schema, When I query `viable_chain_models`, Then it resolves and the `plane` column is available on chain models.
 
 ### Feature 9 — Seed refresh & RLS-coverage test harness
+
 - **Issue:** [#9](https://github.com/sensei-hq/strategos/issues/9)
 - **Layers:** seed → tests
 - **Depends on:** Features 1–8

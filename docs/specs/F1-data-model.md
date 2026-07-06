@@ -26,26 +26,30 @@ Out of scope here: per-table column-by-column DDL (that's the implementation pla
 
 ## 3. Target for v1 — key decisions
 
-### 3.1 Isolation: **RLS, not partition-per-tenant** *(decided ✓ 2026-06-18)*
+### 3.1 Isolation: **RLS, not partition-per-tenant** _(decided ✓ 2026-06-18)_
+
 Drop list-partitioning; isolate with **Row-Level Security** keyed on the Supabase JWT (`tenant_id` claim), keeping `tenant_id` columns + composite FKs for integrity.
+
 - **Why:** partition-per-tenant means thousands of partitions + a DDL trigger per signup — heavy ops on managed Postgres, and Supabase RLS is the idiomatic, well-supported path. RLS also lets web clients use PostgREST directly (less custom API).
 - **How:** every tenant-scoped table gets an RLS policy `tenant_id = (auth.jwt() ->> 'tenant_id')::uuid`, composed with role/visibility predicates (§5). The **service role bypasses RLS** — the central gateway (C1) does explicit tenant scoping in code. The existing access views become RLS policies (or stay as views queried under RLS).
 - **Cost/risk:** RLS correctness must be tested (a missing policy = a leak). We add a policy-coverage test that fails if any tenant table lacks an enabled policy.
 
 ### 3.2 Schema organization (keep, lightly adjusted)
+
 - `core` — tenancy + identity bridge (service_role only).
 - `config` — shared catalog + platform-managed reference (readable under RLS).
-- `app` — *(renamed from `public`)* per-tenant runtime + content. *(Optional rename; `public` works too — decision 9c.)*
+- `app` — _(renamed from `public`)_ per-tenant runtime + content. _(Optional rename; `public` works too — decision 9c.)_
 - `audit` — **new**: append-only governance/audit events (O1).
 - `history` — change historization (keep as-is for feature/mcp history).
 - `staging`, `extensions` — unchanged.
 
 ### 3.3 v1 entity cut
-| Bucket | Tables |
-|---|---|
-| **Reuse as-is (minus partitioning)** | tenants, profile_tenants, tenant_keys, tenant_languages, providers, models, routers, capabilities, model_endpoints, model_capabilities, fallback_chains, fallback_chain_models, router_keys, sessions, session_logs, gateway_tasks, gateway_task_logs, documents, document_embeddings, access_groups, group_levels, *_lang, document_access, profile_groups, modules, features, feature_states |
-| **New (this spec adds)** | **budget_nodes** (org→dept→team→user tree; period / hard-soft / alert threshold / free-floor), **spaces** (first-class), **document_collections / document_versions / document_assets** (doc mgmt §3d), **conversations / messages** (Ask threads, replaces curator), **audit_events**, **settings** (workspace + space scope), **devices** (enrollment, F2/D4). RBAC = a `role` enum column on `profile_tenants` (not new tables — §4). |
-| **Deferred (pending decisions)** | mcp_servers, tenant_mcp_servers → **X1** (decision #1); plans, planned_tasks, planned_task_interactions → **X2** (decision #3); curator_conversations → **replace** with the new Ask conversations model (§4 Knowledge) |
+
+| Bucket                               | Tables                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Reuse as-is (minus partitioning)** | tenants, profile_tenants, tenant_keys, tenant_languages, providers, models, routers, capabilities, model_endpoints, model_capabilities, fallback_chains, fallback_chain_models, router_keys, sessions, session_logs, gateway_tasks, gateway_task_logs, documents, document_embeddings, access_groups, group_levels, *_lang, document_access, profile_groups, modules, features, feature_states                                           |
+| **New (this spec adds)**             | **budget_nodes** (org→dept→team→user tree; period / hard-soft / alert threshold / free-floor), **spaces** (first-class), **document_collections / document_versions / document_assets** (doc mgmt §3d), **conversations / messages** (Ask threads, replaces curator), **audit_events**, **settings** (workspace + space scope), **devices** (enrollment, F2/D4). RBAC = a `role` enum column on `profile_tenants` (not new tables — §4). |
+| **Deferred (pending decisions)**     | mcp_servers, tenant_mcp_servers → **X1** (decision #1); plans, planned_tasks, planned_task_interactions → **X2** (decision #3); curator_conversations → **replace** with the new Ask conversations model (§4 Knowledge)                                                                                                                                                                                                                  |
 
 ---
 
@@ -53,7 +57,7 @@ Drop list-partitioning; isolate with **Row-Level Security** keyed on the Supabas
 
 **Identity & tenancy** — `tenants`, `profile_tenants` (user↔tenant + **role**), `tenant_keys`, `tenant_languages`. JWT carries `tenant_id`, `role`, `groups`.
 
-**RBAC** — **fixed roles for v1** (decision #4): Owner/Admin/Editor/Viewer/Member/Service as an enum on `profile_tenants.role`, **tenant-level** (a member's space *membership* governs access, not a per-space role). Permission checks live in RLS predicates + C1. Custom roles (`roles`/`role_permissions`/`profile_roles`) are a documented post-v1 path that won't reshape RLS.
+**RBAC** — **fixed roles for v1** (decision #4): Owner/Admin/Editor/Viewer/Member/Service as an enum on `profile_tenants.role`, **tenant-level** (a member's space _membership_ governs access, not a per-space role). Permission checks live in RLS predicates + C1. Custom roles (`roles`/`role_permissions`/`profile_roles`) are a documented post-v1 path that won't reshape RLS.
 
 **Catalog** — `providers`, `models`, `routers`, `capabilities`, `model_endpoints`, `model_capabilities`. Platform-tenant-owned defaults, tenant-overridable. Add `model_endpoints.local_capable` flag (for the split-plane / D3).
 

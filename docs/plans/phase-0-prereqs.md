@@ -4,8 +4,8 @@ Before running `bun install` in any Strategos app or package, two sibling repos 
 
 ## Required repos
 
-| Repo | Path |
-|------|------|
+| Repo   | Path                 |
+| ------ | -------------------- |
 | rokkit | `~/Developer/rokkit` |
 | kavach | `~/Developer/kavach` |
 
@@ -27,15 +27,15 @@ Already registered (do not re-link unless rebuilding the machine):
 
 ### `kavach` / `@kavach/*` (from `~/Developer/kavach`)
 
-| Package name | Source dir |
-|---|---|
-| `kavach` | `packages/auth` |
-| `@kavach/cookie` | `packages/cookie` |
-| `@kavach/logger` | `packages/logger` |
-| `@kavach/query` | `packages/query` |
-| `@kavach/sentry` | `packages/sentry` |
-| `@kavach/ui` | `packages/ui` |
-| `@kavach/vite` | `packages/vite` |
+| Package name               | Source dir          |
+| -------------------------- | ------------------- |
+| `kavach`                   | `packages/auth`     |
+| `@kavach/cookie`           | `packages/cookie`   |
+| `@kavach/logger`           | `packages/logger`   |
+| `@kavach/query`            | `packages/query`    |
+| `@kavach/sentry`           | `packages/sentry`   |
+| `@kavach/ui`               | `packages/ui`       |
+| `@kavach/vite`             | `packages/vite`     |
 | `@kavach/adapter-supabase` | `adapters/supabase` |
 
 ---

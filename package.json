@@ -4,7 +4,11 @@
   "private": true,
   "type": "module",
   "packageManager": "bun@1.3.14",
-  "workspaces": ["packages/*", "apps/*", "services/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "services/*"
+  ],
   "scripts": {
     "dev:admin": "bun run --filter @strategos/admin dev",
     "dev:desktop": "bun run --filter @strategos/desktop dev",
@@ -14,6 +18,8 @@
     "check": "bun run --filter '*' check"
   },
   "devDependencies": {
-    "@iconify-json/lucide": "^1.2.101"
+    "@iconify-json/lucide": "^1.2.101",
+    "prettier": "^3.4.2",
+    "prettier-plugin-svelte": "^3.4.0"
   }
 }

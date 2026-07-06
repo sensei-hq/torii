@@ -14,10 +14,13 @@
   },
   "dependencies": {
     "@kavach/adapter-supabase": "link:@kavach/adapter-supabase",
+    "@kavach/sentry": "link:@kavach/sentry",
     "@supabase/supabase-js": "^2.101.1",
+    "kavach": "link:kavach",
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "svelte": "^5.55.1",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2"
   }

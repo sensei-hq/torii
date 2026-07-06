@@ -1,6 +1,6 @@
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  tauri::Builder::default()
+  let builder = tauri::Builder::default()
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -10,7 +10,12 @@ pub fn run() {
         )?;
       }
       Ok(())
-    })
+    });
+
+  #[cfg(feature = "e2e-testing")]
+  let builder = builder.plugin(tauri_plugin_playwright::init());
+
+  builder
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
 }

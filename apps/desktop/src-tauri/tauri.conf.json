@@ -2,8 +2,9 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "strategos",
   "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "identifier": "dev.strategos.console",
   "build": {
+    "beforeBuildCommand": "bun run build",
     "frontendDist": "../build",
     "devUrl": "http://localhost:5274"
   },

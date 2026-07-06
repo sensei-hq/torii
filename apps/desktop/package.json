@@ -8,7 +8,7 @@
     "build": "vite build",
     "tauri": "tauri",
     "check": "svelte-kit sync && svelte-check",
-    "lint": "prettier --check .",
+    "lint": "prettier --check . && eslint .",
     "test:e2e": "playwright test --config e2e/playwright.config.ts --project=tauri"
   },
   "dependencies": {

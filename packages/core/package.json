@@ -9,7 +9,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "lint": "prettier --check .",
+    "lint": "prettier --check . && eslint .",
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

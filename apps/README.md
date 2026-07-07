@@ -93,4 +93,21 @@ Desktop shell + client-only auth complete:
 **E2E test seam:** the desktop seeds a fake member session only when built with `VITE_E2E=true`
 (set by `apps/desktop/e2e/globalSetup.ts`) — never in production.
 
-**Next: Phase 1b** — local inference (`gateway-embedded`) + the real Ask screen (offline, on-device).
+## Phase-1b status
+
+Local inference + Ask complete — the desktop answers **on-device, offline, $0**:
+
+- `apps/desktop/src-tauri` — embeds **`gateway-embedded`** (`llama-cpp` feature, Metal-accelerated) via
+  the root `[patch]` → sibling `../gateway`; builds an `Arc<Gateway>` at startup
+  (`EmbeddedLlamaAdapter` over a `ChainedResolver(~/.strategos/models → ~/.ollama/models)`) held in
+  Tauri state. Default local chat model **`gemma2:2b`** (read-through of the Ollama blob — no download).
+- IPC commands `infer` / `list_models` / `gateway_status` (`#[tauri::command]`); the frontend calls them
+  via `src/lib/gateway.ts` + the `ask.svelte.ts` runes store.
+- `apps/desktop` — the real **Ask screen** (composer + conversation + `ExecBadge` "on your device") and a
+  **Local Models** screen; the console nav gains `Models`.
+- **No streaming** (gateway-embedded limitation) — Ask shows a loading state then the full answer.
+- Verified: a Rust `#[ignore]` `infer_smoke` runs a real `gemma2:2b` completion; the Tauri E2E
+  (`ask.spec.ts`, with a `VITE_E2E`-stubbed infer for determinism) asserts ask → on-device answer (4/4 passing).
+
+**Next: Phase 2** — the central gateway service (C1, Rust/Axum) + the split-plane router (cloud steps
+proxy to C1) + config sync, so Ask spans local **and** cloud planes.

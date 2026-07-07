@@ -201,8 +201,14 @@ pub async fn require_auth(
             }
         }
 
-        // Any other validation error (expired, bad sig, wrong aud, etc.).
-        Err(e) => return e.into_response(),
+        // Any other JWKS validation failure (bad sig, HS256 token vs RS/ES JWK,
+        // wrong aud, expired, etc.) — try the HS256 legacy fallback before 401.
+        // `validate_hs256` returns None when SUPABASE_JWT_SECRET is unset, so this
+        // is a no-op (→ 401) in the normal asymmetric-only case.
+        Err(e) => match validate_hs256(&token) {
+            Some(Ok(c)) => c,
+            _ => return e.into_response(),
+        },
     };
 
     req.extensions_mut().insert(claims);

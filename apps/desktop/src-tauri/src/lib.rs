@@ -1,3 +1,4 @@
+mod commands;
 mod gateway;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -10,6 +11,11 @@ pub fn run() {
 
   let builder = tauri::Builder::default()
     .manage(gateway)
+    .invoke_handler(tauri::generate_handler![
+      commands::infer::infer,
+      commands::infer::list_models,
+      commands::infer::gateway_status,
+    ])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

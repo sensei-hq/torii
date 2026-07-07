@@ -200,7 +200,7 @@ impl GatewayStore for PgGatewayStore {
         sqlx::query(
             r#"
             INSERT INTO public.execution_traces
-                (tenant_id, id, inference_call_id, trace, created_at)
+                (tenant_id, id, inference_call_id, trace, recorded_at)
             VALUES
                 ($1, $2, $3, $4, $5)
             "#,
@@ -220,7 +220,7 @@ impl GatewayStore for PgGatewayStore {
     async fn get_execution_trace(&self, id: Uuid) -> Result<Option<StoredTrace>, GatewayError> {
         let row = sqlx::query(
             r#"
-            SELECT id, inference_call_id, trace, created_at
+            SELECT id, inference_call_id, trace, recorded_at
             FROM public.execution_traces
             WHERE tenant_id = $1 AND id = $2
             "#,
@@ -243,10 +243,10 @@ impl GatewayStore for PgGatewayStore {
     ) -> Result<Vec<StoredTrace>, GatewayError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, inference_call_id, trace, created_at
+            SELECT id, inference_call_id, trace, recorded_at
             FROM public.execution_traces
             WHERE tenant_id = $1 AND inference_call_id = $2
-            ORDER BY created_at ASC
+            ORDER BY recorded_at ASC
             "#,
         )
         .bind(self.tenant_id)
@@ -301,6 +301,6 @@ fn row_to_stored_trace(row: &sqlx::postgres::PgRow) -> Result<StoredTrace, Gatew
         id: row.try_get("id").map_err(db_err)?,
         inference_call_id: row.try_get("inference_call_id").map_err(db_err)?,
         trace,
-        created_at: row.try_get("created_at").map_err(db_err)?,
+        created_at: row.try_get("recorded_at").map_err(db_err)?,
     })
 }

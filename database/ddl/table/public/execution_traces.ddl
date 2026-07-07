@@ -7,7 +7,7 @@ create table if not exists execution_traces (
 , id                  uuid        not null default gen_random_uuid()
 , inference_call_id   uuid                                            -- nullable; Option<Uuid> in StoredTrace
 , trace               jsonb       not null                            -- full ExecutionTrace struct (nested; JSONB)
-, created_at          timestamptz not null default now()
+, recorded_at         timestamptz not null default now()
 , primary key (tenant_id, id)
 , constraint execution_traces_call_fkey
     foreign key (tenant_id, inference_call_id)
@@ -18,8 +18,8 @@ create index if not exists idx_execution_traces_call
   on execution_traces(tenant_id, inference_call_id)
   where inference_call_id is not null;
 
-create index if not exists idx_execution_traces_created
-  on execution_traces(tenant_id, created_at desc);
+create index if not exists idx_execution_traces_recorded
+  on execution_traces(tenant_id, recorded_at desc);
 
 create index if not exists idx_execution_traces_trace_gin
   on execution_traces using gin(trace);                               -- enables jsonb path/key queries

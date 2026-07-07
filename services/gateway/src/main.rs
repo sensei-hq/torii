@@ -16,6 +16,7 @@ use gateway::Gateway;
 
 mod routes;
 mod state;
+mod store;
 
 use state::{AppState, SharedState};
 

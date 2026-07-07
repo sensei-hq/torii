@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::{middleware, routing::get, Router};
+use axum::{middleware, routing::{get, post}, Router};
 use axum::http::{
     header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
     Method,
@@ -186,10 +186,12 @@ async fn main() -> anyhow::Result<()> {
         .allow_headers([CONTENT_TYPE, ACCEPT, AUTHORIZATION]);
 
     // `/v1` routes — all require a valid Supabase JWT.
-    // To add more routes (e.g. Task 7's /v1/chat), add them to this router
-    // BEFORE the route_layer so they inherit the auth middleware.
+    // Routes added BEFORE route_layer inherit the auth middleware.
     let v1 = Router::new()
         .route("/whoami", get(routes::whoami::whoami))
+        .route("/chat", post(routes::chat::post_chat))
+        .route("/chat/stream", post(routes::chat::post_chat_stream))
+        .route("/status", get(routes::status::get_status))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::require_auth,

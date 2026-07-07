@@ -11,9 +11,9 @@ use tower_http::cors::{Any, CorsLayer};
 use gateway::adapters::{AdapterRegistry, InferenceAdapter};
 use gateway::adapters::noop::NoopAdapter;
 use gateway::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerManager};
-use gateway::types::config::GatewayConfig;
 use gateway::Gateway;
 
+mod config_loader;
 mod routes;
 mod state;
 mod store;
@@ -137,10 +137,10 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!("Gateway: Bedrock adapter failed: {}", e),
     }
 
-    // Empty config — Task 4 will load the real config from the gateway.* tables.
-    // is_configured() returns false; execute() returns GatewayError::NotConfigured
-    // until Task 4 calls update_config() with the DB-loaded GatewayConfig.
-    let config = GatewayConfig::default();
+    // Load the real GatewayConfig from the Postgres config tables (Task 4).
+    // Reads config.routers, config.models, and public.fallback_chains for the
+    // platform tenant; logs router/model/chain counts on success.
+    let config = config_loader::load_gateway_config(&pool).await?;
     let cb = CircuitBreakerManager::new(CircuitBreakerConfig::default());
     let gw = Gateway::new(config, adapters, cb);
 

@@ -10,6 +10,7 @@ export interface SessionUser {
 class SessionStore {
 	ready = $state(false)
 	user = $state<SessionUser | null>(null)
+	accessToken = $state<string | null>(null)
 
 	get authenticated() {
 		return this.user !== null
@@ -32,6 +33,7 @@ class SessionStore {
 	#apply(session: unknown) {
 		// Supabase Session | null. Claims (role/tenant) come from app_metadata via the JWT hook.
 		const s = session as {
+			access_token?: string
 			user?: {
 				id: string
 				email?: string
@@ -41,6 +43,7 @@ class SessionStore {
 		} | null
 		if (!s?.user) {
 			this.user = null
+			this.accessToken = null
 			return
 		}
 		const app = s.user.app_metadata ?? {}
@@ -50,6 +53,7 @@ class SessionStore {
 			name: (s.user.user_metadata?.name as string) ?? s.user.email,
 			role: (app.role as string) ?? 'member'
 		}
+		this.accessToken = s.access_token ?? null
 	}
 
 	async signInWithPassword(email: string, password: string) {

@@ -6,7 +6,16 @@
 	import { session } from '@strategos/core'
 
 	let { children } = $props()
-	const items = ['Workspace', 'Ask', 'Library', 'Playground', 'Workflows', 'Activity', 'Settings']
+	const items = [
+		'Workspace',
+		'Ask',
+		'Library',
+		'Playground',
+		'Workflows',
+		'Activity',
+		'Models',
+		'Settings'
+	]
 	const active = $derived(
 		items.find((i) => page.url.pathname.replace(/^\//, '') === i.toLowerCase()) ?? 'Workspace'
 	)

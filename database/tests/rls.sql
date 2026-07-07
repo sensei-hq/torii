@@ -50,6 +50,27 @@ begin;
   insert into public.documents(tenant_id, id, original_filename, content_type, space_id, classification)
     values ('00000000-0000-0000-0000-000000000000', 'd0c99999-0000-0000-0000-000000000099', 'x.pdf', 'application/pdf', '5face999-0000-0000-0000-000000000099', 'confidential');
 
+  -- inference ledger rows owned by tenant A (platform)
+  insert into public.inference_calls(
+      tenant_id, id, capability, adapter, model,
+      cost_usd, duration_ms, status, fallback_sequence, recorded_at
+  ) values (
+      '00000000-0000-0000-0000-000000000000',
+      'ca110000-0000-0000-0000-000000000001',
+      'text_chat', 'anthropic', 'claude-sonnet',
+      0.003, 1200, 'success', 0, now()
+  );
+
+  insert into public.execution_traces(
+      tenant_id, id, inference_call_id, trace, created_at
+  ) values (
+      '00000000-0000-0000-0000-000000000000',
+      'trace000-0000-0000-0000-000000000001',
+      'ca110000-0000-0000-0000-000000000001',
+      '{"request_id":"test","status":"success","duration_ms":1200}',
+      now()
+  );
+
   set local role authenticated;
   -- outsider in the platform tenant (not a member of space S)
   set local request.jwt.claims = '{"sub":"cccccccc-cccc-cccc-cccc-cccccccccccc","tenant_id":"00000000-0000-0000-0000-000000000000"}';
@@ -75,6 +96,18 @@ begin;
       raise exception 'FAIL audit: UPDATE allowed for authenticated';
     exception when insufficient_privilege then null;
     end;
+
+    -- inference_calls: tenant B cannot see tenant A's calls
+    if (select count(*) from public.inference_calls) <> 0 then
+      raise exception 'FAIL cross-tenant: tenant B can see inference_calls belonging to tenant A (count=%)',
+        (select count(*) from public.inference_calls);
+    end if;
+
+    -- execution_traces: tenant B cannot see tenant A's traces
+    if (select count(*) from public.execution_traces) <> 0 then
+      raise exception 'FAIL cross-tenant: tenant B can see execution_traces belonging to tenant A (count=%)',
+        (select count(*) from public.execution_traces);
+    end if;
 
     raise notice 'isolation negatives OK';
   end $$;

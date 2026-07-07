@@ -28,7 +28,9 @@ begin
       ('public', 'space_members'),
       ('public', 'budget_nodes'),
       ('public', 'settings'),
-      ('public', 'document_collections')
+      ('public', 'document_collections'),
+      ('public', 'inference_calls'),
+      ('public', 'execution_traces')
     ) as x(sch, tbl)
   loop
     execute format('alter table %I.%I enable row level security', r.sch, r.tbl);

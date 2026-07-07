@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
-use axum::{routing::get, Router};
+use axum::{middleware, routing::get, Router};
 use axum::http::{
     header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
     Method,
 };
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
 use gateway::adapters::{AdapterRegistry, InferenceAdapter};
@@ -13,6 +14,7 @@ use gateway::adapters::noop::NoopAdapter;
 use gateway::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerManager};
 use gateway::Gateway;
 
+mod auth;
 mod config_loader;
 mod keys;
 mod routes;
@@ -35,6 +37,9 @@ async fn main() -> anyhow::Result<()> {
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgresql://postgres:postgres@127.0.0.1:54322/postgres".to_string());
 
+    let supabase_url = std::env::var("PUBLIC_SUPABASE_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:54321".to_string());
+
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
@@ -47,6 +52,11 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     tracing::info!("Database connected");
+
+    // Fetch JWKS from Supabase at startup.
+    // Degrades gracefully — an empty JWKS means auth will fail fast with 401
+    // until Supabase comes up and the middleware refetches on the first kid miss.
+    let jwks = auth::fetch_jwks(&supabase_url).await;
 
     // Build the gateway adapter registry
     let adapters = AdapterRegistry::new();
@@ -159,6 +169,7 @@ async fn main() -> anyhow::Result<()> {
     let state: SharedState = Arc::new(AppState {
         pool,
         gateway: Arc::new(gw),
+        jwks: RwLock::new(jwks),
     });
 
     // CORS: explicit method + header lists — wildcard is rejected by WKWebView/Safari
@@ -174,8 +185,19 @@ async fn main() -> anyhow::Result<()> {
         ])
         .allow_headers([CONTENT_TYPE, ACCEPT, AUTHORIZATION]);
 
+    // `/v1` routes — all require a valid Supabase JWT.
+    // To add more routes (e.g. Task 7's /v1/chat), add them to this router
+    // BEFORE the route_layer so they inherit the auth middleware.
+    let v1 = Router::new()
+        .route("/whoami", get(routes::whoami::whoami))
+        .route_layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            auth::require_auth,
+        ));
+
     let app = Router::new()
         .route("/health", get(routes::health::health))
+        .nest("/v1", v1)
         .layer(cors)
         .with_state(state);
 

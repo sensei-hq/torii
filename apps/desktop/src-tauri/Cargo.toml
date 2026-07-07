@@ -27,3 +27,12 @@ log = "0.4"
 tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-playwright = { version = "0.2", optional = true }
+
+# In-process inference engine (local plane, Phase 1b). Declared against the
+# canonical git source; the workspace-root `[patch."https://github.com/sensei-hq/gateway"]`
+# redirects both crates to the sibling `../gateway/crates/*` checkout for
+# dev-in-place. The `llama-cpp` feature compiles llama.cpp so `gemma2:2b` can
+# run in-process, resolved through the Ollama read-through registry.
+gateway          = { git = "https://github.com/sensei-hq/gateway" }
+gateway-embedded = { git = "https://github.com/sensei-hq/gateway", features = ["llama-cpp"] }
+tokio            = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }

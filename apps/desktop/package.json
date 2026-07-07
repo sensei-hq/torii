@@ -12,18 +12,19 @@
     "test:e2e": "playwright test --config e2e/playwright.config.ts --project=tauri"
   },
   "dependencies": {
-    "@strategos/ui": "workspace:*",
-    "@strategos/core": "workspace:*",
-    "kavach": "link:kavach",
     "@kavach/adapter-supabase": "link:@kavach/adapter-supabase",
-    "@kavach/ui": "link:@kavach/ui",
     "@kavach/sentry": "link:@kavach/sentry",
-    "@supabase/supabase-js": "^2.101.1",
-    "@rokkit/states": "link:@rokkit/states",
+    "@kavach/ui": "link:@kavach/ui",
     "@rokkit/actions": "link:@rokkit/actions",
     "@rokkit/app": "link:@rokkit/app",
+    "@rokkit/states": "link:@rokkit/states",
     "@rokkit/ui": "link:@rokkit/ui",
-    "@rokkit/unocss": "link:@rokkit/unocss"
+    "@rokkit/unocss": "link:@rokkit/unocss",
+    "@strategos/core": "workspace:*",
+    "@strategos/ui": "workspace:*",
+    "@supabase/supabase-js": "^2.101.1",
+    "@tauri-apps/api": "^2",
+    "kavach": "link:kavach"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

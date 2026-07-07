@@ -14,6 +14,7 @@ use gateway::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerManager};
 use gateway::Gateway;
 
 mod config_loader;
+mod keys;
 mod routes;
 mod state;
 mod store;
@@ -141,8 +142,19 @@ async fn main() -> anyhow::Result<()> {
     // Reads config.routers, config.models, and public.fallback_chains for the
     // platform tenant; logs router/model/chain counts on success.
     let config = config_loader::load_gateway_config(&pool).await?;
+
+    // Build the router_id → env_var_name map before Gateway::new moves config.
+    let router_env = keys::router_env_map(&config);
+
     let cb = CircuitBreakerManager::new(CircuitBreakerConfig::default());
     let gw = Gateway::new(config, adapters, cb);
+
+    // Inject provider (BYOK) keys from the process environment (Task 5).
+    // F3 vault decryption is deferred; keys resolve via std::env::var.
+    gw.refresh_router_keys(keys::env_key_resolver(router_env.clone())).await;
+    let resolved = router_env.values().filter(|v| std::env::var(v).is_ok()).count();
+    let total = router_env.len();
+    tracing::info!("keys: {}/{} routers have a provider key in env", resolved, total);
 
     let state: SharedState = Arc::new(AppState {
         pool,

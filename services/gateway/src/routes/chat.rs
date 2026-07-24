@@ -3,7 +3,7 @@ use std::time::Instant;
 use axum::{
     body::Body,
     extract::State,
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::Response,
     Extension, Json,
 };
@@ -115,6 +115,7 @@ async fn reserve_budget(
     state: &SharedState,
     claims: &Claims,
     max_tokens: u32,
+    idem: Option<&str>,
 ) -> Result<(Uuid, Uuid, Uuid), (StatusCode, String)> {
     let tenant = claims.tenant_id.ok_or((
         StatusCode::PAYMENT_REQUIRED,
@@ -137,7 +138,7 @@ async fn reserve_budget(
         })?;
 
     let est = crate::budgets::estimate(max_tokens);
-    let hold = crate::budgets::reserve(&state.pool, tenant, node, est, None)
+    let hold = crate::budgets::reserve(&state.pool, tenant, node, est, idem)
         .await
         .map_err(|e| match e {
             crate::budgets::BudgetError::Exceeded => (
@@ -166,13 +167,17 @@ async fn reserve_budget(
 pub async fn post_chat(
     Extension(claims): Extension<Claims>,
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, String)> {
     let ireq = build_inference_request(&req);
     let max_tokens = req.max_tokens.unwrap_or(1024);
+    // Optional client idempotency: same key ⇒ budget_reserve returns the same hold
+    // (no double-reserve on a retry).
+    let idem = headers.get("idempotency-key").and_then(|v| v.to_str().ok());
 
     // C3: resolve the caller's budget node + hard reserve BEFORE inference (fail-closed).
-    let (tenant, node, hold) = reserve_budget(&state, &claims, max_tokens).await?;
+    let (tenant, node, hold) = reserve_budget(&state, &claims, max_tokens, idem).await?;
 
     let start = Instant::now();
     let exec = state.gateway.execute(&ireq).await;
@@ -276,14 +281,16 @@ fn sse_error(msg: &str) -> Vec<u8> {
 pub async fn post_chat_stream(
     Extension(claims): Extension<Claims>,
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(req): Json<ChatRequest>,
 ) -> Response {
     let ireq = build_inference_request(&req);
     let max_tokens = req.max_tokens.unwrap_or(1024);
+    let idem = headers.get("idempotency-key").and_then(|v| v.to_str().ok());
 
     // C3: resolve budget node + hard reserve BEFORE streaming (fail-closed). A denied
     // caller gets a synchronous JSON error — the stream is never opened (no bypass).
-    let (tenant, node, hold) = match reserve_budget(&state, &claims, max_tokens).await {
+    let (tenant, node, hold) = match reserve_budget(&state, &claims, max_tokens, idem).await {
         Ok(v) => v,
         Err((code, msg)) => {
             return Response::builder()

@@ -21,9 +21,9 @@ test.describe('Ask — local inference', () => {
 
 		// Type a question and submit
 		await input.fill('What is Strategos?')
-		// The Send button is inside [data-ask] — only one button in the composer.
-		// It becomes enabled once draft is non-empty (reactive bind:value).
-		const sendButton = tauriPage.locator('[data-ask] button')
+		// The composer Send button (data-send). Header now also has plane-toggle
+		// buttons inside [data-ask], so scope to the stable hook (avoids strict-mode).
+		const sendButton = tauriPage.locator('[data-ask] [data-send]')
 		await sendButton.click()
 
 		await sleep(1_000)

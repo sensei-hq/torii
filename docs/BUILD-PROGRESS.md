@@ -42,3 +42,9 @@ Full suite: `DATABASE_URL=postgresql://…@127.0.0.1:55322/postgres database/tes
 - ✅ ~~Paid-provider-call approval + provider key~~ — RESOLVED (Anthropic key supplied via `.env.local`; real `/v1/chat` → Anthropic **200** verified, $0.000168, ledger row written; key never surfaced in logs).
 - **Anthropic OAuth** client (client_id/secret/redirect/scopes) — with GH-2, when the OAuth connect flow is built.
 - **KMS/KEK** for a hosted deploy (local dev uses `STRATEGOS_KEK`; I re-seed `tenant_keys` under a dev KEK for live vault tests).
+
+## Unattended run
+
+- **API-key auth (H2)** — ✅ **landed / pushed** to `origin/develop` (HEAD `b701c01`, "consume identity-bound API keys in require_auth"). Fail-closed, parameterized lookup, argon2id constant-time verify, JWT path unchanged; identity/budget/caps from the key's bound identity, never the key. Verified live on the isolated local stack (`chain:"local"`, $0): build clean, 10/10 adversarial assertions PASS, mint→200→revoke→401 round-trip, 0 secret leaks / panics / stray processes. Independently reviewed → APPROVED (one *informational* prefix-timing note, not a vulnerability).
+- **Security audit** — full sweep across 8 dimensions (budget-integrity, rpc-privilege, tenant-isolation, auth, redaction-dlp, vault-crypto, secrets-logging, api-key-auth); report in [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md). **15 findings confirmed** (each verified against real code/DDL): **1 critical, 2 high, 6 medium, 6 low.** Top items: (C) idempotency-key hold reuse → K-1 free inferences (budget bypass); (H) reserve ignores input-token cost → hard-cap overshoot; (H) `rbac_assign_role` self-escalation to `owner`.
+- **No remediation code was written this run** — findings are report-only. **Human review recommended before acting on findings.** No paid cloud calls; no secrets printed; stayed on `develop` inside the monorepo.

@@ -109,5 +109,29 @@ Local inference + Ask complete — the desktop answers **on-device, offline, $0*
 - Verified: a Rust `#[ignore]` `infer_smoke` runs a real `gemma2:2b` completion; the Tauri E2E
   (`ask.spec.ts`, with a `VITE_E2E`-stubbed infer for determinism) asserts ask → on-device answer (4/4 passing).
 
-**Next: Phase 2** — the central gateway service (C1, Rust/Axum) + the split-plane router (cloud steps
-proxy to C1) + config sync, so Ask spans local **and** cloud planes.
+## Phase-2b status
+
+Desktop **split-plane** Ask complete — one Ask UI, two execution planes:
+
+- **Local plane** — in-process embedded engine (`EmbeddedLlamaAdapter` via Tauri IPC), `ExecBadge`
+  "on your device", $0.
+- **Cloud plane** — `src/lib/cloud.ts` proxies `POST /v1/chat` to the **C1** gateway
+  (`PUBLIC_GATEWAY_URL`, default `http://127.0.0.1:8787`) with the Supabase JWT; `ExecBadge`
+  "via gateway". **Provider keys never touch the desktop** — cloud inference is C1's job.
+- `src/lib/plane.ts` routes per the Ask header's **Local / Cloud** toggle; `ask.svelte.ts` holds the
+  `plane` state. Tauri E2E (`split-plane.spec.ts`, both legs `VITE_E2E`-stubbed) asserts each plane's
+  answer + badge (**5/5 desktop specs passing**).
+- Verified against a live C1: the exact `cloud.ts` request (Bearer JWT + `chain:"local"`) returns a
+  real Ollama answer at $0 — the desktop→C1 contract holds with a **real in-app token** (the earlier
+  GoTrue signup-500 that forced an HS256 workaround is now fixed).
+- **Deferred (D4):** Realtime config sync / hot-reload + the offline usage buffer — the next device slice.
+
+### macOS build note
+
+The desktop's `llama-cpp-sys-2` (vendored llama.cpp) uses `std::filesystem`, which libc++ gates behind
+a macOS deployment target ≥ 10.15. `apps/desktop/src-tauri/.cargo/config.toml` sets
+`MACOSX_DEPLOYMENT_TARGET=11.0` so the native build works on newer toolchains (Apple clang 17 / cmake 4).
+If a build predates that config, clear the stale cmake cache once: `cargo clean -p llama-cpp-sys-2`.
+
+**Next:** central-plane hardening (P4 identity/RBAC + F3 vault live, P5 routing/budgets — some steps
+need provider OAuth clients / KMS-KEK inputs) or the W1 Admin Portal on the proven gateway.

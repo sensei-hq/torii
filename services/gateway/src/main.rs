@@ -20,6 +20,7 @@ use gateway::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerManager};
 use gateway::Gateway;
 
 mod auth;
+mod capabilities;  // F2: server-side capability resolution + claims-version gate
 mod config_loader;
 mod crypto;   // F3: DEK/KEK envelope crypto
 mod keys;
@@ -204,9 +205,20 @@ async fn main() -> anyhow::Result<()> {
             auth::require_auth,
         ));
 
+    // `/rpc` — gateway-mediated privileged writes (DECISIONS §5a). Same auth
+    // middleware as `/v1`; each handler additionally resolves capabilities +
+    // runs the claims-version freshness gate server-side.
+    let rpc = Router::new()
+        .route("/budgets/upsert-node", post(routes::rpc::budgets_upsert_node))
+        .route_layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            auth::require_auth,
+        ));
+
     let app = Router::new()
         .route("/health", get(routes::health::health))
         .nest("/v1", v1)
+        .nest("/rpc", rpc)
         .layer(cors)
         .with_state(state);
 

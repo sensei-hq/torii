@@ -26,9 +26,16 @@ pub struct Claims {
     pub sub: String,
     #[serde(default)]
     pub tenant_id: Option<Uuid>,
-    /// The `role` field — could be the Postgres role ("authenticated") or
-    /// an app role set by the custom_access_token_hook. Use `tenant_id` +
-    /// `role` together when authorising app-level actions.
+    /// RW2 / F2 §4.1 frozen contract: the role ids the user holds in the active
+    /// tenant. Capabilities are resolved SERVER-SIDE from these (never trusted
+    /// from the token) — see [`crate::capabilities`].
+    #[serde(default)]
+    pub role_ids: Vec<Uuid>,
+    /// RW2: token-freshness counter (the downgrade-revocation gate). Compared to
+    /// `core.profiles.claims_version`; a stale token is rejected.
+    #[serde(default)]
+    pub claims_version: i64,
+    /// The Postgres `role` claim ("authenticated"); informational only.
     #[serde(default)]
     pub role: Option<String>,
     pub exp: usize,

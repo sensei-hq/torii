@@ -12,7 +12,7 @@
 //! KEK source: `STRATEGOS_KEK` env var (base64 32 bytes) for local dev; production
 //! resolves the KEK from a cloud KMS/HSM (deferred — see F3 spec). Fail-closed.
 
-use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 
@@ -104,6 +104,25 @@ pub fn unseal_credential(dek: &[u8; 32], encrypted: &[u8]) -> Result<String, Cry
     String::from_utf8(pt).map_err(|_| CryptoError::Decrypt)
 }
 
+/// Seal a plaintext secret under the tenant DEK → `[IV][tag][ct]` (the DB layout),
+/// using a fresh random 96-bit nonce. Used when a provider credential is stored
+/// (the `/rpc/connections/*` write path lands in P5 once dev KEK/seed align).
+#[allow(dead_code)]
+pub fn seal_credential(dek: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    use aes_gcm::aead::AeadInPlace;
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(dek));
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let mut buf = plaintext.to_vec();
+    let tag = cipher
+        .encrypt_in_place_detached(&nonce, b"", &mut buf)
+        .map_err(|_| CryptoError::Decrypt)?;
+    let mut out = Vec::with_capacity(IV_LEN + TAG_LEN + buf.len());
+    out.extend_from_slice(nonce.as_slice());
+    out.extend_from_slice(&tag);
+    out.extend_from_slice(&buf);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,6 +139,17 @@ mod tests {
         // Seal a provider key with the DEK, then unseal.
         let sealed_key = encrypt_gcm(&dek, &[2u8; IV_LEN], b"sk-ant-secret-123");
         assert_eq!(unseal_credential(&dek, &sealed_key).unwrap(), "sk-ant-secret-123");
+    }
+
+    #[test]
+    fn seal_then_unseal_round_trips_with_random_nonce() {
+        let dek = [11u8; 32];
+        let sealed = seal_credential(&dek, b"sk-ant-live-xyz").unwrap();
+        // fresh nonce each call → distinct ciphertext, but both decrypt.
+        let sealed2 = seal_credential(&dek, b"sk-ant-live-xyz").unwrap();
+        assert_ne!(sealed, sealed2);
+        assert_eq!(unseal_credential(&dek, &sealed).unwrap(), "sk-ant-live-xyz");
+        assert_eq!(unseal_credential(&dek, &sealed2).unwrap(), "sk-ant-live-xyz");
     }
 
     #[test]

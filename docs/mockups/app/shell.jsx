@@ -158,7 +158,6 @@
                 <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{account.name}</div>
                 <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-mute)' }}>{account.sub}</div>
               </div>
-              <Icon name="caret" size={14} tone="mute" />
             </div>
           )}
 

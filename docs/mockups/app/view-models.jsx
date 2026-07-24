@@ -58,7 +58,7 @@
 
     return (
       <div className="view-pad wide rise">
-        <PageHeader eyebrow="Models" title="Model catalog"
+        <PageHeader eyebrow="Models" title="Model catalog" subMax={780}
           sub="Every model your org can reach through the gateway — priced, measured, and routable. Add a custom model or endpoint, enable per tenant, and mark which run on-device."
           actions={<>
             {!meta.web && <span className="pill success"><Icon name="models" size={13} tone="success" /> {localCount} local-capable · 16-core · 24 GB</span>}

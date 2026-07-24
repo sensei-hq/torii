@@ -80,7 +80,8 @@ body { background: var(--paper); }
 .zs .view-pad { padding: var(--space-6) var(--space-7) var(--space-8); max-width: 1180px; margin-left: auto; margin-right: auto; }
 .zs .view-pad.wide { max-width: none; }
 
-.zs .page-hd { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-5); margin-bottom: var(--space-6); }
+.zs .page-hd { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-4) var(--space-5); margin-bottom: var(--space-6); }
+.zs .page-hd > :first-child { flex: 1 1 340px; min-width: 0; }
 
 /* section header inside a view */
 .zs .sec { margin-top: var(--space-7); }

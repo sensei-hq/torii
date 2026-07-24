@@ -97,7 +97,7 @@
         <style>{`
           .sgn-root { position: fixed; inset: 0; background: var(--paper); overflow: auto; }
           .sgn-wrap { max-width: 1100px; margin: 0 auto; padding: var(--space-7) clamp(20px, 5vw, 48px) var(--space-7); }
-          .sgn-head { padding-bottom: var(--space-6); border-bottom: 1px solid var(--paper-edge); }
+          .sgn-head { padding-bottom: var(--space-2); border-bottom: 1px solid var(--paper-edge); }
           .sgn-head-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
           .sgn-body { display: grid; grid-template-columns: 1fr; gap: var(--space-7); padding-top: var(--space-7); align-items: start; }
           .sgn-intro { min-width: 0; }
@@ -124,10 +124,12 @@
           {/* ── header · spans both columns ───────────────────────── */}
           <header className="sgn-head">
             <div className="sgn-head-row">
-              <Brand size={32} font={28} />
-              <div className="zs-eyebrow" style={{ color: 'var(--accent)' }}>{isAdmin ? 'Admin portal · tenant & gateway control' : 'AI gateway · routing & governance'}</div>
+              <span className="flex items-center gap-2">
+                <Brand size={32} font={28} />
+                <span className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-mute)', border: '1px solid var(--paper-edge)', borderRadius: 'var(--radius-full)', padding: '1px 7px' }}>v1.0</span>
+              </span>
+              <div className="zs-eyebrow" style={{ color: 'var(--accent)' }}>{isAdmin ? 'Admin portal · define · manage · control · inspect' : 'AI gateway · routing & governance'}</div>
             </div>
-            <h1 className="zs-h1" style={{ marginTop: 'var(--space-6)', lineHeight: 1.1 }}>{isAdmin ? 'Operate the gateway.' : 'One endpoint for every model.'}</h1>
           </header>
 
           <div className="sgn-body">
@@ -157,8 +159,7 @@
             <main className="sgn-main">
               <div style={{ width: 400, maxWidth: '100%' }}>
             <div className="card" style={{ padding: 'var(--space-6)' }}>
-              <h1 className="zs-h2" style={{ textAlign: 'center' }}>{isAdmin ? 'Sign in to the admin portal' : 'Sign in to your workspace'}</h1>
-              <p className="zs-body-sm" style={{ textAlign: 'center', marginTop: 6, marginBottom: 'var(--space-5)' }}>Northwind Estates · {isAdmin ? 'tenant administration' : 'gateway'}</p>
+              <h1 className="zs-h2" style={{ textAlign: 'center', marginBottom: 'var(--space-5)' }}>{isAdmin ? 'Sign in to the admin portal' : 'Sign in to your workspace'}</h1>
 
               {/* OAuth — v1 sign-in */}
               <div className="flex flex-col" style={{ gap: 8 }}>

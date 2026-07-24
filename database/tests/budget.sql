@@ -38,3 +38,34 @@ begin;
   end $$;
 rollback;
 \echo 'BUDGET RESERVE TEST PASSED'
+
+\echo '== C3 precision: sub-cent spend accrues (numeric(14,6), not rounded to 0) =='
+begin;
+  -- Regression guard: per-call costs are sub-cent (~$0.0002). If budget_nodes
+  -- amounts revert to numeric(12,2) these round to 0.00 and spend never accrues
+  -- (a silent budget leak). org cap 1.00 → user (no cap).
+  insert into public.budget_nodes(tenant_id,id,parent_id,kind,name,cap_amount,enforcement,modified_by) values
+    ('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000b1',null,'org','OrgP',1,'hard','t'),
+    ('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000b2','b0d0e000-0000-0000-0000-0000000000b1','user','UP',null,'hard','t');
+  do $$
+  declare h uuid;
+  begin
+    h := public.budget_reserve('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000b2',0.001);
+    perform public.budget_commit('00000000-0000-0000-0000-000000000000',h,0.000204);
+    if (select spent_amount from public.budget_nodes where id='b0d0e000-0000-0000-0000-0000000000b1') <> 0.000204 then
+      raise exception 'FAIL: sub-cent spend rounded away (spent=%); budget_nodes amounts must be numeric(14,6)',
+        (select spent_amount from public.budget_nodes where id='b0d0e000-0000-0000-0000-0000000000b1'); end if;
+
+    -- many sub-cent commits must accumulate, not vanish.
+    for i in 1..10 loop
+      h := public.budget_reserve('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000b2',0.001);
+      perform public.budget_commit('00000000-0000-0000-0000-000000000000',h,0.0001);
+    end loop;
+    if (select spent_amount from public.budget_nodes where id='b0d0e000-0000-0000-0000-0000000000b1') <> 0.001204 then
+      raise exception 'FAIL: sub-cent commits did not accumulate (spent=%)',
+        (select spent_amount from public.budget_nodes where id='b0d0e000-0000-0000-0000-0000000000b1'); end if;
+
+    raise notice 'C3 sub-cent accrual holds ✓';
+  end $$;
+rollback;
+\echo 'BUDGET PRECISION TEST PASSED'

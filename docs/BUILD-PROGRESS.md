@@ -18,8 +18,11 @@
 | **C5 · §3c** | Sensitive-data `dataset_safe_schema` (structure not values) + `k_anon_ok` | `tests/dataset.sql` |
 | **X1 · MCP** | Default-deny `tool_allowed` allow-list resolver | `tests/tools.sql` |
 | **Gateway issues** | GH-1 #37 (trace plane), GH-2 #36 (OAuth adapter) filed on `sensei-hq/gateway` | — |
+| **Infra isolation** | Strategos on its **own** Supabase stack (project `strategos`, API 55321 / DB 55322); sensei-dojo untouched + cleaned | both stacks coexist; suite green on isolated DB |
+| **🔓 Live auth E2E** | Real GoTrue signup → hook injects `tenant_id`+`role_ids`+`claims_version` → sign-in → **ES256 token → JWKS verify → capability gate** → `POST /rpc/budgets/upsert-node` **200** + actor-bound audit; viewer → 403 | verified against the real stack |
+| **fix: signup-500** | RW2 broke `assign_tenant_by_domain` (old profile_tenants shape) → repaired (creates profiles anchor, SECURITY DEFINER, default role) | signup works |
 
-Full suite: `DATABASE_URL=… database/tests/run.sh` → all 6 harnesses green.
+Full suite: `DATABASE_URL=postgresql://…@127.0.0.1:55322/postgres database/tests/run.sh` → all 7 harnesses green. **Live auth path now works with real Supabase tokens** (the earlier `/rpc` gate was the only unverified piece — now closed).
 
 ## In progress / next (roadmap P5→)
 
@@ -30,7 +33,7 @@ Full suite: `DATABASE_URL=… database/tests/run.sh` → all 6 harnesses green.
 
 ## Human inputs still needed (front-load before their phase)
 
-- Supabase **RS256/JWKS** config + `SUPABASE_JWT_*` (unblocks live `/rpc` + inference auth tests)
-- **KMS/KEK** for prod credential vault; a dev `STRATEGOS_KEK` aligned with the seeded `tenant_keys` (unblocks live vault decrypt)
-- **Anthropic OAuth** client (client_id/secret/redirect/scopes) — with GH-2
-- **Paid-provider-call** approval for the first real cloud inference acceptance
+- ✅ ~~Supabase JWKS + auth~~ — RESOLVED (isolated stack, ES256/JWKS, hook enabled; live auth verified).
+- **Paid-provider-call** approval + a provider API key in the gateway env — for the first real *cloud inference* acceptance (real `/v1/chat` to Anthropic/OpenAI, small cost).
+- **Anthropic OAuth** client (client_id/secret/redirect/scopes) — with GH-2, when the OAuth connect flow is built.
+- **KMS/KEK** for a hosted deploy (local dev uses `STRATEGOS_KEK`; I re-seed `tenant_keys` under a dev KEK for live vault tests).

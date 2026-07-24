@@ -24,6 +24,9 @@ async-trait = "0.1"
 # F3 credential vault — vetted AEAD (RustCrypto AES-256-GCM), not hand-rolled.
 aes-gcm = "0.10"
 base64 = "0.22"
+# C4 redaction/DLP (§2 W5) — pattern + entropy secret/PII detection.
+regex = "1"
+once_cell = "1"
 # MIG-1: real package is `sensei-gateway` (v0.4.6); alias to `gateway` so imports stay short.
 gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway" }
 # MIG-2 will add `sensei-kernel` (capability traits / AdapterRegistry) when main.rs is migrated.

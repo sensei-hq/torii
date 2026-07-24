@@ -24,6 +24,7 @@ mod capabilities;  // F2: server-side capability resolution + claims-version gat
 mod config_loader;
 mod crypto;   // F3: DEK/KEK envelope crypto
 mod keys;
+mod redact;   // C4: secret/PII redaction (DLP, §2 W5)
 mod routes;
 mod state;
 mod store;

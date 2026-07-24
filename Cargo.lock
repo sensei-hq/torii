@@ -5213,6 +5213,8 @@ dependencies = [
  "chrono",
  "dotenvy",
  "jsonwebtoken",
+ "once_cell",
+ "regex",
  "reqwest 0.12.28",
  "sensei-gateway",
  "serde",

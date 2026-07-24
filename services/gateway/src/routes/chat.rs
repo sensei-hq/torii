@@ -69,11 +69,22 @@ fn map_role(role: &str) -> MessageRole {
 }
 
 fn build_inference_request(req: &ChatRequest) -> InferenceRequest {
+    // C4 §2 W5 — redact-in-flight: strip secrets/PII from every message and the
+    // system prompt BEFORE they egress to any model (cloud especially). One-way
+    // placeholders (v1). Redaction counts flow into the governance/quality signal.
+    let redactor = crate::redact::Redactor;
     let messages: Vec<Message> = req
         .messages
         .iter()
-        .map(|m| Message::text(map_role(&m.role), &m.content))
+        .map(|m| {
+            let (clean, _) = redactor.redact(&m.content);
+            Message::text(map_role(&m.role), &clean)
+        })
         .collect();
+    let system = req
+        .system
+        .as_ref()
+        .map(|s| redactor.redact(s).0);
 
     InferenceRequest {
         capability: Capability::TextChat,
@@ -82,7 +93,7 @@ fn build_inference_request(req: &ChatRequest) -> InferenceRequest {
         chain: req.chain.clone(),
         payload: Payload::Chat {
             messages,
-            system: req.system.clone(),
+            system,
             max_tokens: req.max_tokens.or(Some(1024)),
             temperature: None,
             tools: Vec::new(),

@@ -105,16 +105,109 @@ pub async fn budgets_upsert_node(
         return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
     }
 
-    // Actor-bound audit (matches the RW8 with-check).
-    let _ = sqlx::query(
-        "insert into public.audit_events (tenant_id, actor_id, action, target_type, target_id) \
-         values ($1, $2, 'budget.node.upserted', 'budget_node', $3)",
+    audit(&state, tenant, actor, "budget.node.upserted", "budget_node", Some(id)).await;
+    (StatusCode::OK, Json(json!({ "id": id }))).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct ApproveRequest {
+    pub id: Uuid,
+}
+
+/// `POST /rpc/budgets/approve-request` — capability `budget.write`. Applies the
+/// member's requested cap to the node and marks the request approved.
+pub async fn budgets_approve_request(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<ApproveRequest>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "budget.write").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let write = sqlx::query(
+        "with req as ( \
+           update public.budget_requests set status='approved', resolved_by=$2, resolved_at=now() \
+            where tenant_id=$1 and id=$3 and status='pending' returning node_id, requested_cap) \
+         update public.budget_nodes b set cap_amount = req.requested_cap, modified_at = now() \
+           from req where b.tenant_id=$1 and b.id = req.node_id",
     )
     .bind(tenant)
     .bind(actor)
-    .bind(id)
+    .bind(body.id)
     .execute(&state.pool)
     .await;
+    match write {
+        Ok(r) if r.rows_affected() == 0 => (StatusCode::NOT_FOUND, "no pending request").into_response(),
+        Ok(_) => {
+            audit(&state, tenant, actor, "budget.request.approved", "budget_request", Some(body.id)).await;
+            (StatusCode::OK, Json(json!({ "approved": body.id }))).into_response()
+        }
+        Err(e) => {
+            tracing::error!("approve-request: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response()
+        }
+    }
+}
 
-    (StatusCode::OK, Json(json!({ "id": id }))).into_response()
+#[derive(Deserialize)]
+pub struct AssignRole {
+    pub profile_id: Uuid,
+    pub role_id: Uuid,
+}
+
+/// `POST /rpc/rbac/assign-role` — capability `role.manage`. Assigns a role and
+/// BUMPS the target's claims_version (freshness gate: existing tokens re-resolve).
+pub async fn rbac_assign_role(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<AssignRole>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "role.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let assign = sqlx::query(
+        "insert into core.profile_roles (tenant_id, profile_id, role_id, assigned_by) \
+         values ($1,$2,$3,$4) on conflict do nothing",
+    )
+    .bind(tenant)
+    .bind(body.profile_id)
+    .bind(body.role_id)
+    .bind(actor.to_string())
+    .execute(&state.pool)
+    .await;
+    if let Err(e) = assign {
+        tracing::error!("assign-role: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+    // Freshness gate: invalidate the target's existing tokens.
+    let _ = sqlx::query("update core.profiles set claims_version = claims_version + 1 where id = $1")
+        .bind(body.profile_id)
+        .execute(&state.pool)
+        .await;
+    audit(&state, tenant, actor, "role.assigned", "profile_role", Some(body.profile_id)).await;
+    (StatusCode::OK, Json(json!({ "assigned": body.role_id }))).into_response()
+}
+
+/// Actor-bound audit helper (matches the RW8 with-check: actor_id = auth.uid()).
+async fn audit(
+    state: &SharedState,
+    tenant: Uuid,
+    actor: Uuid,
+    action: &str,
+    target_type: &str,
+    target_id: Option<Uuid>,
+) {
+    let _ = sqlx::query(
+        "insert into public.audit_events (tenant_id, actor_id, action, target_type, target_id) \
+         values ($1, $2, $3, $4, $5)",
+    )
+    .bind(tenant)
+    .bind(actor)
+    .bind(action)
+    .bind(target_type)
+    .bind(target_id)
+    .execute(&state.pool)
+    .await;
 }

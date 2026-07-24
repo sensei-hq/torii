@@ -41,3 +41,8 @@ comment on table budget_nodes is
 - spent_amount: rollup maintained by C3 (budgets & metering); ref_id links a node to
   the profile/team it represents.
 - A call is allowed only if every ancestor node (user→team→dept→org) has headroom.';
+
+-- RW7 (DECISIONS §2 W2): hard-reserve columns.
+alter table budget_nodes add column if not exists reserved_amount     numeric(12,2) not null default 0;
+alter table budget_nodes add column if not exists period_started_at   timestamptz   not null default now();
+alter table budget_nodes add column if not exists soft_overshoot_limit numeric(12,2);

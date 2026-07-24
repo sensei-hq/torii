@@ -48,3 +48,13 @@ comment on table inference_calls is
 - fallback_sequence (u8) indicates which position in the fallback chain succeeded.
 - session_id composite FK is NULL-safe; project_id has no FK until a projects table lands.
 - Written by service_role (bypasses RLS); clients SELECT via RLS (tenant_isolation.sql).';
+
+-- RW7: budget attribution + split-plane columns on the authoritative ledger.
+alter table inference_calls add column if not exists budget_node_id    uuid;
+alter table inference_calls add column if not exists org_node_id       uuid;
+alter table inference_calls add column if not exists dept_node_id      uuid;
+alter table inference_calls add column if not exists team_node_id      uuid;
+alter table inference_calls add column if not exists user_node_id      uuid;
+alter table inference_calls add column if not exists execution_location varchar(10)
+    check (execution_location is null or execution_location in ('local', 'cloud'));
+alter table inference_calls add column if not exists hold_id           uuid;

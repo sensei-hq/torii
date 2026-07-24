@@ -30,3 +30,16 @@ comment on table router_keys is
 - encrypted_api_key: API key encrypted with tenant DEK from core.tenant_keys
 - viable_chain_models view uses this table to filter usable (router, model) combinations
 - Decryption happens in application layer only — never exposed via views';
+
+-- RW13 (DECISIONS §3): generalize the vault to api_key + OAuth credentials.
+-- Physical table stays `router_keys` (viable_chain_models view + secrets.sql
+-- depend on the name); logically it is the router_credentials vault. OAuth tokens
+-- are encrypted like keys, service_role-only, auto-refreshed by F3 before expiry.
+alter table router_keys add column if not exists credential_type varchar(10) not null default 'api_key'
+    check (credential_type in ('api_key', 'oauth'));
+alter table router_keys add column if not exists encrypted_oauth   bytea;   -- [IV][tag][access+refresh JSON ct]
+alter table router_keys add column if not exists oauth_expires_at  timestamptz;
+alter table router_keys add column if not exists oauth_scopes      text;
+alter table router_keys add column if not exists token_url         text;
+alter table router_keys add column if not exists refresh_status    varchar(16);
+alter table router_keys add column if not exists last_refreshed_at timestamptz;

@@ -26,6 +26,7 @@ import:
     null_value: ''
   after:
     - import/loader.sql
+    - import/seed_rework.sql
 dbml:
   exclude:
     schemas:

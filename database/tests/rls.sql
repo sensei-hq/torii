@@ -50,22 +50,23 @@ begin;
   insert into public.documents(tenant_id, id, original_filename, content_type, space_id, classification)
     values ('00000000-0000-0000-0000-000000000000', 'd0c99999-0000-0000-0000-000000000099', 'x.pdf', 'application/pdf', '5face999-0000-0000-0000-000000000099', 'confidential');
 
-  -- inference ledger rows owned by tenant A (platform)
+  -- inference ledger rows owned by tenant B — the platform (tenant A) user below
+  -- must NOT see them (cross-tenant isolation).
   insert into public.inference_calls(
       tenant_id, id, capability, adapter, model,
       cost_usd, duration_ms, status, fallback_sequence, recorded_at
   ) values (
-      '00000000-0000-0000-0000-000000000000',
+      '99999999-9999-9999-9999-999999999999',
       'ca110000-0000-0000-0000-000000000001',
       'text_chat', 'anthropic', 'claude-sonnet',
       0.003, 1200, 'success', 0, now()
   );
 
   insert into public.execution_traces(
-      tenant_id, id, inference_call_id, trace, created_at
+      tenant_id, id, inference_call_id, trace, recorded_at
   ) values (
-      '00000000-0000-0000-0000-000000000000',
-      'trace000-0000-0000-0000-000000000001',
+      '99999999-9999-9999-9999-999999999999',
+      'd7ace000-0000-0000-0000-000000000001',
       'ca110000-0000-0000-0000-000000000001',
       '{"request_id":"test","status":"success","duration_ms":1200}',
       now()

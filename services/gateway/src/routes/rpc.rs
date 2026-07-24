@@ -163,6 +163,88 @@ pub async fn budgets_request(
 }
 
 #[derive(Deserialize)]
+pub struct IssueApiKey {
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Bind the key to a service account (must be in-tenant); else the caller's identity.
+    #[serde(default)]
+    pub service_account_id: Option<Uuid>,
+}
+
+/// `POST /rpc/apikeys/issue` — capability `apikey.manage`. Mints an identity-bound
+/// API key (`sk_str_…`), stores only the prefix + argon2id hash, and returns the raw
+/// key **once**. The key carries no budget — spend accrues to the bound identity's
+/// node (DECISIONS §1.2). The secret is never persisted or logged.
+pub async fn apikeys_issue(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<IssueApiKey>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "apikey.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    // Bind to a service account (validated in-tenant) or, by default, the caller.
+    let (profile_id, sa_id): (Option<Uuid>, Option<Uuid>) = match body.service_account_id {
+        Some(sa) => {
+            let ok: bool = sqlx::query_scalar(
+                "select exists(select 1 from public.service_accounts where tenant_id=$1 and id=$2)",
+            )
+            .bind(tenant)
+            .bind(sa)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or(false);
+            if !ok {
+                return (StatusCode::NOT_FOUND, "service account not found in tenant").into_response();
+            }
+            (None, Some(sa))
+        }
+        None => (Some(actor), None),
+    };
+
+    let minted = match crate::apikeys::mint() {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::error!("apikeys_issue: mint failed: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "mint failed").into_response();
+        }
+    };
+
+    let id = Uuid::new_v4();
+    let scope = json!([body.name.as_deref().unwrap_or("inference")]).to_string();
+    let write = sqlx::query(
+        "insert into public.api_keys \
+           (tenant_id, id, profile_id, service_account_id, hashed_secret, prefix, scope, status, created_by) \
+         values ($1,$2,$3,$4,$5,$6,$7::jsonb,'active',$8)",
+    )
+    .bind(tenant)
+    .bind(id)
+    .bind(profile_id)
+    .bind(sa_id)
+    .bind(&minted.hashed_secret)
+    .bind(&minted.prefix)
+    .bind(scope)
+    .bind(actor.to_string())
+    .execute(&state.pool)
+    .await;
+
+    if let Err(e) = write {
+        tracing::error!("apikeys_issue: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+
+    audit(&state, tenant, actor, "apikey.issued", "api_key", Some(id)).await;
+    // Raw key returned exactly once — the operator must copy it now.
+    (
+        StatusCode::OK,
+        Json(json!({ "id": id, "prefix": minted.prefix, "key": minted.full })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
 pub struct ApproveRequest {
     pub id: Uuid,
 }

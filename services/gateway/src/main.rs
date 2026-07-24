@@ -19,6 +19,7 @@ use gateway::adapters::noop::NoopAdapter;
 use gateway::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerManager};
 use gateway::Gateway;
 
+mod apikeys;  // H2: API-key generation + argon2 hash/verify (identity-bound)
 mod auth;
 mod budgets;  // C3: budget-node resolution + hard reserve→commit on the inference hot path
 mod capabilities;  // F2: server-side capability resolution + claims-version gate
@@ -214,6 +215,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/budgets/upsert-node", post(routes::rpc::budgets_upsert_node))
         .route("/budgets/request", post(routes::rpc::budgets_request))
         .route("/budgets/approve-request", post(routes::rpc::budgets_approve_request))
+        .route("/apikeys/issue", post(routes::rpc::apikeys_issue))
         .route("/rbac/assign-role", post(routes::rpc::rbac_assign_role))
         .route("/governance/set-feature", post(routes::rpc::governance_set_feature))
         .route("/spaces/create", post(routes::rpc::spaces_create))

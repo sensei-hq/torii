@@ -13,6 +13,7 @@ suite=(
   tools.sql     # X1: MCP tool allow-list default-deny
   routing.sql   # C2: chain-binding resolution precedence
   dataset.sql   # §3c: sensitive-data safe schema + k-anonymity
+  analytics.sql # O2: daily usage rollup + idempotency
 )
 
 for t in "${suite[@]}"; do

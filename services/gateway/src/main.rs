@@ -21,10 +21,12 @@ use gateway::Gateway;
 
 mod auth;
 mod config_loader;
+mod crypto;   // F3: DEK/KEK envelope crypto
 mod keys;
 mod routes;
 mod state;
 mod store;
+mod vault;    // F3: DB-backed credential vault (replaces the env-key shim)
 
 use state::{AppState, SharedState};
 

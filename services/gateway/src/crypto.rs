@@ -1,0 +1,138 @@
+//! F3 credential vault — DEK/KEK envelope crypto (DECISIONS §2 W4).
+//!
+//! AES-256-GCM via the vetted `aes-gcm` crate (RustCrypto) — never hand-rolled.
+//! Envelope: a per-tenant **DEK** (in `core.tenant_keys.encrypted_dek`) is sealed
+//! by the master **KEK**; provider credentials (`public.router_keys`) are sealed by
+//! the tenant DEK. The gateway (`service_role`) is the ONLY place that decrypts;
+//! keys never leave it and never touch a client/device.
+//!
+//! Ciphertext layout (both DEK and credential blobs): `[12B IV][16B tag][ciphertext]`.
+//! `aes-gcm` expects `ciphertext || tag`, so we reassemble on decrypt.
+//!
+//! KEK source: `STRATEGOS_KEK` env var (base64 32 bytes) for local dev; production
+//! resolves the KEK from a cloud KMS/HSM (deferred — see F3 spec). Fail-closed.
+
+use aes_gcm::aead::{Aead, KeyInit, Payload};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
+use base64::{engine::general_purpose::STANDARD as B64, Engine};
+
+const IV_LEN: usize = 12;
+const TAG_LEN: usize = 16;
+
+#[derive(Debug, thiserror::Error)]
+pub enum CryptoError {
+    #[error("KEK not configured (STRATEGOS_KEK) or invalid: {0}")]
+    Kek(String),
+    #[error("ciphertext too short ({0} bytes; need > {1})")]
+    TooShort(usize, usize),
+    #[error("AEAD decryption failed (tampered ciphertext or wrong key)")]
+    Decrypt,
+}
+
+/// The master key-encryption key. Dev: base64 32 bytes in `STRATEGOS_KEK`.
+#[derive(Clone)]
+pub struct Kek([u8; 32]);
+
+impl Kek {
+    /// Load the KEK from the `STRATEGOS_KEK` env var (base64-encoded 32 bytes).
+    /// Production should replace this with a KMS-backed provider.
+    pub fn from_env() -> Result<Self, CryptoError> {
+        let raw = std::env::var("STRATEGOS_KEK")
+            .map_err(|_| CryptoError::Kek("env var unset".into()))?;
+        let bytes = B64
+            .decode(raw.trim())
+            .map_err(|e| CryptoError::Kek(format!("base64: {e}")))?;
+        let arr: [u8; 32] = bytes
+            .try_into()
+            .map_err(|v: Vec<u8>| CryptoError::Kek(format!("expected 32 bytes, got {}", v.len())))?;
+        Ok(Kek(arr))
+    }
+
+    #[cfg(test)]
+    pub fn from_bytes(b: [u8; 32]) -> Self {
+        Kek(b)
+    }
+
+    fn decrypt(&self, blob: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        decrypt_gcm(&self.0, blob, b"")
+    }
+}
+
+/// Decrypt an `[IV][tag][ct]` blob with a 32-byte key and optional AAD.
+fn decrypt_gcm(key: &[u8; 32], blob: &[u8], aad: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    if blob.len() <= IV_LEN + TAG_LEN {
+        return Err(CryptoError::TooShort(blob.len(), IV_LEN + TAG_LEN));
+    }
+    let (iv, rest) = blob.split_at(IV_LEN);
+    let (tag, ct) = rest.split_at(TAG_LEN);
+    // aes-gcm wants ciphertext with the tag appended.
+    let mut ct_tag = Vec::with_capacity(ct.len() + TAG_LEN);
+    ct_tag.extend_from_slice(ct);
+    ct_tag.extend_from_slice(tag);
+
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    cipher
+        .decrypt(Nonce::from_slice(iv), Payload { msg: &ct_tag, aad })
+        .map_err(|_| CryptoError::Decrypt)
+}
+
+#[cfg(test)]
+fn encrypt_gcm(key: &[u8; 32], iv: &[u8; IV_LEN], plaintext: &[u8]) -> Vec<u8> {
+    // Test-only helper mirroring the DB layout [IV][tag][ct].
+    use aes_gcm::aead::AeadInPlace;
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let mut buf = plaintext.to_vec();
+    let tag = cipher
+        .encrypt_in_place_detached(Nonce::from_slice(iv), b"", &mut buf)
+        .expect("encrypt");
+    let mut out = Vec::new();
+    out.extend_from_slice(iv);
+    out.extend_from_slice(&tag);
+    out.extend_from_slice(&buf);
+    out
+}
+
+/// Decrypt a tenant DEK (sealed by the KEK) → the 32-byte data key.
+pub fn unseal_dek(kek: &Kek, encrypted_dek: &[u8]) -> Result<[u8; 32], CryptoError> {
+    let dek = kek.decrypt(encrypted_dek)?;
+    dek.try_into().map_err(|_| CryptoError::Decrypt)
+}
+
+/// Decrypt a provider credential (sealed by the tenant DEK) → UTF-8 secret.
+pub fn unseal_credential(dek: &[u8; 32], encrypted: &[u8]) -> Result<String, CryptoError> {
+    let pt = decrypt_gcm(dek, encrypted, b"")?;
+    String::from_utf8(pt).map_err(|_| CryptoError::Decrypt)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn envelope_round_trips_dek_then_credential() {
+        let kek = Kek::from_bytes([7u8; 32]);
+        let dek = [42u8; 32];
+
+        // Seal the DEK with the KEK, then unseal.
+        let sealed_dek = encrypt_gcm(&kek.0, &[1u8; IV_LEN], &dek);
+        assert_eq!(unseal_dek(&kek, &sealed_dek).unwrap(), dek);
+
+        // Seal a provider key with the DEK, then unseal.
+        let sealed_key = encrypt_gcm(&dek, &[2u8; IV_LEN], b"sk-ant-secret-123");
+        assert_eq!(unseal_credential(&dek, &sealed_key).unwrap(), "sk-ant-secret-123");
+    }
+
+    #[test]
+    fn tampered_ciphertext_fails_closed() {
+        let dek = [9u8; 32];
+        let mut sealed = encrypt_gcm(&dek, &[3u8; IV_LEN], b"secret");
+        let last = sealed.len() - 1;
+        sealed[last] ^= 0x01; // flip a bit
+        assert!(matches!(unseal_credential(&dek, &sealed), Err(CryptoError::Decrypt)));
+    }
+
+    #[test]
+    fn short_blob_rejected() {
+        assert!(matches!(unseal_credential(&[0u8; 32], b"tiny"), Err(CryptoError::TooShort(..))));
+    }
+}

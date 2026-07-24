@@ -3,10 +3,15 @@ members = ["apps/desktop/src-tauri", "services/gateway"]
 # "services/gateway" added in the Phase 2 plan
 resolver = "2"
 
-# Dev-in-place against the sibling engine repo (production consumes the pinned git tag).
+# Dev-in-place against the sibling engine repo (production consumes the pinned git tag v0.4.6).
+# MIG-1 (2026-07-24): the engine was refactored to six `sensei-*` packages @ v0.4.6;
+# `gateway`/`gateway-embedded` no longer exist. Patch the real package names to the sibling
+# checkout. Transitive crates (sensei-kernel/-cloud-providers/-kokoro) resolve via intra-workspace
+# path deps inside ../gateway and need no entry here.
 [patch."https://github.com/sensei-hq/gateway"]
-gateway          = { path = "../gateway/crates/gateway" }
-gateway-embedded = { path = "../gateway/crates/gateway-embedded" }
+sensei-gateway         = { path = "../gateway/crates/gateway" }
+sensei-local-engine    = { path = "../gateway/crates/local-engine" }
+sensei-local-providers = { path = "../gateway/crates/local-providers" }
 
 [profile.release]
 opt-level = 3

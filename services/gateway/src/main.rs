@@ -44,10 +44,10 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgresql://postgres:postgres@127.0.0.1:54322/postgres".to_string());
+        .unwrap_or_else(|_| "postgresql://postgres:postgres@127.0.0.1:55322/postgres".to_string());
 
     let supabase_url = std::env::var("PUBLIC_SUPABASE_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:54321".to_string());
+        .unwrap_or_else(|_| "http://127.0.0.1:55321".to_string());
 
     let port: u16 = std::env::var("PORT")
         .ok()

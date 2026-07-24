@@ -190,7 +190,7 @@ pub async fn require_auth(
         // kid miss — key may have rotated; refetch once then retry.
         Err(AuthError::NoMatchingKey) => {
             let supabase_url = std::env::var("PUBLIC_SUPABASE_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:54321".to_string());
+                .unwrap_or_else(|_| "http://127.0.0.1:55321".to_string());
             let new_jwks = fetch_jwks(&supabase_url).await;
             let retry = validate_token(&token, &new_jwks);
             *state.jwks.write().await = new_jwks;

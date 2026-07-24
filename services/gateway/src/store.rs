@@ -76,20 +76,53 @@ impl GatewayStore for PgGatewayStore {
         let duration_ms = call.duration_ms as i64;
         let fallback_sequence = call.fallback_sequence as i16;
 
+        // C3: execution location (local engine vs cloud provider) for the
+        // local-vs-cloud savings rollup (O2). Derived from the winning adapter.
+        let execution_location = if call.adapter.contains("embedded")
+            || call.adapter.contains("ollama")
+            || call.adapter.contains("llama")
+        {
+            "local"
+        } else {
+            "cloud"
+        };
+
+        // GH-5 attribution: `subject_id` is the resolved budget node → `budget_node_id`
+        // (spec's `subject_id := budget_node_id`). The recursive CTE walks that node's
+        // ancestor path and denormalizes it into `{org,dept,team,user}_node_id` so the
+        // per-scope spend rollups (P12) need no recursive join. When `subject_id` is
+        // NULL the CTE is empty and the path columns are NULL (aggregate over 0 rows).
+        // (`hold_id` needs a crate `InferenceCall` field — the remaining GH-5 bit.)
         sqlx::query(
             r#"
+            WITH RECURSIVE anc AS (
+                SELECT id, parent_id, kind
+                  FROM public.budget_nodes
+                 WHERE tenant_id = $1 AND id = $18
+                UNION ALL
+                SELECT b.id, b.parent_id, b.kind
+                  FROM public.budget_nodes b
+                  JOIN anc ON b.id = anc.parent_id
+                 WHERE b.tenant_id = $1
+            )
             INSERT INTO public.inference_calls
                 (tenant_id, id, session_id, project_id, capability, chain_id,
                  adapter, model, api_model_id,
                  input_tokens, output_tokens, cost_usd, duration_ms,
                  status, error_type, fallback_sequence, recorded_at,
-                 budget_node_id)
-            VALUES
-                ($1, $2, $3, $4, $5, $6,
-                 $7, $8, $9,
-                 $10, $11, $12, $13,
-                 $14, $15, $16, $17,
-                 $18)
+                 budget_node_id, org_node_id, dept_node_id, team_node_id, user_node_id,
+                 execution_location)
+            SELECT
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9,
+                $10, $11, $12, $13,
+                $14, $15, $16, $17,
+                $18,
+                (SELECT id FROM anc WHERE kind = 'org'  LIMIT 1),
+                (SELECT id FROM anc WHERE kind = 'dept' LIMIT 1),
+                (SELECT id FROM anc WHERE kind = 'team' LIMIT 1),
+                (SELECT id FROM anc WHERE kind IN ('user', 'service') LIMIT 1),
+                $19
             "#,
         )
         .bind(self.tenant_id)
@@ -109,9 +142,8 @@ impl GatewayStore for PgGatewayStore {
         .bind(&call.error_type)
         .bind(fallback_sequence)
         .bind(call.recorded_at)
-        // C3: subject_id carries the resolved budget node → inference_calls.budget_node_id
-        // (the spec's `subject_id := budget_node_id`), so node usage is queryable.
         .bind(call.subject_id)
+        .bind(execution_location)
         .execute(&self.pool)
         .await
         .map_err(db_err)?;

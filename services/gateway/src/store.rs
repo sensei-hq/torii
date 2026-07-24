@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use sqlx::Row;
 use uuid::Uuid;
 
-use gateway::store::{CallStatus, GatewayStore, InferenceCall, StoredTrace};
+use gateway::store::{CallStatus, GatewayStore, InferenceCall, StoredTrace, UsageTotals};
 use gateway::types::capability::Capability;
 use gateway::types::error::GatewayError;
 use gateway::types::trace::ExecutionTrace;
@@ -162,6 +162,19 @@ impl GatewayStore for PgGatewayStore {
         Ok(total)
     }
 
+    /// MIG-2 (v0.4.6): required by the crate for AUTH rolling-window quota.
+    /// Strategos does NOT use the crate's soft quota — budgets are enforced by
+    /// C3's hard synchronous reserve→commit (DECISIONS §2 W2). Returning zeros
+    /// keeps the crate quota inert by design (no per-subject attribution exists
+    /// until F1-rework RW7 anyway). C3 supersedes this path.
+    async fn get_usage_since(
+        &self,
+        _subject_id: Uuid,
+        _since: DateTime<Utc>,
+    ) -> Result<UsageTotals, GatewayError> {
+        Ok(UsageTotals::default())
+    }
+
     async fn get_spend_by_model_since(
         &self,
         since: DateTime<Utc>,
@@ -276,6 +289,10 @@ fn row_to_inference_call(row: &sqlx::postgres::PgRow) -> Result<InferenceCall, G
         id: row.try_get("id").map_err(db_err)?,
         session_id: row.try_get("session_id").map_err(db_err)?,
         project_id: row.try_get("project_id").map_err(db_err)?,
+        // MIG-2 (v0.4.6): budget/quota attribution columns land in F1-rework RW7;
+        // until then the row-reader yields None (no crate-side subject attribution).
+        subject_id: None,
+        tier: None,
         capability: str_to_capability(&capability_str)?,
         chain_id: row.try_get("chain_id").map_err(db_err)?,
         adapter: row.try_get("adapter").map_err(db_err)?,

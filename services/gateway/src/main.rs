@@ -9,7 +9,12 @@ use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
-use gateway::adapters::{AdapterRegistry, InferenceAdapter};
+// MIG-2 (v0.4.6): `InferenceAdapter` was deleted — adapters now impl the
+// capability-segregated traits (ChatModel/EmbedModel/…) + `RegisterInto`, and
+// `AdapterRegistry::register(Arc::new(adapter))` dispatches via `RegisterInto`
+// (no `dyn InferenceAdapter` cast). Cloud adapters are re-exported under the
+// historical `gateway::adapters::<provider>` paths (feature `cloud`, default-on).
+use gateway::adapters::AdapterRegistry;
 use gateway::adapters::noop::NoopAdapter;
 use gateway::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerManager};
 use gateway::Gateway;
@@ -63,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Always register noop as graceful degradation fallback
     adapters
-        .register(Arc::new(NoopAdapter) as Arc<dyn InferenceAdapter>)
+        .register(Arc::new(NoopAdapter))
         .await;
 
     // Probe Ollama at localhost:11434 before registering
@@ -72,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(adapter) => {
                 tracing::info!("Gateway: Ollama adapter registered");
                 adapters
-                    .register(Arc::new(adapter) as Arc<dyn InferenceAdapter>)
+                    .register(Arc::new(adapter))
                     .await;
             }
             Err(e) => tracing::warn!("Gateway: Ollama adapter failed to initialize: {}", e),
@@ -87,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
         Ok(adapter) => {
             tracing::info!("Gateway: Anthropic adapter registered");
             adapters
-                .register(Arc::new(adapter) as Arc<dyn InferenceAdapter>)
+                .register(Arc::new(adapter))
                 .await;
         }
         Err(e) => tracing::warn!("Gateway: Anthropic adapter failed: {}", e),
@@ -97,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
         Ok(adapter) => {
             tracing::info!("Gateway: OpenAI adapter registered");
             adapters
-                .register(Arc::new(adapter) as Arc<dyn InferenceAdapter>)
+                .register(Arc::new(adapter))
                 .await;
         }
         Err(e) => tracing::warn!("Gateway: OpenAI adapter failed: {}", e),
@@ -109,7 +114,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(adapter) => {
                 tracing::info!("Gateway: OpenAI-compatible adapter registered as '{id}'");
                 adapters
-                    .register(Arc::new(adapter) as Arc<dyn InferenceAdapter>)
+                    .register(Arc::new(adapter))
                     .await;
             }
             Err(e) => tracing::warn!("Gateway: '{id}' adapter failed: {e}"),
@@ -120,7 +125,7 @@ async fn main() -> anyhow::Result<()> {
         Ok(adapter) => {
             tracing::info!("Gateway: Grok adapter registered");
             adapters
-                .register(Arc::new(adapter) as Arc<dyn InferenceAdapter>)
+                .register(Arc::new(adapter))
                 .await;
         }
         Err(e) => tracing::warn!("Gateway: Grok adapter failed: {}", e),
@@ -130,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
         Ok(adapter) => {
             tracing::info!("Gateway: Gemini adapter registered");
             adapters
-                .register(Arc::new(adapter) as Arc<dyn InferenceAdapter>)
+                .register(Arc::new(adapter))
                 .await;
         }
         Err(e) => tracing::warn!("Gateway: Gemini adapter failed: {}", e),
@@ -142,7 +147,7 @@ async fn main() -> anyhow::Result<()> {
         Ok(adapter) => {
             tracing::info!("Gateway: Bedrock adapter registered");
             adapters
-                .register(Arc::new(adapter) as Arc<dyn InferenceAdapter>)
+                .register(Arc::new(adapter))
                 .await;
         }
         Err(e) => tracing::warn!("Gateway: Bedrock adapter failed: {}", e),

@@ -180,6 +180,9 @@ pub(crate) fn build_models(rows: &[ModelRow]) -> HashMap<String, ModelConfig> {
                     output_per_1k: m.cost_output_per_1k,
                     per_request: m.cost_per_request,
                 }),
+                // MIG-2 (v0.4.6): model lineage for panel `distinct_by: family`.
+                // None ⇒ the model id is its own family (fine until panels are used).
+                family: None,
             },
         );
     }
@@ -413,6 +416,12 @@ pub async fn load_gateway_config(pool: &sqlx::PgPool) -> anyhow::Result<GatewayC
         routers,
         models,
         chains,
+        // MIG-2 (v0.4.6): new config surfaces — AUTH constraints, fan-out panels,
+        // consensus workflows. Defaults are empty ⇒ no enforcement / none defined
+        // (Strategos drives budgets via C3's hard reserve, not the crate quota).
+        constraints: Default::default(),
+        panels: Default::default(),
+        consensus: Default::default(),
     })
 }
 

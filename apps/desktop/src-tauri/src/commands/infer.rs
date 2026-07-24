@@ -74,6 +74,10 @@ pub async fn infer(
             tools: Vec::new(),
         },
         budget: None,
+        // MIG-3 (v0.4.6): AUTH/panel/consensus addressing — unused on the local plane.
+        auth: None,
+        panel: None,
+        consensus: None,
     };
 
     let start = std::time::Instant::now();

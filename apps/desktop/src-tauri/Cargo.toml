@@ -31,11 +31,10 @@ tauri-plugin-playwright = { version = "0.2", optional = true }
 # In-process inference engine (local plane). Declared against the canonical git source;
 # the workspace-root `[patch."https://github.com/sensei-hq/gateway"]` redirects to the
 # sibling `../gateway/crates/*` checkout for dev-in-place.
-# MIG-1 (2026-07-24): `gateway-embedded` was retired at v0.3.1 → the local wing is now
-# `sensei-local-engine` (resolvers/registry) + `sensei-local-providers` (EmbeddedLlamaAdapter,
-# in-process llama.cpp — no daemon). `gateway` aliases the real `sensei-gateway` package.
-# The `llama-cpp` feature compiles llama.cpp for in-process GGUF chat/embed.
-gateway                = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway" }
-sensei-local-engine    = { git = "https://github.com/sensei-hq/gateway" }
-sensei-local-providers = { git = "https://github.com/sensei-hq/gateway", features = ["llama-cpp"] }
+# MIG-1/3 (2026-07-24): `gateway`/`gateway-embedded` were refactored to `sensei-*` @ v0.4.6.
+# Per the crate's design, a consumer depends on ONLY `sensei-gateway` (aliased `gateway`) and
+# opts into the in-process local wing via the `local-llama-cpp` feature — no direct
+# `sensei-local-*` deps. That surfaces `gateway::local::{EmbeddedLlamaAdapter, ChainedResolver,
+# ManagedResolver, OllamaResolver}` (in-process llama.cpp GGUF — no daemon).
+gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", features = ["local-llama-cpp"] }
 tokio            = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }

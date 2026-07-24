@@ -3,7 +3,8 @@
 //!
 //! This builds an `Arc<gateway::Gateway>` that runs entirely inside the Tauri
 //! process: no daemon, no HTTP hop. A single `embedded-llama` adapter
-//! (llama.cpp via `gateway-embedded`) serves chat locally, with the model
+//! (in-process llama.cpp via `sensei-local-providers::EmbeddedLlamaAdapter`,
+//! re-exported as `gateway::local::EmbeddedLlamaAdapter`) serves chat locally, with the model
 //! bytes resolved through a two-stage registry — Strategos-managed files first
 //! (`~/.strategos/models`), then a read-through view of the local Ollama cache
 //! (`~/.ollama/models`). A model already pulled by Ollama (e.g. `gemma2:2b`) is
@@ -20,8 +21,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+// MIG-3 (v0.4.6): the local wing is `sensei-local-*`, re-exported under
+// `gateway::local::*` when the `gateway` dep enables `local-llama-cpp`. The
+// deleted `InferenceAdapter` trait → capability traits + `RegisterInto`
+// (registry dispatches via `RegisterInto`; no `dyn InferenceAdapter` cast).
 use gateway::adapters::noop::NoopAdapter;
-use gateway::adapters::{AdapterRegistry, InferenceAdapter};
+use gateway::adapters::AdapterRegistry;
 use gateway::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerManager};
 use gateway::types::capability::Capability;
 use gateway::types::config::{
@@ -43,7 +48,7 @@ pub async fn build_gateway() -> Arc<Gateway> {
     // Always register noop as a graceful-degradation fallback so the registry
     // is never empty even if the native backend is unavailable.
     adapters
-        .register(Arc::new(NoopAdapter) as Arc<dyn InferenceAdapter>)
+        .register(Arc::new(NoopAdapter))
         .await;
 
     register_embedded_llama(&adapters).await;
@@ -57,8 +62,7 @@ pub async fn build_gateway() -> Arc<Gateway> {
 /// backed by the process-wide shared llama backend and a Managed → Ollama
 /// resolver chain (first hit wins).
 async fn register_embedded_llama(adapters: &AdapterRegistry) {
-    use gateway_embedded::adapters::EmbeddedLlamaAdapter;
-    use gateway_embedded::registry::{ChainedResolver, ManagedResolver, OllamaResolver};
+    use gateway::local::{ChainedResolver, EmbeddedLlamaAdapter, ManagedResolver, OllamaResolver};
 
     let resolver = ChainedResolver::new()
         .push(Arc::new(ManagedResolver::new(strategos_models_dir())))
@@ -67,7 +71,7 @@ async fn register_embedded_llama(adapters: &AdapterRegistry) {
     match EmbeddedLlamaAdapter::with_shared_backend("embedded-llama", Arc::new(resolver)) {
         Ok(adapter) => {
             adapters
-                .register(Arc::new(adapter) as Arc<dyn InferenceAdapter>)
+                .register(Arc::new(adapter))
                 .await;
             log::info!(
                 "gateway: embedded-llama adapter registered (resolver: managed -> ollama)"
@@ -141,6 +145,7 @@ fn baseline_local_config() -> GatewayConfig {
             context_window: 8_192,
             max_output_tokens: 1_024,
             pricing: None,
+            family: None, // MIG-3 (v0.4.6): panel distinctness lineage; None ⇒ id-is-family
         },
     );
 
@@ -168,6 +173,11 @@ fn baseline_local_config() -> GatewayConfig {
         routers,
         models,
         chains,
+        // MIG-3 (v0.4.6): AUTH constraints / fan-out panels / consensus workflows —
+        // none used on the local plane. Empty defaults ⇒ no enforcement / undefined.
+        constraints: Default::default(),
+        panels: Default::default(),
+        consensus: Default::default(),
     }
 }
 

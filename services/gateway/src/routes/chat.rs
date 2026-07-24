@@ -88,6 +88,11 @@ fn build_inference_request(req: &ChatRequest) -> InferenceRequest {
             tools: Vec::new(),
         },
         budget: None,
+        // MIG-2 (v0.4.6): AUTH context + panel/consensus addressing. None ⇒ no
+        // crate-side quota (budgets enforced by C3), no panel/consensus fan-out.
+        auth: None,
+        panel: None,
+        consensus: None,
     }
 }
 
@@ -142,6 +147,8 @@ pub async fn post_chat(
             id: Uuid::new_v4(),
             session_id: None,
             project_id: None,
+            subject_id: None, // MIG-2: budget/quota attribution — set by C3 in the rework
+            tier: None,
             capability: Capability::TextChat,
             chain_id: req.chain.clone(),
             adapter,
@@ -243,6 +250,8 @@ pub async fn post_chat_stream(
                         id: Uuid::new_v4(),
                         session_id: None,
                         project_id: None,
+                        subject_id: None, // MIG-2: budget/quota attribution — set by C3 in the rework
+                        tier: None,
                         capability: Capability::TextChat,
                         chain_id: req.chain.clone(),
                         adapter,

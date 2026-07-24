@@ -234,7 +234,7 @@ The user explicitly wants cloud doc management beyond retrieval. Add:
 3. **Playground** retrieval-mode expansion + inspector + promote-to-default.
 4. **Admin editors** that are currently read-only: Connections (connect/rotate), Routing (chain editor), Models (add/enable), Governance (scheme/masking/retention).
 5. **New screens**: Local models, Device fleet, Feature management, Spaces & KB.
-6. **Decisions to settle while refining:** (a) MCP/tools in v1? (b) programmatic API access for org apps? (c) agents/plans (old system had ReAct agents + DAG plans) — in scope or later? (d) custom roles vs fixed four?
+6. **Decisions — all RESOLVED 2026-07-23 (see [`../DECISIONS.md`](../DECISIONS.md)):** (a) MCP/tools — **in v1, full**; (b) programmatic API access — **yes, in v1, owned by Organization**; (c) agents/plans — **design-only screens in v1, runtime v2**; (d) roles — **full role + permission matrix** (not fixed four). This gap doc is historical input; the authoritative v1 surface + designer backlog now lives in `../DECISIONS.md` §6 and (once written) `mockup-review.md`.
 
 ---
 

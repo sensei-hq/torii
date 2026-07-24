@@ -1,13 +1,19 @@
 ---
 title: 'Phase 1b · Local inference + Ask — implementation plan'
-description: Embed gateway-embedded (llama-cpp + Ollama read-through of gemma2:2b) in-process in the Tauri desktop app, expose infer/list_models over IPC, and build the real Ask screen answering offline/$0 with an on-device ExecBadge.
+description: Embed the sensei-* local wing (in-process EmbeddedLlamaAdapter, llama.cpp/GGUF, no daemon) in the Tauri desktop app, expose infer/list_models over IPC, and build the real Ask screen answering offline/$0 with an on-device ExecBadge.
 type: plan
 status: plan
 created: 2026-07-06
+canonical_phase: P1b
+authority: docs/DECISIONS.md (RATIFIED 2026-07-23)
 depends_on:
   - docs/design/clients-buildout.md
   - docs/plans/phase-1a-shell-auth-plan.md
 references:
+  - docs/DECISIONS.md
+  - docs/plans/roadmap.md
+  - docs/plans/gateway-issues.md
+  - docs/specs/D2-local-gateway.md
   - docs/modules/D2-local-gateway.md
   - docs/modules/D3-split-plane-router.md
   - docs/modules/W2-member-console.md
@@ -20,19 +26,28 @@ milestone: Phase-1b
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax. For `.svelte` files use the **svelte** skill/MCP; named Rokkit tokens only (`data-skin`, no `-z{n}`). eslint + prettier are enforced (`bun run lint` = 0 errors). **Heavy Rust/Tauri builds (llama-cpp compile, tauri build) must be run via a BACKGROUND shell, not inside a subagent** — the cold build exceeds the subagent watchdog (~10 min) and the llama.cpp compile is longer. Dispatch the code, but let the controller run the long `cargo build`/`test:e2e` in the background and report the result.
 
-**Goal:** The desktop client answers a question **on-device, offline, $0**. `gateway-embedded` runs `gemma2:2b` in-process (llama-cpp, via the Ollama read-through of the already-downloaded blob); the real Ask screen sends a prompt over Tauri IPC to the engine and renders the answer with an `ExecBadge` reading "on your device" — with the network off. This is the walking-skeleton payoff of the whole client.
+> **Crate-reality note (v0.4.6 — DECISIONS §3, gateway-issues MIG-1/3/4).** There is **no** `gateway-embedded` crate and **no** `InferenceAdapter` type. The engine is the six `sensei-*` crates pinned at **`v0.4.6`**. The desktop local plane = the **local wing** consumed in-process (no daemon, no "embedded Ollama"): `sensei-gateway` (routing engine, lib import name `gateway`), `sensei-local-providers` (`EmbeddedLlamaAdapter` — llama.cpp, chat+embed, runs GGUF), `sensei-local-engine` (resolvers: `ChainedResolver`/`ManagedResolver`/`OllamaResolver`), and `sensei-kernel` (registry vocab + capability-segregated traits `ChatModel`/`EmbedModel` + `AdapterRegistry`/`RegisterInto`). Adapters are registered into an `AdapterRegistry` (async `register(Arc::new(adapter)).await`); the `Gateway::execute(&InferenceRequest)` API (`Capability::TextChat`, `Payload::Chat`) is unchanged from the plan's original wiring and remains valid. See [D2 spec §4.1/§7](../specs/D2-local-gateway.md) for the verified type surface.
 
-**Architecture:** Mirror Sensei's engine construction but **in-process** (no daemon): `apps/desktop/src-tauri` depends on `gateway` + `gateway-embedded` (feature `llama-cpp`), builds an `Arc<Gateway>` at startup (AdapterRegistry + `NoopAdapter` + `EmbeddedLlamaAdapter` over a `ChainedResolver(ManagedResolver(~/.strategos/models) → OllamaResolver(~/.ollama/models))` + a baseline `GatewayConfig` with a `gemma2:2b` chat model), holds it in `tauri::State`, and exposes `infer` / `list_models` as `#[tauri::command]`s. The SvelteKit frontend calls them via `@tauri-apps/api` `invoke`, wrapped in an `ask.svelte.ts` runes store. `gateway-embedded` has no streaming → Ask is non-streaming (full response). Everything is the "local" plane in 1b; the cloud plane + split-plane router are Phase 2.
+**Goal:** The desktop client answers a question **on-device, offline, $0**. The in-process `EmbeddedLlamaAdapter` (llama.cpp) runs a small GGUF chat model — reusing model bytes already in the `~/.ollama` cache via the read-through `OllamaResolver`, **no Ollama daemon** — and the real Ask screen sends a prompt over Tauri IPC to the engine and renders the answer with an `ExecBadge` reading "on your device", with the network off. This is the walking-skeleton payoff of the whole client.
 
-**Tech Stack:** Rust · Tauri 2 · `gateway` + `gateway-embedded` (`llama-cpp` feature, via git dep + root `[patch]` → sibling `../gateway`) · `@tauri-apps/api` `invoke` · SvelteKit static/Svelte 5 · Rokkit · Playwright.
+**Architecture:** Mirror Sensei's engine construction but **in-process** (no daemon): `apps/desktop/src-tauri` depends on `sensei-gateway` + `sensei-local-engine` + `sensei-local-providers` + `sensei-kernel` (feature `embedded-llama-cpp`), builds an `Arc<Gateway>` at startup (`AdapterRegistry` + `NoopAdapter` + `EmbeddedLlamaAdapter` over a `ChainedResolver(ManagedResolver(~/.strategos/models) → OllamaResolver(~/.ollama/models))` + a baseline `GatewayConfig` with one chat model) held in `tauri::State`, and exposes `infer` / `list_models` as `#[tauri::command]`s. The SvelteKit frontend calls them via `@tauri-apps/api` `invoke`, wrapped in an `ask.svelte.ts` runes store. Ask is **non-streaming** (full response) for the skeleton. Everything is the "local" plane in 1b; the cloud plane, JWT-verified proxy (C1), and split-plane router (D3) are later phases (P2a/P2b). **No provider credentials touch the device (DECISIONS §2 W4)** — RS256/JWKS JWT verification and the F3 key vault are prerequisites of the *cloud* plane (P2a/P4), not P1b: the local plane is `$0`, offline, credential-free.
 
-**Reference (copy the real wiring):** Sensei at `/Users/Jerry/Developer/sensei-hq/sensei`:
-- `crates/senseid/src/api/gateway_init.rs` — `init_gateway()` (AdapterRegistry, Noop, embedded llama registration, `Gateway::new`, `baseline_production_config`).
-- `crates/senseid/src/api/gateway_embedded.rs` — the `#[cfg(feature)]` `EmbeddedLlamaAdapter::with_shared_backend(id, ChainedResolver(...))` registration + the ManagedResolver/OllamaResolver dirs.
+> **Default chat model — no hardcoded ops (DECISIONS §3, D2 §8.4).** The skeleton's dev default is a small instruct GGUF resolved from the `~/.ollama` cache (e.g. a `gemma2:2b`-class or `Llama-3.2-3B-Instruct` model). This is an **overridable baseline in `GatewayConfig`, not a baked constant**; the operator-governed catalog (D4 snapshot) supersedes it in later phases. The plan uses `gemma2:2b` as the concrete dev default because the machine already has that blob.
+
+**Tech Stack:** Rust · Tauri 2 · `sensei-gateway`/`sensei-local-engine`/`sensei-local-providers`/`sensei-kernel` @ **v0.4.6** (`embedded-llama-cpp` feature, via git tag dep + root `[patch]` → sibling `../gateway/crates/*`) · `@tauri-apps/api` `invoke` · SvelteKit static/Svelte 5 · Rokkit · Playwright.
+
+**Reference (copy the real wiring — verify against v0.4.6):** Sensei at `/Users/Jerry/Developer/sensei-hq/sensei` (consumes the same `sensei-*` @ v0.4.6, `embedded-llama-cpp` feature, `gateway` = `package = "sensei-gateway"`):
+- `crates/senseid/src/api/gateway_init.rs` — `init_gateway()` (AdapterRegistry, `NoopAdapter`, embedded llama registration, `Gateway::new`, baseline config).
+- `crates/senseid/src/api/gateway_embedded.rs` — the `#[cfg(feature)]` `EmbeddedLlamaAdapter::with_shared_backend(id, Arc<resolver>)` registration + the ManagedResolver/OllamaResolver dirs (capability-trait model, `registry.register(Arc::new(adapter)).await`).
 - `crates/senseid/src/api/handlers/gateway.rs` — the `infer`/`embed` request→`InferenceRequest`→`gateway.execute()` mapping (`Capability::TextChat`, `Payload::Chat { messages, system, max_tokens }`).
 - `crates/senseid/src/api/state.rs` — `Arc<Gateway>` in shared state.
 
-**Prerequisites:** Phase 1a complete (desktop shell + auth, on `develop`). Ollama models present (`gemma2:2b`, `all-minilm`). Rust + the native build toolchain for `llama-cpp-2` (cmake + a C/C++ compiler — present since this machine builds sensei). Branch **develop**; commit per task; `make clean` + push at the end.
+**Prerequisites:**
+- **Phase 1a (P1a) complete** — desktop shell + client-only auth, on `develop`.
+- **MIG-1** (root `Cargo.toml [patch]` repin to `sensei-*` @ v0.4.6 — see Task 1 Step 1) done in P0 or as this phase's first task; **MIG-3** (desktop `src-tauri` deps) is Task 1; **MIG-4** (embedded-adapter wording) is this doc.
+- **F1 relationship:** P1b runs on the **built-but-insecure F1** (walking skeleton). Ask conversation **persistence** (`conversations`/`messages`/`message_citations`) is F1-rework **RW5 / P3** — so P1b Ask is **ephemeral in-memory** (the `AskStore.turns`), not written to the DB. No new F1 tables here.
+- Ollama model blob present (`gemma2:2b`); Rust + the native build toolchain for `llama-cpp-2` (cmake + a C/C++ compiler — present since this machine builds sensei). Embeddings/local RAG are **not** in P1b (deferred to C5/P7), so the 1024-dim embed-model pick and `all-minilm` are out of scope here.
+- Branch **develop**; commit per task; `make clean` + push at the end.
 
 ---
 
@@ -41,7 +56,7 @@ milestone: Phase-1b
 ```
 apps/desktop/
   src-tauri/
-    Cargo.toml                    # + gateway, gateway-embedded (feature llama-cpp)
+    Cargo.toml                    # + sensei-gateway/local-engine/local-providers/kernel @ v0.4.6 (feature embedded-llama-cpp)
     src/gateway.rs                # build Arc<Gateway> (init_gateway-style) + baseline config
     src/commands/infer.rs         # #[tauri::command] infer, list_models, gateway_status
     src/commands/mod.rs
@@ -58,24 +73,48 @@ packages/ui/src/lib/
   Composer.svelte                 # chat composer atom (+ maybe reuse)  (optional, or inline)
 ```
 
-> **Model note:** default local chat model = **`gemma2:2b`** (resolved from `~/.ollama` via `OllamaResolver`). Embeddings (`all-minilm`) are NOT needed for 1b (no local RAG yet) — skip fastembed for now; add only the `llama-cpp` feature.
+> **Model note:** dev-default local chat model = **`gemma2:2b`** (resolved from `~/.ollama` via the read-through `OllamaResolver`; an overridable baseline in config, not a baked constant — DECISIONS §3 no-hardcoded-ops). Embeddings are NOT needed for 1b (no local RAG yet) — enable only the **`embedded-llama-cpp`** feature; **`fastembed` stays disabled (DECISIONS §3)** and `ort`/`hf-download` are deferred to the P7/C5 local-RAG phase.
 
 ---
 
-## Task 1: `src-tauri` — embed `gateway-embedded` + build the engine
+## Task 1: `src-tauri` — embed the local engine (`EmbeddedLlamaAdapter`) + build it
 
 **Files:** modify `apps/desktop/src-tauri/Cargo.toml`; create `src/gateway.rs`; modify `src/lib.rs`.
 
-- [ ] **Step 1: add engine deps to `apps/desktop/src-tauri/Cargo.toml`.** Depend on `gateway` + `gateway-embedded` via the SAME git URL the root `[patch]` targets so the patch redirects them to the local sibling `../gateway`:
+- [ ] **Step 1 (MIG-1 + MIG-3): fix the root `[patch]` and add the real `sensei-*` engine deps.**
+
+  **1a — root `monorepo/Cargo.toml` `[patch]` (MIG-1).** The current patch is doubly wrong: it targets nonexistent packages (`gateway` / `gateway-embedded`) and — critically — the patch key URL must **byte-match** the dep source URL. Sensei consumes `https://github.com/sensei-hq/gateway.git` (**with** the `.git` suffix); the current root key omits it. Repin to the real package names, keyed by the `.git` URL, at `../gateway/crates/*`:
+```toml
+# monorepo/Cargo.toml — dev-in-place against the sibling engine repo (prod consumes the pinned git tag).
+[patch."https://github.com/sensei-hq/gateway.git"]
+sensei-kernel          = { path = "../gateway/crates/kernel" }
+sensei-gateway         = { path = "../gateway/crates/gateway" }
+sensei-cloud-providers = { path = "../gateway/crates/cloud-providers" }
+sensei-local-engine    = { path = "../gateway/crates/local-engine" }
+sensei-local-providers = { path = "../gateway/crates/local-providers" }
+```
+  (Patch keys are **crate/package names**, not the dependency-rename alias. Only crates actually pulled from that source need entries; listing all five is harmless and future-proofs P2a's `services/gateway`.)
+
+  **1b — desktop `src-tauri/Cargo.toml` engine deps (MIG-3).** Mirror sensei's `senseid/Cargo.toml` exactly (same git URL + `tag = "v0.4.6"`; the lib import name stays `gateway` via `package =`):
 ```toml
 [dependencies]
 # ... existing tauri deps ...
-gateway          = { git = "https://github.com/sensei-hq/gateway" }
-gateway-embedded = { git = "https://github.com/sensei-hq/gateway", features = ["llama-cpp"] }
-tokio            = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
-serde            = { version = "1", features = ["derive"] }
+# v0.4.0 split the old gateway/gateway-embedded monolith into sensei-* crates; consume the local wing @ v0.4.6.
+gateway         = { package = "sensei-gateway",         git = "https://github.com/sensei-hq/gateway.git", tag = "v0.4.6", features = ["cloud"] }
+kernel          = { package = "sensei-kernel",          git = "https://github.com/sensei-hq/gateway.git", tag = "v0.4.6" }
+local-engine    = { package = "sensei-local-engine",    git = "https://github.com/sensei-hq/gateway.git", tag = "v0.4.6" }
+local-providers = { package = "sensei-local-providers", git = "https://github.com/sensei-hq/gateway.git", tag = "v0.4.6", optional = true }
+tokio           = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+serde           = { version = "1", features = ["derive"] }
+
+[features]
+# in-process llama.cpp (chat + embed). Mirrors sensei's `embedded-llama-cpp`; each side listed so the
+# optional local-providers dep is pulled unambiguously. Enable this feature in the desktop build.
+embedded-llama-cpp = ["local-engine/llama-cpp", "local-providers/llama-cpp"]
 ```
-The root `Cargo.toml` already has `[patch."https://github.com/sensei-hq/gateway"] → ../gateway/crates/*`, so these resolve to the local path. **If cargo can't resolve the git dep** (needs a tag/rev, or network), read how the root patch is keyed and either add a matching `tag`/`rev` OR — as a dev fallback — use direct **path deps** (`gateway = { path = "../../../gateway/crates/gateway" }`, `gateway-embedded = { path = "../../../gateway/crates/gateway-embedded", features = ["llama-cpp"] }`) and note it. Report which worked. Confirm the root patch's unused-warning is now GONE (the crates are used).
+  (`features = ["cloud"]` on `sensei-gateway` is optional for a pure-local P1b — it pulls the HTTP cloud adapters, unused here — but mirrors sensei; drop it if you want a leaner local-only build. The gateway crate always exposes `NoopAdapter` regardless.)
+
+  The root `[patch]` from 1a redirects all four to the local sibling `../gateway/crates/*`. **If cargo can't resolve** (offline, or the tag isn't fetched), the `[patch]` still overrides to the local paths — verify with `cargo metadata`. As a last-resort dev fallback, use direct **path deps** and note it. Report which worked. Confirm the root patch's unused-warning is GONE (the crates are now used) and that **no `gateway-embedded` / `InferenceAdapter` reference remains**.
 
 - [ ] **Step 2: create `src/gateway.rs`** — mirror sensei's `crates/senseid/src/api/gateway_init.rs` + `gateway_embedded.rs`. READ those two files and copy the construction, adapting:
   - `AdapterRegistry::new()`; register `NoopAdapter`; register the embedded llama adapter: `EmbeddedLlamaAdapter::with_shared_backend("embedded-llama", Arc::new(ChainedResolver::new().push(Arc::new(ManagedResolver::new(strategos_models_dir()))).push(Arc::new(OllamaResolver::new(ollama_models_dir())))) )?` where `strategos_models_dir()` = `~/.strategos/models` (create if missing) and `ollama_models_dir()` = `~/.ollama/models`.

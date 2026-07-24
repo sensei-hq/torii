@@ -23,13 +23,15 @@ milestone: Phase-0
 
 **Architecture:** A `bun` workspace (`apps/*`, `packages/*`, `services/*`) plus a Cargo workspace (`services/gateway`, `apps/desktop/src-tauri`) that `[patch]`-es the sibling `gateway/` engine repo. `packages/ui` ports the mockups' Zen-Sumi visual language onto Rokkit (UnoCSS `presetRokkit` + a skin); `packages/core` exposes a `DataSource` interface with a mock adapter (seeded from the mockups) and a real adapter built on the Kavach Supabase adapter. `apps/admin` (SvelteKit → Cloudflare, kavach hybrid auth) and `apps/desktop` (SvelteKit static + Tauri 2 shell) both render a shared `AppShell`.
 
-**Tech Stack:** bun · SvelteKit 2.55 / Svelte 5.55 · Vite 8 · UnoCSS 66 + `@rokkit/unocss` `presetRokkit` · Rokkit (`@rokkit/*`, bun-linked) · Kavach (`kavach`, `@kavach/*`, bun-linked) · `@supabase/supabase-js` · Tauri 2 (Rust) · `gateway`/`gateway-embedded` crates (path-patched) · Vitest · Playwright.
+**Tech Stack:** bun · SvelteKit 2.55 / Svelte 5.55 · Vite 8 · UnoCSS 66 + `@rokkit/unocss` `presetRokkit` · Rokkit (`@rokkit/*`, bun-linked) · Kavach (`kavach`, `@kavach/*`, bun-linked) · `@supabase/supabase-js` · Tauri 2 (Rust) · the `sensei-*` gateway crates (`v0.4.6`, git-pinned + path-patched for dev; consumed only from Phase 1b/2a onward) · Vitest · Playwright.
 
 **Prerequisites (verify before Task 1):**
 
-- The sibling repos exist: `~/Developer/gateway`, `~/Developer/kavach`, and the Rokkit repo (the source of `@rokkit/*`).
+- The sibling repos exist: `~/Developer/strategos/gateway` (the shared `sensei-*` engine repo — checked out at tag `v0.4.6`; **sibling of `monorepo/`**, hence the `../gateway` `[patch]` path in Task 1), `~/Developer/kavach`, and the Rokkit repo (the source of `@rokkit/*`).
 - `bun`, Rust stable + `cargo`, and the Tauri 2 system deps are installed.
-- A Supabase project / local stack is reachable (the F1 schema is applied). `PUBLIC_SUPABASE_URL` + `PUBLIC_SUPABASE_ANON_KEY` are known (see `.env.local` at the strategos repo root).
+- A Supabase project / local stack is reachable. `PUBLIC_SUPABASE_URL` + `PUBLIC_SUPABASE_ANON_KEY` are known (see `.env.local` at the strategos repo root). **Schema note:** Phase 0's default data path is the **mock** adapter; the Supabase adapter is a stub read (Task 4 Step 8). The `models` table it reads — and every privileged table — is reshaped by **F1-rework (P3)** per `DECISIONS.md §5` (role/permission matrix, `router_credentials`, `similarity_search`→`vector(1024)`, consolidated `inference_calls`). Do **not** harden or depend on the current insecure F1 schema in P0; the real data layer lands after P3.
+
+> **Crate reality (MIG-1, per `DECISIONS.md §3` + `gateway-issues.md`):** the engine is the six `sensei-*` crates at `v0.4.6` — `sensei-kernel`, `sensei-gateway`, `sensei-cloud-providers`, `sensei-local-engine`, `sensei-local-providers`, `sensei-kokoro`. There is **no** `gateway-embedded` crate and **no** `InferenceAdapter` type (deleted → capability-segregated traits `ChatModel`/`EmbedModel`/…). The desktop local plane is **in-process** (`sensei-local-providers::EmbeddedLlamaAdapter` / `OrtAdapter`, GGUF, **no daemon** — *not* "embedded Ollama"). P0 only wires the `[patch]` scaffolding (Task 1); the engine crates are first consumed in P1b (desktop embedded) / P2a (`services/gateway`).
 
 **Working branch:** `develop` (per project branch strategy — never work on `main`). Commit after each task.
 
@@ -146,10 +148,18 @@ linkWorkspacePackages = true
 members = ["services/gateway", "apps/desktop/src-tauri"]
 resolver = "2"
 
-# Dev-in-place against the sibling engine repo (production consumes the pinned git tag).
+# Dev-in-place against the sibling `sensei-*` engine repo (production consumes the pinned
+# git tag `v0.4.6` from https://github.com/sensei-hq/gateway; this [patch] redirects those
+# git deps to the local checkout while developing). Package names are `sensei-*`; the crate
+# DIRS under crates/ are unprefixed (kernel, gateway, cloud-providers, …). There is NO
+# `gateway-embedded` and NO `InferenceAdapter` (MIG-1 / DECISIONS §3). kokoro (TTS) is not
+# consumed by Strategos v1 — omit it.
 [patch."https://github.com/sensei-hq/gateway"]
-gateway          = { path = "../gateway/crates/gateway" }
-gateway-embedded = { path = "../gateway/crates/gateway-embedded" }
+sensei-kernel          = { path = "../gateway/crates/kernel" }
+sensei-gateway         = { path = "../gateway/crates/gateway" }
+sensei-cloud-providers = { path = "../gateway/crates/cloud-providers" }
+sensei-local-engine    = { path = "../gateway/crates/local-engine" }
+sensei-local-providers = { path = "../gateway/crates/local-providers" }
 
 [profile.release]
 opt-level = 3
@@ -157,7 +167,9 @@ lto = "thin"
 strip = true
 ```
 
-> Note: `members` reference dirs created in Tasks 4/6/later. Until they exist, do NOT run a workspace-wide `cargo build` (it will error on missing members). Task 6 adds `apps/desktop/src-tauri`. `services/gateway` lands in the Phase 2 plan — leave it in `members` only once created; for Phase 0, comment out the `services/gateway` line.
+> Note: `members` reference dirs created in Tasks 4/6/later. Until they exist, do NOT run a workspace-wide `cargo build` (it will error on missing members). Task 6 adds `apps/desktop/src-tauri`. `services/gateway` lands in the Phase 2a plan — leave it in `members` only once created; for Phase 0, comment out the `services/gateway` line.
+>
+> **`[patch]` is dormant in P0.** No Phase-0 member depends on a `sensei-*` crate yet (the desktop `src-tauri` is a bare Tauri app in P0; the engine is wired in P1b, and `services/gateway` in P2a). `cargo` will therefore emit an *"unused [patch]"* warning — this is expected in P0 and is not a failure. The patch keying (git URL ⇄ `sensei-*` package names) is validated for real when P1b/P2a first add the dependency (MIG-3). Keep the `[patch]` block in place so those phases inherit it.
 
 Adjust the members list for Phase 0:
 
@@ -549,9 +561,11 @@ export const MODELS: Model[] = [
     localCapable: false
   },
   {
+    // Desktop local plane = in-process embedded engine (EmbeddedLlamaAdapter, GGUF, no daemon).
+    // `route: 'embedded'` reflects that — NOT an external Ollama HTTP daemon (MIG-4 / DECISIONS §3).
     id: 'gemma-2b',
     provider: 'local',
-    route: 'ollama',
+    route: 'embedded',
     tier: 'local',
     price: 0,
     context: 8192,
@@ -560,7 +574,7 @@ export const MODELS: Model[] = [
 ]
 ```
 
-> Replace/extend with the real rows from `docs/mockups/app/data.jsx` during implementation (keep the shape).
+> Replace/extend with the real rows from `docs/mockups/app/data.jsx` during implementation (keep the shape). If a mockup row labels a local model's route as `ollama`, normalize it to `embedded` — the v1 desktop local path is in-process (`sensei-local-providers`), not an Ollama daemon. (`sensei-cloud-providers::OllamaAdapter` — Ollama over HTTP to a running server — is a separate router option, not the desktop-embedded plane.)
 
 - [ ] **Step 6: Implement the mock adapter in `src/mock/index.ts`**
 
@@ -717,10 +731,12 @@ export default {
   routes: { auth: '/auth', data: '/data', logout: '/logout', home: '/' },
   rules: [
     { path: '/auth', public: true },
-    { path: '/', public: true } // Phase 0: shell boots publicly. Phase 1 tightens to roles:'*' + a real /auth page.
+    { path: '/', public: true } // Phase 0: shell boots publicly. Phase 1a tightens to roles:'*' + a real /auth page.
   ]
 }
 ```
+
+> **Auth alignment (DECISIONS §2 W3/W4, §3 F2).** P0 is a **public shell boot only** — no login, no JWT verification, no provider keys. Do not add server-side JWT checks here. The gating/auth ladder: **P1a** wires the Kavach client-only session + route guard (email + Google/GitHub OAuth login); **P2a (C1)** introduces JWT verification, which is **RS256/JWKS verify-only** against the Supabase JWKS endpoint — **never a shared HS256 secret** (front-loaded human input: confirm/enable asymmetric signing + `SUPABASE_JWT_*` before P2a). Real BYOK/OAuth **provider** keys are gated behind the **F3 vault (P4)** — the "F3-before-real-keys" build gate (§2 W4); no P0–P2 phase holds plaintext provider credentials. Keep P0's `logging.table: 'audit_events'` as-is, but note F1-rework (P3) binds `audit_events.actor_id` and makes it `service_role`/gateway-emitted (§2) — P0's client-side audit writes are placeholder-only.
 
 - [ ] **Step 4: Create `apps/admin/src/hooks.server.js`** and `src/app.html`
 
@@ -948,9 +964,9 @@ Run: `cd apps/desktop && bunx @tauri-apps/cli@2 init --ci \
   --before-dev-command "" --before-build-command ""`
 Expected: creates `apps/desktop/src-tauri/` with `Cargo.toml`, `tauri.conf.json`, `src/main.rs`, `src/lib.rs`, `build.rs`.
 
-- [ ] **Step 5: Wire `src-tauri` into the Cargo workspace + patched engine**
+- [ ] **Step 5: Wire `src-tauri` into the Cargo workspace (no engine deps in P0)**
 
-Edit `apps/desktop/src-tauri/Cargo.toml` to inherit the workspace and add the (Phase-1) engine deps as optional now — for Phase 0, just ensure it compiles as a member. Confirm `apps/desktop/src-tauri` is listed in the root `Cargo.toml` `members` (Task 1 Step 4).
+Edit `apps/desktop/src-tauri/Cargo.toml` to inherit the workspace — for Phase 0, **do not add any `sensei-*` engine deps yet**; keep it a bare Tauri app that compiles as a member. (The embedded engine deps — `sensei-local-providers`/`sensei-local-engine` at the `v0.4.6` git tag, resolved through the root `[patch]` — are added in **P1b** per MIG-3, not here.) Confirm `apps/desktop/src-tauri` is listed in the root `Cargo.toml` `members` (Task 1 Step 4).
 
 Run: `cargo build -p strategos` (the src-tauri crate name from `tauri init`)
 Expected: compiles (a bare Tauri app, no custom commands yet).

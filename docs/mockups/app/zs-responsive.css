@@ -1,0 +1,160 @@
+/* ═══════════════════════════════════════════════════════════════════
+   Strategos · zs-responsive.css
+   Normalized column grids + responsive / mobile layer.
+   Load AFTER zs-app.css in both Console and Admin.
+
+   Grid vocabulary — replaces every ad-hoc inline grid-template-columns:
+     .grid-split      main + aside, 1.6 : 1          → stacks ≤980px
+     .grid-half       two even columns               → stacks ≤980px
+     .grid-half.tight space-4 gap, stays 2-up when stacked (meter pairs)
+     .grid-stats      stat / picker tiles, auto-fit minmax(160px,1fr)
+     .grid-stats.tight  space-3 gap
+     .grid-facts      small key-value factors, auto-fit minmax(96px,1fr)
+     .grid-flush-2/3  bordered cells, no gap         → collapse on phones
+     .grid-hero       icon · body · action row       → action drops below on phones
+     .pg-split        playground canvas + control rail → stacks ≤980px
+
+   Breakpoints: 1080 compact · 980 stack splits · 900 drawer nav · 640 phone
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ─── Normalized grids ──────────────────────────────────────────── */
+.zs .grid-split { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: var(--space-5); align-items: start; }
+.zs .grid-half  { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-5); align-items: start; }
+.zs .grid-half.tight { gap: var(--space-4) var(--space-5); align-items: stretch; }
+.zs .grid-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-4); }
+.zs .grid-stats.tight { gap: var(--space-3); }
+.zs .grid-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: var(--space-3); }
+.zs .grid-flush-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.zs .grid-flush-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.zs .grid-hero { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: var(--space-5); align-items: center; }
+.zs .pg-split { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+.zs .pg-split > .pg-main { border-right: 1px solid var(--paper-edge); }
+
+/* ─── Mobile shell chrome (hidden on desktop) ───────────────────── */
+.zs .chrome-menu { display: none; }
+.zs .rail-backdrop { display: none; }
+.zs .mtabs { display: none; }
+
+/* ─── 1080 · compact desktop ────────────────────────────────────── */
+@media (max-width: 1080px) {
+  .zs .view-pad { padding: var(--space-5) var(--space-5) var(--space-7); }
+  .zs .preview-main { padding: var(--space-5); }
+}
+
+/* ─── 980 · stack the two-column splits ─────────────────────────── */
+@media (max-width: 980px) {
+  .zs .grid-split, .zs .grid-half, .zs .pg-split { grid-template-columns: minmax(0, 1fr); }
+  .zs .grid-half.tight { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .zs .pg-split > .pg-main { border-right: none; border-bottom: 1px solid var(--paper-edge); }
+  .zs .ask-rail { display: none; }
+}
+
+/* ─── 900 · tablet: rail becomes an off-canvas drawer ───────────── */
+@media (max-width: 900px) {
+  .zs .zs-traffic { display: none; }
+  .zs .chrome-menu { display: grid; }
+  .zs .rail {
+    position: fixed; top: 38px; bottom: 0; left: 0; z-index: 90;
+    width: min(300px, 84vw);
+    transform: translateX(-102%);
+    transition: transform var(--dur) var(--ease);
+  }
+  .zs .rail.open { transform: none; box-shadow: var(--shadow-lg); }
+  .zs .rail-backdrop {
+    display: block; position: fixed; inset: 38px 0 0 0; z-index: 89;
+    background: oklch(0.22 0.012 50 / 0.28);
+    animation: cmdk-fade var(--dur) var(--ease);
+  }
+  .zs .zs-chrome-title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* tables: tighter cells; wide ones keep their explicit scroll wrappers */
+  .zs .tbl th, .zs .tbl td { padding: var(--space-2) var(--space-3); }
+
+  /* library grids relax */
+  .zs .grid.grid-cols-3, .zs .grid.grid-cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  /* document workspace: assets rail becomes a horizontal strip */
+  .zs .docws-preview { flex-direction: column; }
+  .zs .assets-rail {
+    width: auto; flex-shrink: 0; border-right: none; border-bottom: 1px solid var(--paper-edge);
+    display: flex; align-items: center; gap: var(--space-1);
+    overflow-x: auto; overflow-y: hidden; padding: var(--space-2) var(--space-3);
+  }
+  .zs .assets-rail .arow { width: auto; flex-shrink: 0; white-space: nowrap; }
+  .zs .assets-rail .lineage-mini { display: none; }
+  .zs .docws-hd { flex-wrap: wrap; padding: var(--space-3) var(--space-4); }
+  .zs .docws-ing { overflow-x: auto; padding: var(--space-3) var(--space-4); }
+  .zs .docws-pad { padding: var(--space-4); }
+}
+
+/* ─── 640 · phone ───────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .zs .view-pad { padding: var(--space-4) var(--space-4) var(--space-7); }
+  .zs .page-hd { flex-direction: column; align-items: stretch; gap: var(--space-4); }
+  .zs .sec-hd { flex-wrap: wrap; }
+  .zs .tabs { max-width: 100%; overflow-x: auto; }
+
+  .zs .grid-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .zs .grid-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .zs .grid.grid-cols-2, .zs .grid.grid-cols-3, .zs .grid.grid-cols-4 { grid-template-columns: minmax(0, 1fr); }
+  .zs .gallery { grid-template-columns: repeat(2, 1fr); }
+
+  /* bordered flush grids collapse to a hairline ladder */
+  .zs .grid-flush-2, .zs .grid-flush-3 { grid-template-columns: minmax(0, 1fr); }
+  .zs .grid-flush-2 > *, .zs .grid-flush-3 > * { border-right: none !important; }
+  .zs .grid-flush-2 > * + *, .zs .grid-flush-3 > * + * { border-top: 1px solid var(--paper-edge); }
+
+  /* hero insight: action drops below icon + body */
+  .zs .grid-hero { grid-template-columns: 56px minmax(0, 1fr); gap: var(--space-4); }
+  .zs .grid-hero > :last-child { grid-column: 1 / -1; justify-self: start; }
+
+  /* chrome: keep menu · title · env · theme · sign-out */
+  .zs .chrome-name { display: none; }
+  .zs .chrome-btn[title="Search"], .zs .chrome-btn[title="Notifications"] { display: none; }
+
+  /* command palette fills the phone width */
+  .zs .cmdk-backdrop { padding: 8vh var(--space-3) 0; }
+  .zs .cmdk { width: 100%; max-height: 78vh; }
+
+  /* ── bottom tab bar (Console / member app) ── */
+  .zs .mtabs {
+    display: flex; align-items: stretch;
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 80;
+    background: var(--paper); border-top: 1px solid var(--paper-edge);
+    padding: var(--space-1) max(var(--space-2), env(safe-area-inset-left))
+             max(var(--space-1), env(safe-area-inset-bottom))
+             max(var(--space-2), env(safe-area-inset-right));
+  }
+  .zs .mtab {
+    flex: 1; min-height: 48px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    border-radius: var(--radius); color: var(--ink-mute);
+    font-size: var(--text-xs); line-height: 1;
+    transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  }
+  .zs .mtab:active { background: var(--paper-mute); }
+  .zs .mtab.on { color: var(--accent); font-weight: 500; }
+  .zs .win.has-mtabs .view { padding-bottom: 60px; }
+}
+
+/* ─── Stacking tables (.tbl-stack) ──────────────────────────────────
+   Wide tables opt in with className="tbl tbl-stack" + style --tbl-min.
+   Desktop / tablet: normal table, min-width honoured inside its scroll
+   wrapper. ≤640px: min-width releases, thead hides, and each row
+   becomes a stacked card whose cell labels come from data-th. */
+.zs table.tbl-stack { min-width: var(--tbl-min, 0); }
+@media (max-width: 640px) {
+  .zs table.tbl-stack { min-width: 0; }
+  .zs .tbl-stack thead { display: none; }
+  .zs table.tbl-stack, .zs .tbl-stack tbody, .zs .tbl-stack tbody tr, .zs .tbl-stack tbody td { display: block; }
+  .zs .tbl-stack tbody tr { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--paper-edge); }
+  .zs .tbl-stack tbody tr:last-child { border-bottom: none; }
+  .zs .tbl-stack tbody td { border-bottom: none; padding: 3px 0; }
+  .zs .tbl-stack tbody td[data-th] { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); text-align: left; }
+  .zs .tbl-stack tbody td[data-th]::before {
+    content: attr(data-th);
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: var(--tracking-wide);
+    text-transform: uppercase; color: var(--ink-faint); flex-shrink: 0;
+  }
+  .zs .tbl-stack td .track, .zs .tbl-stack td .meter { min-width: 96px; }
+}

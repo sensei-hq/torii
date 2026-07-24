@@ -14,9 +14,11 @@ milestone: F1
 
 # F1 · Data model & schema — implementation plan
 
+> Superseded by [../DECISIONS.md](../DECISIONS.md) (2026-07-23) and the [F1-rework plan](./F1-rework-plan.md) — role/ACL wording below is pre-ratification; DECISIONS + F1-rework win.
+
 ## Objective
 
-Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existing `database/` design for the Supabase SaaS — **RLS-based tenant isolation** (drop partition-per-tenant), the locked decisions (`vector(1024)`, fixed tenant-level roles, MCP + agents deferred), and the new v1 tables. Everything applies through **dbd** (`dbd reset && dbd apply && dbd import`).
+Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existing `database/` design for the Supabase SaaS — **RLS-based tenant isolation** (drop partition-per-tenant), the locked decisions (`vector(1024)`, ~~fixed tenant-level roles, MCP + agents deferred~~ — **superseded by RW2/RW3/RW9: full roles/role_permissions/profile_roles matrix and MCP are now v1; agents design-only**), and the new v1 tables. Everything applies through **dbd** (`dbd reset && dbd apply && dbd import`).
 
 **Layer stack for this module** (the F1 "vertical slice"): `DDL (tables/columns) → RLS policies → JWT claims → seed → tests`. Downstream consumers (C1 gateway, web/desktop clients) are out of F1 scope. Each feature applies and is testable independently via dbd against a fresh Postgres.
 
@@ -69,7 +71,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
 - **Depends on:** Feature 2
 - **Acceptance criteria:**
   - A first-class `spaces` table (name, classification, owner) exists; `documents.space_id` FK is enforced in-tenant.
-  - RLS on `documents`/`spaces` enforces access-group membership (recursive group walk) and classification (confidential → space members only), reconciled with `access_groups`/`group_levels`/`document_access`/`profile_groups`.
+  - RLS on `documents`/`spaces` enforces access-group membership (recursive group walk) and classification (confidential → space members only), reconciled with `access_groups`/`group_levels`/`document_access`/`profile_groups`. _(**Superseded by RW2/RW3/RW9:** the recursive group-ACL walk is retired — access is via the space+classification ACL and the roles/role_permissions/profile_roles matrix; `access_groups`/`group_levels` are gone.)_
 - **Test scenarios:**
   - Given a confidential document in space S, When a non-member queries it, Then 0 rows; When a member queries it, Then it returns.
   - Given a document, When its `space_id` references another tenant's space, Then the insert is rejected.

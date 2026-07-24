@@ -1,10 +1,12 @@
 # W5 · Marketing site
 
+> Reconciled to [`../DECISIONS.md`](../DECISIONS.md) 2026-07-23.
+
 **Plane:** Web · **Status:** Planned · **Depends on:** W4 (light) · **Domain:** `strategos.sensei-hq.com`
 
 ## Purpose
 
-The public-facing site: explain the product, show the controls, convert to sign-up / talk-to-sales.
+The public-facing site: explain the product, show the controls, convert to sign-up / talk-to-sales. A **separate app/codebase** from the app-plane apps (admin/desktop, which share W4 `packages/ui`), built from the marketing mockups in `components/*.jsx`, and sequenced as **its own later phase** (§6 — `components/*` is the W5 marketing app, distinct from the canonical `app/*.jsx` set).
 
 ## What we build (SvelteKit, prerendered → Cloudflare Pages)
 
@@ -18,7 +20,7 @@ The marketing site.
 
 ## Reuse / source
 
-`docs/mockups/Strategos.html` (hero/site), `docs/mockups/assets/site*.css`, screenshots (`hero.png`, `site-cta.png`).
+`docs/mockups/components/*.jsx` (the W5 marketing app — canonical per §6); `docs/mockups/Strategos.html` (hero/site), `docs/mockups/assets/site*.css`, screenshots (`hero.png`, `site-cta.png`).
 
 ## Open questions
 

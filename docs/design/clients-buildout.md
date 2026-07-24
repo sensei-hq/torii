@@ -1,8 +1,10 @@
 # Strategos — Client + Admin Build-Out (blueprint)
 
+> Superseded by [../DECISIONS.md](../DECISIONS.md) (2026-07-23) — crate/auth/ACL wording below is pre-ratification; DECISIONS wins.
+
 > **Status:** Design agreed 2026-07-06 · **Scope:** the two front-of-house apps (desktop **Member Console** client + web **Admin Portal**), the shared design system, and the central gateway service that makes them functional. · **Supersedes for scope:** the older "MCP/agents deferred, fixed roles" note — the mockups (`docs/mockups/`) are authoritative. · **Feeds:** per-phase implementation plans in `docs/plans/`.
 
-This blueprint turns `docs/mockups/` into a build plan. It builds **on the existing `monorepo/`** (F1 schema + Supabase already done) and stands on two sibling libraries as stepping stones — both consumed dev-in-place and enhanced upstream: the **`gateway/` engine crates** (v0.2.23, inference) and **Kavach** (`~/Developer/kavach`, v1.0.0-next.37, SvelteKit auth).
+This blueprint turns `docs/mockups/` into a build plan. It builds **on the existing `monorepo/`** (F1 schema + Supabase already done) and stands on two sibling libraries as stepping stones — both consumed dev-in-place and enhanced upstream: the **`sensei-*` engine crates** (v0.4.6, inference) and **Kavach** (`~/Developer/kavach`, v1.0.0-next.37, SvelteKit auth).
 
 ---
 
@@ -23,7 +25,7 @@ A web-hosted Member Console (`app.`) is **out of scope** for this plan (the clie
 - **Priority:** client first, admin second (required — it owns the controls).
 - **Package manager:** **bun** (workspaces).
 - **Desktop local store:** **no heavy DB.** The only thing that runs locally is the embedded gateway (local inference) + its on-disk model registry, plus the OS keychain for the device token. Offline resilience (Phase 2) caches the config snapshot + usage buffer in a **lightweight local store** (SQLite via `tauri-plugin-sql`, or the Tauri store) — a handful of rows, not a full DB. On-device RAG / vector storage is **deferred** (retrieval is central via C5); revisit `sqlite-vec` vs embedded `pgvector` only if we later add on-device retrieval. _(This resolves D1's "SQLite vs embedded Postgres" open question: neither — a minimal store, added only when offline lands.)_
-- **Local streaming:** `gateway-embedded` has no streaming yet → local Ask is **non-streaming** first; cloud Ask (via C1) streams over SSE.
+- **Local streaming:** the in-process `sensei-local-providers` `EmbeddedLlamaAdapter` has no streaming yet → local Ask is **non-streaming** first; cloud Ask (via C1) streams over SSE.
 - **Auth:** **Kavach** + its **Supabase adapter** is the auth/session substrate for both apps (sign-in, sessions, declarative role-based route protection, auth UI); its adapter also does Data / Storage / Logging, which `packages/core` builds on. The desktop needs a new **client-only session mode** (kavach is server/cookie-based today) — the first upstream enhancement, on the client's critical path. See §6b.
 
 ---
@@ -45,7 +47,7 @@ Two planes, faithful to `docs/README.md`:
         usage/audit ─┘   pull config + Realtime push  │
               ┌──────── DEVICE: execution (Tauri) ─────▼────────────┐
    Client ──▶ │ Member Console UI ──IPC──▶ src-tauri (Rust)         │
-              │   embedded `gateway`+`gateway-embedded` (local, $0) │
+              │   in-process sensei-local-providers (local, $0)     │
               │   split-plane router: cloud steps → C1              │
               │   on-disk model files · OS keychain                 │
               │   (lightweight offline config/usage cache)          │
@@ -68,7 +70,7 @@ monorepo/
   apps/
     desktop/                 # ① CLIENT — Tauri 2 + SvelteKit (Svelte 5)
       src/                   #   SvelteKit frontend = the Member Console UI
-      src-tauri/             #   Rust: IPC commands, embeds gateway-embedded,
+      src-tauri/             #   Rust: IPC commands, in-process sensei-local-providers EmbeddedLlamaAdapter,
                              #   split-plane router (D3), config sync (D4),
                              #   OS keychain, lightweight offline cache (SQLite/store)
     admin/                   # ② ADMIN — SvelteKit web → Cloudflare Pages
@@ -117,7 +119,7 @@ A **swappable data-access interface** so UI iteration is fast and integration is
 
 ## 6. Gateway integration contracts (from the engine API scan)
 
-**C1 (Axum, wraps `gateway` v0.2.23):**
+**C1 (Axum, wraps the `sensei-*` engine crates v0.4.6):**
 
 - Startup: `Gateway::new(config, AdapterRegistry, CircuitBreakerManager)`; register the 15 cloud adapters.
 - Implement **`GatewayStore`** against Postgres (`insert_inference_call`, `insert_execution_trace`, `get_spend_since`, …) → feeds C3/O1/O2.
@@ -126,10 +128,10 @@ A **swappable data-access interface** so UI iteration is fast and integration is
 - Auth middleware: validate Supabase JWT → `tenant_id`/`role`; scope every query.
 - Types are shared vocabulary: `Capability` (TextChat/TextEmbed/…), `Payload` (Chat/Embed/…), `InferenceRequest{capability,model?,router?,chain?,payload,budget?}`, `InferenceResponse{content?,usage?,attempts[],…}`.
 
-**Desktop (`src-tauri`, embeds `gateway-embedded` v0.2.23):**
+**Desktop (`src-tauri`, in-process `sensei-local-providers` `EmbeddedLlamaAdapter` v0.4.6):**
 
 - Model registry via `ChainedResolver::new().push(Managed).push(Ollama).push(External)`; `ModelEntry`/`ModelSource`.
-- Local adapters feature-gated: **`fastembed`** (embeddings) + **`llama-cpp`** (GGUF chat) in v1; `ort` optional later. Same `InferenceAdapter` trait as cloud, so chains mix planes.
+- Local adapters via the engine's **capability traits** (llama.cpp/GGUF chat, `ort` embeddings) in v1; **`fastembed` is a disabled placeholder** in the crate. Same capability-trait contract as cloud, so chains mix planes.
 - Split-plane router: local step → local `Gateway::execute()`; cloud step → HTTP to C1. Merge into one trace. (Local `stream()` unsupported → non-streaming.)
 
 ---
@@ -176,7 +178,7 @@ Each phase is independently demoable and ends lint+test clean (zero-errors polic
 ### Phase 1 — Client walking skeleton (local plane)
 
 - Desktop shell: title bar, nav rail, `EnvChip`, `DeviceFooter`, workspace ⌘K palette; **auth via Kavach's client-only session mode** (the first upstream kavach enhancement — sign-in + client-side session store + client-side `@kavach/sentry` route guard in the Tauri SPA); Sign-in screen from `@kavach/ui`.
-- `src-tauri`: embed `gateway-embedded` (fastembed + llama-cpp), `ChainedResolver`, expose local inference + registry over IPC; OS keychain for the device token; local-only split-plane router. **No relational store needed here** — the model registry scans disk.
+- `src-tauri`: in-process `sensei-local-providers` `EmbeddedLlamaAdapter` (llama.cpp/GGUF chat + `ort` embeddings via capability traits; `fastembed` disabled), `ChainedResolver`, expose local inference + registry over IPC; OS keychain for the device token; local-only split-plane router. **No relational store needed here** — the model registry scans disk.
 - **Ask** end-to-end on a **local** model — offline, $0, `ExecBadge` "on your device"; minimal **Local Models** screen (list/resolve/set default).
 - Playwright E2E (`tauri-playwright-testing`, `tauri-screen-dev`).
 - **Done when:** a user signs in, asks a question, and gets a grounded answer from a local model with the right execution badge — with the network off.
@@ -197,7 +199,7 @@ Each phase is independently demoable and ends lint+test clean (zero-errors polic
 
 ### Phase 3.5 — F1 schema gap-check (before admin)
 
-- dbd schema extension for the mockup decisions the built DDL lacks: **MCP servers + tool allow-lists**, **tenant API keys / service accounts** (budget_nodes already has a `service` kind to hang these on), and confirm/extend the **roles & permissions matrix** (the generic hierarchy `group_levels`/`access_groups` and cascading `budget_nodes` already exist). Agents stay deferred.
+- dbd schema extension for the mockup decisions the built DDL lacks: **MCP servers + tool allow-lists**, **tenant API keys / service accounts** (budget_nodes already has a `service` kind to hang these on), and confirm/extend the **roles & permissions matrix** (the `roles`/`role_permissions`/`profile_roles` matrix per RW2, and cascading `budget_nodes`, already exist — the old `group_levels`/`access_groups` substrate is **retired**). Agents stay deferred.
 - **Done when:** `dbd reset && apply && import` is green and the new tables have RLS + import procedures.
 
 ### Phase 4 — Admin web SaaS (the controls)

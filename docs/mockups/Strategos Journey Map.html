@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Strategos · Experience map</title>
+  <link rel="stylesheet" href="app/zs.css" />
+  <template id="__bundler_thumbnail">
+    <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+      <rect width="32" height="32" rx="6" fill="#3f3a32"/>
+      <path d="M6 21 C 11 9, 21 23, 26 11" fill="none" stroke="#c75f3e" stroke-width="1.6" stroke-linecap="round"/>
+      <circle cx="6" cy="21" r="1.8" fill="#f4f1ea"/>
+      <circle cx="26" cy="11" r="1.8" fill="#f4f1ea"/>
+    </svg>
+  </template>
+  <style>
+    html, body { margin: 0; background: var(--paper); }
+    .zs { min-height: 100vh; }
+    .doc { max-width: 1400px; margin: 0 auto; padding: var(--space-9) var(--space-7) var(--space-8); }
+
+    /* ── Document header ─────────────────────────────── */
+    .doc-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-6);
+      border-bottom: 1px solid var(--paper-edge); padding-bottom: var(--space-6); margin-bottom: var(--space-7); }
+    .doc-title { font-family: var(--font-display); font-weight: 300; font-size: var(--text-4xl);
+      line-height: 1.04; letter-spacing: var(--tracking-tight); max-width: 16ch; }
+    .doc-lede { font-size: var(--text-lg); color: var(--ink-soft); line-height: var(--leading-snug); max-width: 46ch; margin-top: var(--space-4); }
+    .doc-meta { text-align: right; flex-shrink: 0; white-space: nowrap; }
+    .mark-glyph { font-family: var(--font-kanji); color: var(--accent); font-size: 64px; line-height: 1; display: block; }
+
+    /* ── Legend ──────────────────────────────────────── */
+    .legend { display: flex; flex-wrap: wrap; gap: var(--space-6); align-items: center;
+      padding: var(--space-4) 0 var(--space-7); }
+    .legend-item { display: flex; align-items: flex-start; gap: var(--space-3); max-width: 30ch; }
+    .legend-mk { width: 26px; height: 26px; border-radius: var(--radius-sm); flex-shrink: 0; display: grid; place-items: center;
+      font-size: 13px; font-weight: 600; }
+    .legend-item h4 { font-size: var(--text-sm); font-weight: 600; margin: 0 0 1px; }
+    .legend-item p { font-size: var(--text-xs); color: var(--ink-mute); line-height: 1.45; margin: 0; }
+
+    .mk-fr  { background: var(--warning-soft); color: oklch(0.50 0.13 60); }
+    .mk-op  { background: var(--accent-soft);  color: var(--accent); }
+    .mk-gp  { background: var(--paper-mute); color: var(--ink-mute); border: 1px dashed var(--ink-faint); }
+
+    /* ── Persona band ────────────────────────────────── */
+    .persona { margin-top: var(--space-8); }
+    .persona-head { display: flex; align-items: center; gap: var(--space-4); margin-bottom: var(--space-2); }
+    .persona-kanji { font-family: var(--font-kanji); color: var(--accent); font-size: 34px; line-height: 1; }
+    .persona-name { font-family: var(--font-display); font-weight: 400; font-size: var(--text-2xl); letter-spacing: var(--tracking-tight); }
+    .persona-sub { font-size: var(--text-sm); color: var(--ink-mute); }
+    .persona-card { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: var(--space-6);
+      background: var(--paper-soft); border: 1px solid var(--paper-edge); border-radius: var(--radius-lg);
+      padding: var(--space-5); margin: var(--space-4) 0 var(--space-6); }
+    .persona-card h5 { font-size: var(--text-xs); letter-spacing: var(--tracking-wide); text-transform: uppercase;
+      color: var(--ink-mute); font-weight: 500; margin: 0 0 var(--space-2); }
+    .persona-card p { font-size: var(--text-sm); color: var(--ink-soft); line-height: var(--leading-snug); margin: 0; }
+    .persona-card .quote { font-family: var(--font-display); font-style: italic; font-size: var(--text-lg);
+      color: var(--ink); line-height: 1.35; }
+
+    /* ── Emotional curve ─────────────────────────────── */
+    .curve-wrap { position: relative; margin-bottom: var(--space-2); }
+    .curve-cap { font-size: var(--text-xs); letter-spacing: var(--tracking-wide); text-transform: uppercase;
+      color: var(--ink-faint); font-weight: 500; margin-bottom: var(--space-2); }
+    .curve-svg { display: block; width: 100%; height: 128px; }
+    .emo-label { font-size: var(--text-xs); fill: var(--ink-mute); font-family: var(--font-ui); }
+
+    /* ── Journey grid (row-major: every row shares one height) ── */
+    .grid-stages { display: grid; gap: 0; border: 1px solid var(--paper-edge); border-radius: var(--radius-lg);
+      overflow: hidden; background: var(--paper-soft); }
+    .gcell { display: flex; flex-direction: column; }   /* grid items stretch to row height by default */
+    .bx { border-right: 1px solid var(--paper-edge); }
+    .by { border-bottom: 1px solid var(--paper-edge); }
+    .stage-head { padding: var(--space-4); flex-direction: row; gap: var(--space-3); align-items: center;
+      background: var(--paper); }
+    .stage-head .k { font-family: var(--font-kanji); color: var(--accent); font-size: 26px; line-height: 1; }
+    .stage-no { font-family: var(--font-mono); font-size: 10px; color: var(--ink-mute); letter-spacing: 0.04em; }
+    .stage-name { font-family: var(--font-display); font-weight: 500; font-size: var(--text-base); letter-spacing: -0.01em; }
+    .cell { padding: var(--space-3) var(--space-4); }
+    .cell-label { font-size: 9.5px; letter-spacing: var(--tracking-wide); text-transform: uppercase;
+      color: var(--ink-faint); font-weight: 600; margin-bottom: var(--space-2); }
+    .cell ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 5px; }
+    .cell li { font-size: var(--text-sm); color: var(--ink-soft); line-height: 1.35; padding-left: 12px; position: relative; }
+    .cell li::before { content: "·"; position: absolute; left: 2px; color: var(--ink-faint); }
+    .think { font-family: var(--font-display); font-style: italic; font-size: var(--text-sm);
+      color: var(--ink); line-height: 1.4; }
+    .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+    .chip { font-family: var(--font-mono); font-size: 10px; color: var(--ink-soft); background: var(--paper-mute);
+      border: 1px solid oklch(0.22 0.012 50 / 0.06); border-radius: var(--radius-sm); padding: 2px 6px; }
+    .note { font-size: var(--text-sm); line-height: 1.4; flex-direction: row; align-items: flex-start; gap: var(--space-2); }
+    .note .nm { flex-shrink: 0; font-weight: 700; font-size: 12px; line-height: 1.5; }
+    .note-fr { background: var(--warning-soft); }
+    .note-fr .nm { color: oklch(0.50 0.13 60); }
+    .note-fr .nt { color: oklch(0.42 0.10 60); }
+    .note-op { background: var(--accent-soft); }
+    .note-op .nm { color: var(--accent); }
+    .note-op .nt { color: oklch(0.42 0.10 35); }
+    .note-gp { background: var(--paper-mute); }
+    .note-gp .nm { color: var(--ink-mute); }
+    .note-gp .nt { color: var(--ink-soft); }
+    .done { display: block; margin-top: 6px; padding-top: 5px; border-top: 1px dashed var(--success); font-size: var(--text-xs);
+      color: var(--success); font-weight: 500; line-height: 1.35; }
+
+    /* ── Flows ───────────────────────────────────────── */
+    .flows { margin-top: var(--space-7); }
+    .flows-title { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-5); }
+    .flows-title .k { font-family: var(--font-kanji); color: var(--ink-mute); font-size: var(--text-lg); }
+    .flows-title h3 { font-family: var(--font-display); font-weight: 400; font-size: var(--text-xl); letter-spacing: var(--tracking-tight); }
+    .flow { border: 1px solid var(--paper-edge); border-radius: var(--radius-lg); padding: var(--space-5);
+      margin-bottom: var(--space-4); background: var(--paper-soft); }
+    .flow-head { margin-bottom: var(--space-4); }
+    .flow-head h4 { font-size: var(--text-base); font-weight: 600; margin: 0 0 2px; }
+    .flow-head p { font-size: var(--text-sm); color: var(--ink-mute); margin: 0; }
+    .flow-line { display: flex; align-items: stretch; flex-wrap: wrap; gap: var(--space-2); }
+    .node { position: relative; min-width: 116px; max-width: 168px; background: var(--paper); border: 1px solid var(--paper-edge);
+      border-radius: var(--radius); padding: var(--space-3); display: flex; flex-direction: column; gap: 3px; }
+    .node .nlabel { font-size: var(--text-sm); font-weight: 500; line-height: 1.25; }
+    .node .nsub { font-family: var(--font-mono); font-size: 10px; color: var(--ink-mute); }
+    .node.decision { border-color: var(--accent); border-style: dashed; }
+    .node.decision .ntag { font-family: var(--font-kanji); color: var(--accent); font-size: 14px; position: absolute; top: 6px; right: 8px; }
+    .node.decision .nlabel { padding-right: 16px; }
+    .node.terminal { background: var(--ink); border-color: var(--ink); }
+    .node.terminal .nlabel { color: var(--paper); }
+    .node.terminal .nsub { color: oklch(0.78 0.008 85); }
+    .node .flag { position: absolute; top: -7px; left: -7px; width: 18px; height: 18px; border-radius: 50%;
+      background: var(--warning-soft); border: 1px solid oklch(0.72 0.12 75 / 0.4); color: oklch(0.50 0.13 60);
+      font-size: 10px; font-weight: 700; display: grid; place-items: center; }
+    .arrow { align-self: center; color: var(--ink-faint); font-size: 16px; flex-shrink: 0; }
+
+    /* ── Closing ─────────────────────────────────────── */
+    .focus { margin-top: var(--space-8); border-top: 1px solid var(--paper-edge); padding-top: var(--space-7); }
+    .focus h2 { font-family: var(--font-display); font-weight: 400; font-size: var(--text-2xl); letter-spacing: var(--tracking-tight); margin: 0 0 var(--space-2); }
+    .focus-sub { font-size: var(--text-base); color: var(--ink-soft); margin-bottom: var(--space-6); max-width: 56ch; }
+    .focus-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-5); }
+    .focus-card { border: 1px solid var(--paper-edge); border-radius: var(--radius-lg); padding: var(--space-5); background: var(--paper-soft); }
+    .focus-rank { font-family: var(--font-mono); font-size: 10px; color: var(--ink-mute); letter-spacing: 0.05em; margin-bottom: var(--space-3); display: flex; align-items: center; gap: var(--space-2); }
+    .focus-card h4 { font-family: var(--font-display); font-weight: 500; font-size: var(--text-lg); margin: 0 0 var(--space-2); line-height: 1.25; }
+    .focus-card p { font-size: var(--text-sm); color: var(--ink-soft); line-height: var(--leading-snug); margin: 0 0 var(--space-3); }
+    .focus-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+    .focus-tags .chip { white-space: nowrap; }
+
+    .doc-foot { margin-top: var(--space-8); padding-top: var(--space-5); border-top: 1px solid var(--paper-edge);
+      display: flex; justify-content: space-between; align-items: center; }
+    .doc-foot span { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-mute); }
+
+    @media (max-width: 1080px) {
+      .grid-overflow { overflow-x: auto; }
+      .grid-stages { min-width: 1180px; }
+      .persona-card { grid-template-columns: 1fr; }
+      .focus-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="zs">
+    <div class="doc" id="doc">
+      <header class="doc-head">
+        <div>
+          <div class="zs-eyebrow" style="margin-bottom: var(--space-4);">Strategos · experience map</div>
+          <h1 class="doc-title">Two journeys through the gateway</h1>
+          <p class="doc-lede">The member who asks, and the admin who governs — mapped end to end, with the friction, the openings, and the gaps Strategos has yet to close.</p>
+        </div>
+        <div class="doc-meta">
+          <span class="mark-glyph">道</span>
+          <div class="zs-meta" style="margin-top: var(--space-3);">michi · the way</div>
+          <div class="zs-meta">v2 · Jun 2026</div>
+        </div>
+      </header>
+
+      <section class="legend">
+        <div class="legend-item">
+          <div class="legend-mk mk-fr">▲</div>
+          <div><h4>Friction</h4><p>Where the journey slows, doubles back, or breaks trust today.</p></div>
+        </div>
+        <div class="legend-item">
+          <div class="legend-mk mk-op">●</div>
+          <div><h4>Opportunity</h4><p>A moment the product can turn effort into delight.</p></div>
+        </div>
+        <div class="legend-item">
+          <div class="legend-mk mk-gp">◇</div>
+          <div><h4>Gap</h4><p>Something the journey needs that Strategos does not yet ship.</p></div>
+        </div>
+        <div class="legend-item">
+          <div class="legend-mk" style="background: var(--success-soft); color: var(--success);">✓</div>
+          <div><h4>Resolved</h4><p>Shipped into the live Console / Admin. Dashed-green lines below mark what's done.</p></div>
+        </div>
+        <div class="legend-item" style="max-width: 34ch; margin-left: auto;">
+          <div><h4 style="color: var(--ink-mute);">Reading the curve</h4><p>The line traces felt confidence across each stage — dips mark where the experience asks more than it gives back.</p></div>
+        </div>
+      </section>
+
+      <div id="personas"></div>
+
+      <section class="focus" id="focus"></section>
+
+      <footer class="doc-foot">
+        <span>朱 Strategos · experience map</span>
+        <span>observe → notice → close the gap</span>
+      </footer>
+    </div>
+  </div>
+
+  <script src="journey-data.js"></script>
+  <script src="journey-render.js"></script>
+</body>
+</html>

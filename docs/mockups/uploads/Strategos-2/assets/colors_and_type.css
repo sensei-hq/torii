@@ -1,0 +1,309 @@
+/* ─────────────────────────────────────────────────────────────
+   Annotated Canvas · colors_and_type.css
+   Semantic tokens + tailwind-style utility classes.
+   Drop this on a page, set <html data-theme="light"|"dark">,
+   and you've got the system.
+   ───────────────────────────────────────────────────────────── */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@500;600;700&display=swap");
+
+/* ──────────────────────────────────────────────────────────
+   1 · TOKENS (semantic, theme-aware)
+   ────────────────────────────────────────────────────────── */
+
+:root, [data-theme="light"] {
+  /* Paper ladder — page → raised card → sunken inset → deepest well */
+  --paper:          #F1F4F8;   /* page background, the air around cards */
+  --paper-card:     #FFFFFF;   /* raised cards, panels, menus */
+  --paper-inset:    #E9EDF3;   /* hovers, sunken inset, toggle tracks */
+  --paper-well:     #DEE3EB;   /* deepest sunken state, pressed */
+
+  /* Canvas — the "work area paper" with a hairline grid (see .canvas-grid) */
+  --canvas:         #F4F6F9;
+  --grid:           rgba(20,30,45,0.055);
+  --grid-strong:    rgba(20,30,45,0.10);
+
+  /* Ink ladder — body → tertiary → placeholder */
+  --ink:            #14181F;   /* primary text */
+  --ink-mute:       #4A5260;   /* secondary text, body sub-copy */
+  --ink-soft:       #828B9B;   /* tertiary, captions */
+  --ink-faint:      #B5BCC8;   /* placeholder, disabled */
+
+  /* Lines */
+  --line:           rgba(20,30,45,0.10);
+  --line-strong:    rgba(20,30,45,0.22);
+
+  /* Moss · primary brand · "do it" actions, agent identity, success-ish */
+  --moss:           #4D5C3A;
+  --moss-hover:     #3D4A2D;
+  --moss-fg:        #F4F6EF;   /* legible text on moss */
+  --moss-soft:      #E0E5D2;
+  --moss-line:      #5F7146;
+
+  /* Sky · accent · annotations, links, agent "thinking", info ticks */
+  --sky:            #0369A1;
+  --sky-soft:       #DCEFFB;
+
+  /* User · lavender · the "YOU" rows in the analysis timeline */
+  --user:           #6D5BC9;
+  --user-soft:      #E6E1FA;
+
+  /* Slate · secondary action surface */
+  --slate:          #1E293B;
+  --slate-fg:       #F8FAFC;
+
+  /* Status */
+  --success:        #16A34A;
+  --warn:           #B45309;
+  --danger:         #B91C1C;
+  --info:           #0369A1;
+
+  /* Shadows — small, native-feeling */
+  --shadow-sm:  0 1px 1.5px rgba(15,22,35,0.04), 0 1px 2px rgba(15,22,35,0.06);
+  --shadow-md:  0 2px 4px rgba(15,22,35,0.06),  0 4px 12px rgba(15,22,35,0.06);
+  --shadow-lg:  0 8px 24px rgba(15,22,35,0.10), 0 2px 6px rgba(15,22,35,0.06);
+  --shadow-pop: 0 12px 36px rgba(15,22,35,0.14), 0 4px 10px rgba(15,22,35,0.08);
+
+  /* Radii — sharp on canvas, soft on chrome */
+  --radius-canvas:  0;       /* the data area itself — rulers, cells */
+  --radius-sm:      6px;     /* inline controls */
+  --radius-md:      10px;    /* default — buttons, inputs */
+  --radius-lg:      14px;    /* cards, overlays, popovers */
+  --radius-pill:    999px;   /* chips, tracks */
+
+  /* Type families */
+  --font-display:   'Inter Tight', system-ui, sans-serif;
+  --font-body:      'Inter', system-ui, sans-serif;
+  --font-mono:      'JetBrains Mono', ui-monospace, monospace;
+  --font-hand:      'Caveat', cursive;
+
+  /* Type sizes — semantic */
+  --t-display:      56px;
+  --t-h1:           34px;
+  --t-h2:           24px;
+  --t-h3:           17px;
+  --t-body:         14px;
+  --t-small:        12.5px;
+  --t-eyebrow:      11px;
+  --t-mono-sm:      10.5px;
+  --t-hand:         20px;
+}
+
+/* ─ Dark · same tokens, inverted, but the brand stays moss ─ */
+[data-theme="dark"] {
+  --paper:          #0B0F15;
+  --paper-card:     #131822;
+  --paper-inset:    #1A2030;
+  --paper-well:     #232B3D;
+  --canvas:         #0E131C;
+  --grid:           rgba(180,200,225,0.05);
+  --grid-strong:    rgba(180,200,225,0.10);
+
+  --ink:            #E6E9EF;
+  --ink-mute:       #A0A8B7;
+  --ink-soft:       #6B7385;
+  --ink-faint:      #4A5263;
+
+  --line:           rgba(200,210,225,0.10);
+  --line-strong:    rgba(200,210,225,0.22);
+
+  --moss:           #A3B17C;
+  --moss-hover:     #8B9966;
+  --moss-fg:        #14180D;
+  --moss-soft:      rgba(163,177,124,0.16);
+  --moss-line:      #B7C496;
+
+  --sky:            #38BDF8;
+  --sky-soft:       rgba(56,189,248,0.16);
+
+  --user:           #B5A6EF;
+  --user-soft:      rgba(181,166,239,0.18);
+
+  --slate:          #E2E8F0;
+  --slate-fg:       #0F172A;
+
+  --success:        #34D399;
+  --warn:           #F59E0B;
+  --danger:         #F87171;
+  --info:           #38BDF8;
+
+  --shadow-sm:  0 1px 1.5px rgba(0,0,0,0.4),  0 1px 2px rgba(0,0,0,0.5);
+  --shadow-md:  0 2px 4px rgba(0,0,0,0.5),    0 6px 14px rgba(0,0,0,0.5);
+  --shadow-lg:  0 10px 28px rgba(0,0,0,0.55), 0 3px 8px rgba(0,0,0,0.5);
+  --shadow-pop: 0 16px 40px rgba(0,0,0,0.6),  0 6px 14px rgba(0,0,0,0.5);
+}
+
+/* ──────────────────────────────────────────────────────────
+   2 · BASE
+   ────────────────────────────────────────────────────────── */
+html, body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'cv11','ss01','ss03';
+}
+
+/* ──────────────────────────────────────────────────────────
+   3 · TYPOGRAPHY — semantic classes
+   ────────────────────────────────────────────────────────── */
+.font-display { font-family: var(--font-display); letter-spacing: -0.02em; }
+.font-body    { font-family: var(--font-body); }
+.font-mono    { font-family: var(--font-mono); }
+.font-hand    { font-family: var(--font-hand); }
+
+.t-display { font: 700 var(--t-display)/0.95 var(--font-display); letter-spacing: -0.035em; }
+.t-h1      { font: 600 var(--t-h1)/1.05      var(--font-display); letter-spacing: -0.025em; }
+.t-h2      { font: 600 var(--t-h2)/1.15      var(--font-display); letter-spacing: -0.015em; }
+.t-h3      { font: 500 var(--t-h3)/1.3       var(--font-display); letter-spacing: -0.01em; }
+.t-body    { font: 400 var(--t-body)/1.5     var(--font-body); }
+.t-small   { font: 400 var(--t-small)/1.45   var(--font-body); }
+.t-mono    { font: 500 var(--t-mono-sm)/1    var(--font-mono); }
+.t-hand    { font: 600 var(--t-hand)/1.05    var(--font-hand); color: var(--sky); }
+
+/* The signature eyebrow — used everywhere as a section + step label. */
+.eyebrow {
+  font: 500 var(--t-eyebrow)/1 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+/* ──────────────────────────────────────────────────────────
+   4 · UTILITIES — tailwind-style, but only the ones we lean on
+   Wired so component CSS never references a hex.
+   ────────────────────────────────────────────────────────── */
+
+/* — backgrounds — */
+.bg-paper        { background-color: var(--paper); }
+.bg-paper-card   { background-color: var(--paper-card); }
+.bg-paper-inset  { background-color: var(--paper-inset); }
+.bg-paper-well   { background-color: var(--paper-well); }
+.bg-canvas       { background-color: var(--canvas); }
+.bg-moss         { background-color: var(--moss); }
+.bg-moss-soft    { background-color: var(--moss-soft); }
+.bg-sky          { background-color: var(--sky); }
+.bg-sky-soft     { background-color: var(--sky-soft); }
+.bg-user         { background-color: var(--user); }
+.bg-user-soft    { background-color: var(--user-soft); }
+.bg-slate        { background-color: var(--slate); }
+.bg-success      { background-color: var(--success); }
+.bg-warn         { background-color: var(--warn); }
+.bg-danger       { background-color: var(--danger); }
+.bg-info         { background-color: var(--info); }
+.bg-ink          { background-color: var(--ink); }
+.bg-transparent  { background-color: transparent; }
+
+/* — text colors — */
+.text-ink        { color: var(--ink); }
+.text-ink-mute   { color: var(--ink-mute); }
+.text-ink-soft   { color: var(--ink-soft); }
+.text-ink-faint  { color: var(--ink-faint); }
+.text-paper-card { color: var(--paper-card); }
+.text-moss       { color: var(--moss); }
+.text-moss-fg    { color: var(--moss-fg); }
+.text-sky        { color: var(--sky); }
+.text-user       { color: var(--user); }
+.text-slate-fg   { color: var(--slate-fg); }
+.text-success    { color: var(--success); }
+.text-warn       { color: var(--warn); }
+.text-danger     { color: var(--danger); }
+.text-info       { color: var(--info); }
+
+/* — borders — */
+.border          { border: 1px solid var(--line); }
+.border-strong   { border: 1px solid var(--line-strong); }
+.border-moss     { border: 1px solid var(--moss-line); }
+.border-sky      { border: 1px solid var(--sky); }
+.border-dashed   { border-style: dashed; }
+.border-t        { border-top: 1px solid var(--line); }
+.border-b        { border-bottom: 1px solid var(--line); }
+.border-l        { border-left: 1px solid var(--line); }
+.border-r        { border-right: 1px solid var(--line); }
+.border-none     { border: 0; }
+
+/* — radii — */
+.rounded-canvas  { border-radius: var(--radius-canvas); }
+.rounded-sm      { border-radius: var(--radius-sm); }
+.rounded-md      { border-radius: var(--radius-md); }
+.rounded-lg      { border-radius: var(--radius-lg); }
+.rounded-pill    { border-radius: var(--radius-pill); }
+.rounded-full    { border-radius: 999px; }
+
+/* — shadows — */
+.shadow-sm   { box-shadow: var(--shadow-sm); }
+.shadow-md   { box-shadow: var(--shadow-md); }
+.shadow-lg   { box-shadow: var(--shadow-lg); }
+.shadow-pop  { box-shadow: var(--shadow-pop); }
+.shadow-none { box-shadow: none; }
+
+/* — hairline ring (system standard for "1px border" effects) — */
+.hairline { box-shadow: 0 0 0 1px var(--line) inset; }
+
+/* — rules — */
+.rule        { height: 1px; background: var(--line); }
+.rule-dashed { height: 1px; background: repeating-linear-gradient(90deg, var(--line-strong) 0 4px, transparent 4px 8px); }
+.rule-dotted { height: 1px; background-image: linear-gradient(90deg, var(--line-strong) 50%, transparent 50%); background-size: 4px 1px; }
+
+/* — focus ring — */
+.focus-ring { transition: box-shadow 120ms; }
+.focus-ring:focus-visible { outline: 0; box-shadow: 0 0 0 3px var(--moss-soft); }
+
+/* — canvas grid utility (paint a hairline-grid background on any element) — */
+.canvas-grid {
+  background-color: var(--canvas);
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px),
+    linear-gradient(var(--grid-strong) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-strong) 1px, transparent 1px);
+  background-size: 10px 10px, 10px 10px, 100px 100px, 100px 100px;
+}
+
+/* ──────────────────────────────────────────────────────────
+   5 · THEME FLIP — light / dark, with a baked-in toggle button.
+   Use the <button class="theme-toggle"> markup below; theme.js
+   wires it up automatically and persists to localStorage.
+   ────────────────────────────────────────────────────────── */
+.theme-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 10px 0 8px;
+  background: var(--paper-card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--ink-mute);
+  font: 500 12px/1 var(--font-body);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 120ms, color 120ms, background 120ms;
+}
+.theme-toggle:hover { border-color: var(--line-strong); color: var(--ink); }
+.theme-toggle .icon { display: inline-grid; place-items: center; width: 16px; height: 16px; }
+.theme-toggle .icon-sun  { display: inline-grid; }
+.theme-toggle .icon-moon { display: none; }
+[data-theme="dark"] .theme-toggle .icon-sun  { display: none; }
+[data-theme="dark"] .theme-toggle .icon-moon { display: inline-grid; }
+.theme-toggle .label::after { content: "Dark"; }
+[data-theme="dark"] .theme-toggle .label::after { content: "Light"; }
+
+/* Compact icon-only variant: <button class="theme-toggle is-icon" aria-label="Flip theme"> */
+.theme-toggle.is-icon { width: 28px; padding: 0; justify-content: center; }
+.theme-toggle.is-icon .label { display: none; }
+
+/* ──────────────────────────────────────────────────────────
+   6 · ANNOTATION LAYER — the system's signature
+   Hand-drawn marks live in --sky. Always thin. Always.
+   ────────────────────────────────────────────────────────── */
+.annot {
+  font-family: var(--font-hand);
+  font-weight: 600;
+  color: var(--sky);
+  font-size: 17px;
+  line-height: 1;
+  letter-spacing: 0.005em;
+  white-space: nowrap;
+}
+.annot-line          { stroke: var(--sky); stroke-width: 1.25; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.annot-line.dashed   { stroke-dasharray: 4 4; }
+.annot-line.dotted   { stroke-dasharray: 1 3; stroke-width: 1.5; }
+.annot-line.ink      { stroke: var(--ink-mute); }

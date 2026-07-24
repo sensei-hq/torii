@@ -22,7 +22,7 @@
   const VALUE = [
     { ic: 'routing', t: 'Route across every provider', s: 'One endpoint. Step-down routing and a free-tier floor pick the cheapest model that still answers well.' },
     { ic: 'wallet',  t: 'Spend with intent',           s: 'Org, team and user budgets with hard caps. Blended cost per call is down 35% this quarter.' },
-    { ic: 'shield',  t: 'Govern with confidence',      s: 'SSO, role-based access and a full request ledger — every call traceable, every key accounted for.' },
+    { ic: 'shield',  t: 'Govern with confidence',      s: 'OAuth, role-based access and a full request ledger — every call traceable, every key accounted for.' },
   ];
 
   // routing diagram — providers on the left converge through the gateway enso
@@ -146,7 +146,7 @@
                     <span className="sgn-value-ic"><Icon name={v.ic} size={18} tone="accent" /></span>
                     <span>
                       <span style={{ display: 'block', fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--ink)' }}>{v.t}</span>
-                      <span style={{ display: 'block', fontSize: 12.5, color: 'var(--ink-mute)', marginTop: 3, lineHeight: 1.45 }}>{v.s}</span>
+                      <span style={{ display: 'block', fontSize: 'var(--text-sm)', color: 'var(--ink-mute)', marginTop: 3, lineHeight: 1.45 }}>{v.s}</span>
                     </span>
                   </div>
                 ))}
@@ -160,10 +160,15 @@
               <h1 className="zs-h2" style={{ textAlign: 'center' }}>{isAdmin ? 'Sign in to the admin portal' : 'Sign in to your workspace'}</h1>
               <p className="zs-body-sm" style={{ textAlign: 'center', marginTop: 6, marginBottom: 'var(--space-5)' }}>Northwind Estates · {isAdmin ? 'tenant administration' : 'gateway'}</p>
 
-              {/* SSO */}
-              <button className="zs-btn zs-btn-primary" style={{ width: '100%', justifyContent: 'center', height: 40 }} onClick={() => onSignIn(sel)}>
-                <Icon name="sso" size={16} tone="paper" /> Continue with Okta
-              </button>
+              {/* OAuth — v1 sign-in */}
+              <div className="flex flex-col" style={{ gap: 8 }}>
+                <button className="zs-btn zs-btn-primary" style={{ width: '100%', justifyContent: 'center', height: 40 }} onClick={() => onSignIn(sel)}>
+                  <Icon name="globe" size={16} tone="paper" /> Continue with Google
+                </button>
+                <button className="zs-btn zs-btn-secondary" style={{ width: '100%', justifyContent: 'center', height: 40 }} onClick={() => onSignIn(sel)}>
+                  <Icon name="provider" size={16} tone="soft" /> Continue with GitHub
+                </button>
+              </div>
 
               <div className="flex items-center gap-3" style={{ margin: 'var(--space-4) 0' }}>
                 <span className="zs-rule" style={{ flex: 1 }} />
@@ -171,16 +176,14 @@
                 <span className="zs-rule" style={{ flex: 1 }} />
               </div>
 
-              {/* credentials (visual) */}
+              {/* magic link — passwordless email (v1 primary) */}
               <label className="zs-eyebrow" style={{ display: 'block', marginBottom: 6 }}>Work email</label>
               <div className="zs-input" style={{ marginBottom: 'var(--space-3)' }}>
                 <Icon name="user" size={14} tone="mute" /><input value={id.email} readOnly />
               </div>
-              <label className="zs-eyebrow" style={{ display: 'block', marginBottom: 6 }}>Password</label>
-              <div className="zs-input" style={{ marginBottom: 'var(--space-4)' }}>
-                <Icon name="lock" size={14} tone="mute" /><input type="password" value="************" readOnly />
-              </div>
-              <button className="zs-btn zs-btn-secondary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => onSignIn(sel)}>Sign in</button>
+              <button className="zs-btn zs-btn-secondary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => onSignIn(sel)}><Icon name="bolt" size={14} tone="soft" /> Email me a magic link</button>
+              <p className="zs-body-sm" style={{ textAlign: 'center', marginTop: 8, fontSize: 'var(--text-xs)', color: 'var(--ink-faint)' }}>Passwordless — we send a one-time sign-in link. No password to remember.</p>
+              <button className="zs-btn zs-btn-ghost" disabled style={{ width: '100%', justifyContent: 'center', marginTop: 8, opacity: 0.6 }} title="Fast-follow — not yet enabled"><Icon name="sso" size={14} tone="mute" /> SAML SSO — fast-follow</button>
 
               {/* identity / role picker */}
               <div className="zs-eyebrow" style={{ margin: 'var(--space-5) 0 var(--space-3)' }}>Demo · sign in as</div>
@@ -199,7 +202,7 @@
                           <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--ink)' }}>{i.name}</span>
                           <span className="tag">{i.role}</span>
                         </span>
-                        <span style={{ display: 'block', fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--ink-mute)', marginTop: 2 }}>{i.scope}</span>
+                        <span style={{ display: 'block', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-mute)', marginTop: 2 }}>{i.scope}</span>
                       </span>
                       <span style={{ width: 16, height: 16, borderRadius: '50%', border: '1px solid ' + (on ? 'var(--accent)' : 'var(--paper-edge)'), display: 'grid', placeItems: 'center' }}>
                         {on && <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--accent)' }} />}
@@ -210,9 +213,9 @@
               </div>
             </div>
 
-            <p className="zs-body-sm" style={{ textAlign: 'center', marginTop: 'var(--space-4)', color: 'var(--ink-faint)', fontSize: 11.5 }}>
+            <p className="zs-body-sm" style={{ textAlign: 'center', marginTop: 'var(--space-4)', color: 'var(--ink-faint)', fontSize: 'var(--text-xs)' }}>
               <Icon name="shield" size={12} tone="faint" style={{ display: 'inline-block', verticalAlign: '-2px', marginRight: 4 }} />
-              SAML · SSO enforced · session pinned to eu-west-2
+              Email + OAuth · SAML SSO fast-follow · session pinned to your tenant region
             </p>
             <div style={{ textAlign: 'center', marginTop: 'var(--space-4)', paddingTop: 'var(--space-4)', borderTop: '1px solid var(--paper-edge)' }}>
               <a href={cross.href} className="zs-body-sm" style={{ color: 'var(--accent)', textDecoration: 'none', fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 6 }}>

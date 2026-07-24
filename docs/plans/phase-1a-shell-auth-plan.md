@@ -463,6 +463,6 @@ test.describe('Desktop auth + shell', () => {
 
 ## Self-review notes (author)
 - **Spec coverage** (blueprint §8 Phase 1, shell+auth slice): shell chrome (Task 1,3), EnvChip/DeviceFooter/OfflineBanner (Task 1), ⌘K palette (Task 3), Kavach **client-only session mode** (Task 2 — the upstream enhancement), Sign-in screen (Task 4), route protection (Task 2 guard + Task 4 wiring), console nav (Task 5), E2E (Task 6). **Local inference + Ask are explicitly Phase 1b** (not here).
-- **Deferred to 1b/later:** `gateway-embedded` engine, `infer`/`list_models` IPC, Local Models screen, real Ask, split-plane router, offline usage buffer, device enrollment token.
+- **Deferred to 1b/later:** the in-process embedded engine (`EmbeddedLlamaAdapter`, `sensei-local-*`), `infer`/`list_models` IPC, Local Models screen, real Ask, split-plane router, offline usage buffer, device enrollment token.
 - **Risk/uncertainty:** `@kavach/sentry`'s exact `protect()` return + `setSession` signature (Task 2 Step 6 says match the real API and assert semantics). The ⌘K wiring (Task 3) leans on the `command-system-rokkit` skill — consult it rather than guessing the `@rokkit/states` commands API. The E2E test-session seam (Task 6) must be strictly env-gated.
 - **Type consistency:** `session.role`/`session.user` shape (Task 2) is consumed by the guard (Task 2), the `(app)` layout (Task 5), and E2E seeding (Task 6) — all use `{ user: { role } }`. `DesktopShell` props (`user/items/active/version/localModels/onnavigate/onsignout`) are defined in Task 3 and passed in Task 5.

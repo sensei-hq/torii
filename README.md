@@ -36,7 +36,7 @@ Strategos separates the **config/governance plane** (central, the authority) fro
 ```
 
 - **Central gateway** (Rust + Axum, wrapping the `gateway` crate) is the authority for all **cloud (BYOK)** calls: keys never leave it, and budgets, audit, residency, and guardrails are enforced centrally.
-- **Desktop app** (Tauri + SvelteKit) embeds the `gateway-embedded` crate to run **local models, embeddings, and reasoning** — offline-capable, $0, private — and proxies any cloud step to the central gateway.
+- **Desktop app** (Tauri + SvelteKit) embeds the local-engine crates (`sensei-local-engine` + `sensei-local-providers`; the `EmbeddedLlamaAdapter` runs GGUF models **in-process via llama.cpp — no daemon**, `OrtAdapter` for ONNX; the registry handles model pull, reusing an existing `~/.ollama` cache when present) to run **local models, embeddings, and reasoning** — offline-capable, $0, private — and proxies any cloud step to the central gateway.
 - **Two clients, one brain:** the **Member Console** runs on web (cloud-only) and desktop (cloud + local); the **Admin Portal** is web. Fallback chains can span both planes.
 - **Backend:** Supabase (Auth/SSO, Postgres with row-level security, Storage, Realtime config push). Web console + marketing site deploy to **Cloudflare Pages**; the Rust gateway runs as a container (Cloud Run / Fly.io / Fargate).
 
@@ -59,8 +59,8 @@ monorepo/
     └── supabase/          ← schema, RLS policies, edge functions, migrations
 ```
 
-The new Rust gateway crates (`gateway`, `gateway-embedded`) currently live in `sensei-hq/sensei/crates/` and are referenced by the central service and the desktop app.
+The Rust gateway engine lives in the external repo [`sensei-hq/gateway`](https://github.com/sensei-hq/gateway) as six `sensei-*` crates (`sensei-kernel`, `sensei-gateway`, `sensei-cloud-providers`, `sensei-local-engine`, `sensei-local-providers`, `sensei-kokoro`), pinned at **`v0.4.6`** and consumed via a git tag + `[patch]` for in-place dev. The central service wraps `sensei-gateway`; the desktop app additionally embeds the local-engine crates. (There is no `gateway-embedded` crate and no `InferenceAdapter` trait — the engine uses capability-segregated traits.)
 
 ## Status
 
-**Design phase.** Requirements and architecture are being written before code. Start with **[`docs/README.md`](docs/README.md)**, then the per-module breakdown in **[`docs/modules/`](docs/modules/)**. The archived previous implementation (Node/TS) lives in `../strategos_old/`.
+**Design phase.** Requirements and architecture are being written before code. The **authoritative v1 scope/architecture/security record is [`docs/DECISIONS.md`](docs/DECISIONS.md)** (ratified 2026-07-23) — every other doc reconciles to it. Start with **[`docs/README.md`](docs/README.md)**, then the per-module breakdown in **[`docs/modules/`](docs/modules/)**. The archived previous implementation (Node/TS) lives in `../strategos_old/`.

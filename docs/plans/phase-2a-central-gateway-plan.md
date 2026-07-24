@@ -1,13 +1,16 @@
 ---
 title: 'Phase 2a · Central gateway service (C1) — implementation plan'
-description: A Rust/Axum service (services/gateway) wrapping the gateway crate — Supabase JWT auth, GatewayConfig assembled from the F1 Postgres tables, provider keys from env (F3 vault deferred), a Postgres GatewayStore, and /v1/chat + SSE — so a JWT-bearing client gets a real cloud (BYOK) answer that's persisted.
+description: A Rust/Axum service (services/gateway) wrapping the sensei-gateway crate (v0.4.6) — Supabase RS256/JWKS JWT auth, GatewayConfig assembled from the F1 Postgres tables, one sanctioned provider key from env for the skeleton (F3 vault is the build gate before real BYOK/OAuth credentials), a Postgres GatewayStore, and /v1/chat + SSE — so a JWT-bearing client gets a real cloud answer that's persisted.
 type: plan
 status: plan
 created: 2026-07-07
 depends_on:
-  - docs/design/clients-buildout.md
+  - docs/DECISIONS.md
+  - docs/plans/roadmap.md
   - docs/plans/phase-1b-local-inference-ask-plan.md
 references:
+  - docs/plans/gateway-issues.md
+  - docs/plans/F1-rework-plan.md
   - docs/modules/C1-gateway-service.md
   - docs/modules/F2-identity-auth-rbac.md
   - docs/modules/F3-key-vault.md
@@ -19,19 +22,24 @@ milestone: Phase-2a
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax. **Heavy Rust builds run via a BACKGROUND shell (controller), not inside a subagent** (the `gateway` + AWS SDK + sqlx compile is minutes; the watchdog will kill a subagent). Subagents WRITE code; the controller compiles + runs. DB changes go through **dbd** (`dbd reset && dbd apply && dbd import`) per the project workflow.
 
-**Goal:** A client that presents a valid Supabase JWT can `POST /v1/chat` to the central service and get a **real cloud (BYOK) answer** — routed by the `gateway` engine using config assembled from the F1 Postgres tables, with the provider key injected server-side (never sent to the client), the call persisted to a Postgres ledger, and streaming available over SSE.
+**Goal:** A client that presents a valid Supabase JWT can `POST /v1/chat` to the central service and get a **real cloud answer** — routed by the `sensei-gateway` engine using config assembled from the F1 Postgres tables, with the provider key injected server-side (never sent to the client), the call persisted to a Postgres ledger, and streaming available over SSE.
 
-**Architecture:** A new `services/gateway` Rust crate (Axum 0.8) in the existing Cargo workspace, wrapping the `gateway` crate (via the root `[patch]` → sibling `../gateway`). Startup: connect a `sqlx` Postgres pool → `load_gateway_config(pool)` builds `GatewayConfig` from `routers`/`models`/`model_endpoints`/`fallback_chains`/`fallback_chain_models` → `Gateway::new(config, adapters, breaker)` with the 15 cloud adapters → `refresh_router_keys(env_resolver)` injects provider keys **from env** (via each router's `api_key_env_var`). A tower middleware validates the Supabase JWT (HS256 + the project JWT secret) and extracts `tenant_id`/`role`. Handlers build an `InferenceRequest`, call `gateway.execute()`/`stream()`, persist via a Postgres `GatewayStore` impl, and return JSON / SSE.
+**Canonical phase:** This is **P2a** in [`roadmap.md`](roadmap.md) (walking skeleton, Part A) — a thin vertical slice on the **built-but-insecure F1**. The ratified security posture (gateway-mediated `/rpc/*` writes, capability authz, full BYOK/OAuth via F3) is the P5 **C1-harden** rebuild on the reworked schema (P3 F1-rework); do **not** build hardened authz here. Status per roadmap §3: **reconcile** (crate-reality MIG-1..3 + RS256).
 
-**Tech Stack:** Rust · Axum 0.8 · `sqlx` 0.8 (postgres, chrono, uuid, json) · `tokio` · `tower-http` (cors) · `jsonwebtoken` · `gateway` crate (git dep + root `[patch]`) · Supabase Postgres.
+**Architecture:** A new `services/gateway` Rust crate (Axum 0.8) in the existing Cargo workspace, wrapping the `sensei-gateway` crate at **v0.4.6** (dependency key `sensei-gateway`; its `[lib] name = "gateway"`, so code still imports `gateway::…`). The root `[patch]` redirects the `sensei-*` packages to `../gateway/crates/*` (see MIG-1 in Task 1). Startup: connect a `sqlx` Postgres pool → `load_gateway_config(pool)` builds `GatewayConfig` from `routers`/`models`/`model_endpoints`/`fallback_chains`/`fallback_chain_models` → build an `AdapterRegistry` (register each `sensei-cloud-providers` adapter via `registry.register(Arc::new(adapter)).await` — the `RegisterInto`/capability-trait model; there is **no** `InferenceAdapter` and **no** `AdapterRegistry::with_defaults()` in v0.4.6) → `Gateway::new(config, registry, circuit_breaker)` → `refresh_router_keys(env_resolver)` injects provider keys **from env** (via each router's `api_key_env_var`). A tower middleware verifies the Supabase JWT with an **RS256 verify-only public key fetched from the project JWKS endpoint** (asymmetric — no shared HS256 secret; DECISIONS §2 W3) and extracts `tenant_id`/`role`. Handlers build an `InferenceRequest`, call `gateway.execute()`/`stream()`, persist via a Postgres `GatewayStore` impl, and return JSON / SSE.
 
-**Reference (adapt the patterns):** sensei `/Users/Jerry/Developer/sensei-hq/sensei/crates/senseid/` — `api/server.rs` (bootstrap), `api/routes.rs`, `api/gateway_config_loader.rs` (config assembly — pure builders + async queries), `api/handlers/scan_events.rs` (SSE), `db/pg_store.rs` (pool). The `gateway` crate at `/Users/Jerry/Developer/strategos/gateway/crates/gateway/src/`: `store.rs` (the real `GatewayStore` trait + `InferenceCall`/`StoredTrace` — implement THIS), `config.rs`, `engine.rs`, `lib.rs`.
+**Tech Stack:** Rust · Axum 0.8 · `sqlx` 0.8 (postgres, chrono, uuid, json) · `tokio` · `tower-http` (cors) · `jsonwebtoken` (RS256) + `reqwest` (JWKS fetch/cache) · `sensei-gateway` crate @ v0.4.6 (git dep + root `[patch]`; cloud adapters via the `sensei-gateway` cloud feature or `sensei-cloud-providers` directly) · Supabase Postgres.
+
+**Reference (adapt the patterns):** sensei `/Users/Jerry/Developer/sensei-hq/sensei/crates/senseid/` — `api/server.rs` (bootstrap), `api/routes.rs`, `api/gateway_config_loader.rs` (config assembly — pure builders + async queries), `api/handlers/scan_events.rs` (SSE), `db/pg_store.rs` (pool). The gateway crate at `/Users/Jerry/Developer/strategos/gateway/crates/gateway/src/`: `store.rs` (the real `GatewayStore` trait + `InferenceCall`/`StoredTrace` — implement THIS), `config.rs` (incl. `GatewayBuilder`), `engine.rs` (`Gateway::new`, `refresh_router_keys`), `lib.rs`. Adapter registration + capability traits live in `sensei-kernel` (`kernel::adapters::{AdapterRegistry, RegisterInto}`) and `sensei-cloud-providers`.
 
 ## Prerequisites & decisions (confirm before executing)
-1. **Provider keys from env (F3 deferred).** C1 resolves keys via `routers.api_key_env_var` → `std::env::var` (the real `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/… are already in the repo `.env.local`). The `router_keys` AES-GCM vault (F3) is **deferred** to a hardening task. → Server-side keys, never sent to clients.
-2. **Supabase JWT secret required.** C1 validates the JWT with the Supabase project's **JWT secret** (HS256) — needs `SUPABASE_JWT_SECRET` in C1's env. (If the project uses RS256/JWKS, C1 fetches the JWKS instead.) This must be available to run the auth path.
-3. **New ledger tables via dbd.** The `GatewayStore` needs `inference_calls` + `execution_traces` tables (the F1 `session_logs`/`gateway_tasks` don't match the engine's `InferenceCall` shape). Added to `database/ddl` + applied via dbd (an F1' extension) with RLS.
-4. **The acceptance test makes a REAL paid cloud call** (one small Anthropic/OpenAI chat) to prove end-to-end. Kept to a single cheap call.
+
+**Prior phases:** P1b complete (roadmap Part A). **Crate migration:** MIG-1..3 from [`gateway-issues.md`](gateway-issues.md) are executed inside this phase (Task 1) with a live compile loop — do NOT blind-edit. **F1-rework (P3) note:** this skeleton runs on the built F1 and adds its own `inference_calls`/`execution_traces` tables (prereq 3); P3 RW7 later **consolidates on the crate-native `inference_calls` as the single `service_role`-only ledger** (DECISIONS §3) and reworks RLS to the role matrix — so keep this phase's tables shaped to the engine's `InferenceCall`/`StoredTrace` to minimize churn, and expect the RLS/grants to be re-hardened in P3/P5.
+
+1. **Skeleton = one sanctioned provider key from env; F3 is the build gate for real credentials.** For the walking skeleton C1 resolves keys via `routers.api_key_env_var` → `std::env::var` using **one sanctioned test key** + local-dev `STRATEGOS_KEK` (front-loaded human inputs, roadmap §4). Per DECISIONS §2 W4, the DEK/KEK envelope vault (**F3**, phase P4) **must land before C1 handles any real BYOK/OAuth credential broadly** — no deployed phase holds plaintext provider keys, and production KEK lives in a cloud KMS/HSM. Env-key resolution here is explicitly the local-dev-only path (a `// TODO(F3)` marker), replaced by the F3 vault in the C1-harden phase (P5). → Server-side keys, never sent to clients.
+2. **JWT verification is RS256/JWKS (verify-only) — no shared HS256 secret.** Per DECISIONS §2 W3, C1 verifies the Supabase JWT with an **asymmetric verify-only public key fetched + cached from the project JWKS endpoint** (`Algorithm::RS256`), selecting the key by the token header `kid`. This requires **asymmetric signing confirmed/enabled on the Supabase project** and the JWKS URL / `SUPABASE_JWT_*` in C1's env (front-loaded, roadmap §4) — confirm before Task 6.
+3. **New ledger tables via dbd.** The `GatewayStore` needs `inference_calls` + `execution_traces` tables (the F1 `session_logs`/`gateway_tasks` don't match the engine's `InferenceCall` shape). Added to `database/ddl` + applied via dbd (an F1' extension) with RLS. (P3 RW7 consolidates/re-hardens — see the F1-rework note above.)
+4. **The acceptance test makes a REAL paid cloud call** (one small Anthropic/OpenAI chat) to prove end-to-end — **requires the front-loaded paid-provider-call approval** (roadmap §4). Kept to a single cheap call.
 5. **Deploy = local dev** (`cargo run`, `127.0.0.1:8787`) for this phase; Cloudflare/container is later.
 
 ---
@@ -43,7 +51,7 @@ monorepo/
   Cargo.toml                       # add "services/gateway" to workspace members
   services/gateway/
     Cargo.toml
-    .env.example                   # DATABASE_URL, SUPABASE_JWT_SECRET, PORT
+    .env.example                   # DATABASE_URL, SUPABASE_JWKS_URL, PORT, STRATEGOS_KEK (local-dev), <PROVIDER>_API_KEY
     src/
       main.rs                      # bootstrap: env, pool, config, gateway, serve
       state.rs                     # AppState { pool, gateway: Arc<Gateway> }
@@ -66,12 +74,20 @@ monorepo/
 
 **Files:** modify root `Cargo.toml` (add member); create `services/gateway/Cargo.toml`, `.env.example`, `src/main.rs`, `src/state.rs`, `src/routes/health.rs`, `src/routes/mod.rs`.
 
-- [ ] **Step 1:** add `"services/gateway"` to the root `Cargo.toml` `[workspace] members`.
-- [ ] **Step 2:** `services/gateway/Cargo.toml` — deps: `axum = { version = "0.8", features = ["json"] }`, `tokio = { version = "1", features = ["full"] }`, `tokio-stream = { version = "0.1", features = ["sync"] }`, `tower-http = { version = "0.6", features = ["cors", "trace"] }`, `sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uuid", "json"] }`, `jsonwebtoken = "9"`, `serde`/`serde_json`, `chrono`, `uuid`, `anyhow`/`thiserror`, `tracing`/`tracing-subscriber`, `dotenvy`, and `gateway = { git = "https://github.com/sensei-hq/gateway" }` (root `[patch]` redirects to `../gateway`). Register the crate's 15 cloud adapters (check the gateway crate for an `AdapterRegistry::with_defaults()` or register each).
+- [ ] **Step 1 (MIG-1):** add `"services/gateway"` to the root `Cargo.toml` `[workspace] members`. **Fix the root `[patch]`** — it currently keys `gateway`/`gateway-embedded` (neither package exists; patch keys must be the real *package* names). Repin to the actual `sensei-*` packages at `../gateway/crates/*`:
+  ```toml
+  [patch."https://github.com/sensei-hq/gateway"]
+  sensei-gateway         = { path = "../gateway/crates/gateway" }
+  sensei-kernel          = { path = "../gateway/crates/kernel" }
+  sensei-cloud-providers = { path = "../gateway/crates/cloud-providers" }
+  # sensei-local-engine / sensei-local-providers are the P1b/D2 local path — patch only if depended on
+  ```
+  Confirm `cargo metadata`/`cargo check` resolves the patch (roadmap P0 gate).
+- [ ] **Step 2 (MIG-3):** `services/gateway/Cargo.toml` — deps: `axum = { version = "0.8", features = ["json"] }`, `tokio = { version = "1", features = ["full"] }`, `tokio-stream = { version = "0.1", features = ["sync"] }`, `tower-http = { version = "0.6", features = ["cors", "trace"] }`, `sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uuid", "json"] }`, `jsonwebtoken = "9"`, `reqwest = { version = "0.12", features = ["json"] }` (JWKS fetch), `serde`/`serde_json`, `chrono`, `uuid`, `anyhow`/`thiserror`, `tracing`/`tracing-subscriber`, `dotenvy`, and `sensei-gateway = { git = "https://github.com/sensei-hq/gateway", tag = "v0.4.6" }` (root `[patch]` redirects to `../gateway/crates/gateway`; imported as `gateway::` via its `[lib] name = "gateway"`). Enable `sensei-gateway`'s cloud-providers feature (or add `sensei-cloud-providers` directly, imported as `cloud_providers`). Drop any `gateway-embedded` dep — **it does not exist**.
 - [ ] **Step 3:** `src/state.rs` — `pub struct AppState { pub pool: sqlx::PgPool, pub gateway: std::sync::Arc<gateway::Gateway> }` (+ `type SharedState = Arc<AppState>` if preferred).
-- [ ] **Step 4:** `src/main.rs` — load `.env` (dotenvy), init tracing, read `DATABASE_URL`/`PORT`/`SUPABASE_JWT_SECRET`, connect the pool (`PgPoolOptions::new().max_connections(10).connect(&url)`), build the gateway (Task 4 wires config; for Step 4 use an empty/`is_configured()==false` config so it boots), assemble the Router (Task 7 adds routes; for now just `/health`), CORS (explicit methods), `.with_state`, `axum::serve` on `127.0.0.1:PORT` (default 8787).
+- [ ] **Step 4 (MIG-2 · adapter registration):** `src/main.rs` — load `.env` (dotenvy), init tracing, read `DATABASE_URL`/`PORT`/`SUPABASE_JWKS_URL` (+ `STRATEGOS_KEK` local-dev), connect the pool (`PgPoolOptions::new().max_connections(10).connect(&url)`). Build the `AdapterRegistry` the **v0.4.6** way: `let reg = kernel::adapters::AdapterRegistry::new();` then `reg.register(std::sync::Arc::new(cloud_providers::AnthropicAdapter::new(...))).await;` per cloud adapter (each impls `kernel::adapters::RegisterInto`; capability traits `ChatModel`/`EmbedModel`/… are on the target *model*, per DECISIONS §3). **There is no `InferenceAdapter` and no `AdapterRegistry::with_defaults()`** — verify the exact adapter constructors against `sensei-cloud-providers/src/lib.rs` at file time. Build the gateway (Task 4 wires config; for Step 4 use an empty/`is_configured()==false` config so it boots) via `gateway::Gateway::new(config, reg, circuit_breaker)`, assemble the Router (Task 7 adds routes; for now just `/health`), CORS (explicit methods), `.with_state`, `axum::serve` on `127.0.0.1:PORT` (default 8787).
 - [ ] **Step 5:** `src/routes/health.rs` — `GET /health` → `Json(json!({ "status": "ok" }))`.
-- [ ] **Step 6 (CONTROLLER, background):** `cargo build -p strategos-gateway` (or the crate name) — compiles (first build pulls axum/sqlx/aws-sdk — minutes). Then `cargo run` + `curl 127.0.0.1:8787/health` → `{"status":"ok"}`. Report.
+- [ ] **Step 6 (CONTROLLER, background):** `cargo build -p <services/gateway crate name>` — compiles (first build pulls axum/sqlx/aws-sdk + the six `sensei-*` crates — minutes). Then `cargo run` + `curl 127.0.0.1:8787/health` → `{"status":"ok"}`. Report.
 - [ ] **Step 7:** commit — `feat(c1): scaffold central gateway service (axum + pool + health)`.
 
 ---
@@ -133,10 +149,10 @@ monorepo/
 
 **Files:** create `services/gateway/src/auth.rs`.
 
-- [ ] **Step 1:** `pub struct Claims { pub sub: String, pub tenant_id: Option<Uuid>, pub role: Option<String>, pub exp: usize, .. }` (matches the `custom_access_token_hook` claims: `tenant_id`, `role`, `groups`).
-- [ ] **Step 2:** a tower/axum middleware (`async fn require_auth(headers, request, next)` or a `FromRequestParts` extractor) that reads `Authorization: Bearer <jwt>`, validates with `jsonwebtoken::decode::<Claims>(token, &DecodingKey::from_secret(SUPABASE_JWT_SECRET), &Validation::new(Algorithm::HS256))` (set the expected `aud` = `authenticated`), and on success attaches `Claims` to request extensions; 401 otherwise. (If the project is RS256/JWKS, fetch + cache the JWKS instead — detect from a decoded header `alg`.)
+- [ ] **Step 1:** `pub struct Claims { pub sub: String, pub tenant_id: Option<Uuid>, pub role: Option<String>, pub exp: usize, .. }` (matches the `custom_access_token_hook` claims: `tenant_id`, `role`).
+- [ ] **Step 2:** a tower/axum middleware (`async fn require_auth(headers, request, next)` or a `FromRequestParts` extractor) that reads `Authorization: Bearer <jwt>`, decodes the token header for its `kid`, fetches + caches the project JWKS (via `reqwest` from `SUPABASE_JWKS_URL`, keyed by `kid`; refetch on cache-miss), builds an **RS256** `DecodingKey` from the matching JWK, and validates with `jsonwebtoken::decode::<Claims>(token, &decoding_key, &Validation::new(Algorithm::RS256))` (set the expected `aud` = `authenticated`); on success attaches `Claims` to request extensions; 401 otherwise. **RS256/JWKS is the only path — there is no shared HS256 secret (DECISIONS §2 W3).**
 - [ ] **Step 3:** apply the middleware to the `/v1/*` routes (not `/health`).
-- [ ] **Step 4:** a unit test that a token signed with the test secret validates + extracts `tenant_id`, and a bad token 401s. (Controller builds/tests.)
+- [ ] **Step 4:** a unit test that mints an **RS256** token signed with a test RSA private key (its public JWK served via a stub JWKS the middleware fetches) validates + extracts `tenant_id`, and a bad token 401s. (Controller builds/tests.)
 - [ ] **Step 5:** commit — `feat(c1): Supabase JWT auth middleware (tenant/role claims)`.
 
 ---
@@ -156,7 +172,7 @@ monorepo/
 
 ## Task 8: end-to-end acceptance (a real cloud call)
 
-- [ ] **Step 1 (CONTROLLER):** with `.env` (DATABASE_URL, SUPABASE_JWT_SECRET, provider keys) present and `dbd import` having seeded routers/models, run C1 (`cargo run -p …`, background). Mint a test JWT signed with `SUPABASE_JWT_SECRET` carrying a real `tenant_id` (from the seeded tenants) + `role`, and `curl -sS -X POST 127.0.0.1:8787/v1/chat -H "Authorization: Bearer <jwt>" -H 'content-type: application/json' -d '{"messages":[{"role":"user","content":"Reply with the single word: hello"}],"chain":"..."}'`. Expect a **real cloud answer** (one small paid Anthropic/OpenAI call) and a new row in `inference_calls` (verify via `psql`/dbd). Record the answer + the persisted row.
+- [ ] **Step 1 (CONTROLLER):** with `.env` (DATABASE_URL, SUPABASE_JWKS_URL, provider keys) present and `dbd import` having seeded routers/models, run C1 (`cargo run -p …`, background). Mint a test JWT **RS256-signed with a test RSA key whose public JWK the running C1 can fetch** (point `SUPABASE_JWKS_URL` at a local stub JWKS for the test) carrying a real `tenant_id` (from the seeded tenants) + `role`, and `curl -sS -X POST 127.0.0.1:8787/v1/chat -H "Authorization: Bearer <jwt>" -H 'content-type: application/json' -d '{"messages":[{"role":"user","content":"Reply with the single word: hello"}],"chain":"..."}'`. Expect a **real cloud answer** (one small paid Anthropic/OpenAI call) and a new row in `inference_calls` (verify via `psql`/dbd). Record the answer + the persisted row.
 - [ ] **Step 2:** an integration test script under `services/gateway/tests/` (or documented in the README) capturing the curl + expected shape. Keep the live-call test `#[ignore]`/opt-in (it costs money + needs secrets).
 - [ ] **Step 3:** confirm the provider key never appears in the response/logs.
 
@@ -174,5 +190,5 @@ monorepo/
 ## Self-review notes (author)
 - **Spec coverage** (C1 module + blueprint §8 Phase 2, service half): Axum service (Task 1), ledger tables (Task 2), GatewayStore (Task 3), config-from-Postgres (Task 4), key injection (Task 5), JWT auth (Task 6), `/v1/chat`+SSE (Task 7), real-cloud E2E (Task 8). **The desktop split-plane router + config sync (D3/D4) are Phase 2b.**
 - **Deferred (flagged):** F3 vault AES-GCM decryption (env keys used); budgets/guardrails enforcement (C3/C4 — the store enables spend queries but enforcement is later); multi-region; container deploy; `/v1/{embed,generate,compare}` (chat first).
-- **Biggest risks:** (a) the Supabase JWT secret/alg (HS256 vs RS256/JWKS) — confirm before Task 6; (b) the F1 seed actually populating routers/models so config assembly is non-empty (`dbd import`); (c) `gateway::GatewayStore` exact signature (read `store.rs`); (d) whether the engine's `stream()` works for the cloud adapters (SSE best-effort).
+- **Biggest risks:** (a) the F1 seed actually populating routers/models so config assembly is non-empty (`dbd import`); (b) `gateway::GatewayStore` exact signature (read `store.rs`); (c) whether the engine's `stream()` works for the cloud adapters (SSE best-effort).
 - **Type consistency:** `Claims.tenant_id` (Task 6) flows into `PgGatewayStore { tenant_id }` (Task 3) + the chat handler (Task 7). `RouterConfig.api_key_env` (Task 4) feeds the env resolver (Task 5).

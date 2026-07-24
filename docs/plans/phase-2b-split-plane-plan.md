@@ -1,6 +1,6 @@
 ---
 title: 'Phase 2b · Desktop split-plane router (D3) — implementation plan'
-description: Make the desktop Ask answer via the local plane (in-process gateway-embedded) OR the cloud plane (proxy to the C1 service with the Supabase JWT), chosen by a plane selector, with an accurate per-answer ExecBadge. Config sync (D4) + offline buffer are a separate follow-up.
+description: Make the desktop Ask answer via the local plane (in-process embedded engine — `sensei-local-providers` `EmbeddedLlamaAdapter`, no daemon) OR the cloud plane (proxy to the C1 service with the Supabase JWT), chosen by a plane selector, with an accurate per-answer ExecBadge. Config sync (D4) + offline buffer are a separate follow-up.
 type: plan
 status: plan
 created: 2026-07-07
@@ -16,9 +16,11 @@ milestone: Phase-2b
 
 # Phase 2b · Desktop split-plane router (D3) — Implementation Plan
 
+> **Reconciled to [`../DECISIONS.md`](../DECISIONS.md) + [`roadmap.md`](roadmap.md) 2026-07-23 (P2b).** Engine = six `sensei-*` crates @ `v0.4.6`; the local leg is the **in-process `EmbeddedLlamaAdapter`** (`sensei-local-providers`, no daemon), **not** `gateway-embedded` (retired). **Prerequisite: GH-1** (per-step `plane` + execution-location on `ChainEntry`/`Attempt`/`ExecutionTrace`) must be filed + released before the unified per-step ExecBadge is accurate — see [`gateway-issues.md`](gateway-issues.md). Apply MIG-4 crate wording. Full D3/D4 mature in the device-plane completion phase (P10).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. `.svelte` → the **svelte** skill; named Rokkit tokens only. eslint + prettier enforced. **Heavy Tauri E2E builds run via a BACKGROUND shell (controller), not a subagent** (watchdog). Serialize `apps/desktop` implementers (they cross-stage in `git add`).
 
-**Goal:** In the desktop Ask, a user can pick **Local** (answer runs in-process via `gateway-embedded`, `ExecBadge` "on your device", $0) or **Cloud** (the desktop proxies the request to the **C1** service `POST /v1/chat` with the user's Supabase JWT; `ExecBadge` "via gateway"). One Ask UI, two planes, correct per-answer badge — the split-plane in action.
+**Goal:** In the desktop Ask, a user can pick **Local** (answer runs in-process via the embedded engine `EmbeddedLlamaAdapter`, `ExecBadge` "on your device", $0) or **Cloud** (the desktop proxies the request to the **C1** service `POST /v1/chat` with the user's Supabase JWT; `ExecBadge` "via gateway"). One Ask UI, two planes, correct per-answer badge — the split-plane in action.
 
 **Architecture:** Extend Phase 1b. Add a **cloud leg**: `src/lib/cloud.ts` POSTs to C1 (`PUBLIC_GATEWAY_URL`, default `http://127.0.0.1:8787`) `/v1/chat` with `Authorization: Bearer <session.accessToken>`; maps C1's `ChatResponse` → the same `InferResult` shape the local leg returns. A **split-plane router** (`src/lib/plane.ts`) picks the leg from a `plane` state (`local` | `cloud`) and tags the turn's `exec.plane`. The `ask` store calls the router instead of the local `gateway.infer` directly. The Ask UI gains a Local/Cloud toggle and shows the real plane in `ExecBadge`. **Provider keys never touch the desktop** — cloud inference is C1's job.
 
@@ -109,8 +111,8 @@ import { cloudInfer } from './cloud'
 
 export type Plane = 'local' | 'cloud'
 
-// The split-plane router: pick the execution plane. Local → in-process gateway-embedded
-// (Tauri IPC); Cloud → proxy to the C1 service. Returns a plane-tagged InferResult.
+// The split-plane router: pick the execution plane. Local → in-process embedded engine
+// (EmbeddedLlamaAdapter, Tauri IPC); Cloud → proxy to the C1 service. Returns a plane-tagged InferResult.
 export async function route(messages: ChatMessage[], plane: Plane): Promise<InferResult> {
   if (plane === 'cloud') return cloudInfer(messages)
   const res = await gateway.infer(messages)

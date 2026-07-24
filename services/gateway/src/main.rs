@@ -213,6 +213,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/budgets/upsert-node", post(routes::rpc::budgets_upsert_node))
         .route("/budgets/approve-request", post(routes::rpc::budgets_approve_request))
         .route("/rbac/assign-role", post(routes::rpc::rbac_assign_role))
+        .route("/governance/set-feature", post(routes::rpc::governance_set_feature))
+        .route("/spaces/create", post(routes::rpc::spaces_create))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::require_auth,

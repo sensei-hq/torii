@@ -190,6 +190,86 @@ pub async fn rbac_assign_role(
     (StatusCode::OK, Json(json!({ "assigned": body.role_id }))).into_response()
 }
 
+#[derive(Deserialize)]
+pub struct SetFeature {
+    pub feature_key: String,
+    pub scope_type: String, // workspace | space | role
+    pub scope_id: Option<Uuid>,
+    pub state: String, // locked | default-on | default-off | user-overridable
+}
+
+/// `POST /rpc/governance/set-feature` — capability `feature.manage`. Upserts the
+/// 4-state feature-governance policy for a feature × scope (RW6).
+pub async fn governance_set_feature(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<SetFeature>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "feature.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let write = sqlx::query(
+        "insert into public.feature_policies \
+           (tenant_id, feature_key, scope_type, scope_id, state, modified_by) \
+         values ($1,$2,$3,$4,$5,$6) \
+         on conflict (tenant_id, feature_key, scope_type, scope_id) \
+         do update set state = excluded.state, modified_by = excluded.modified_by, modified_at = now()",
+    )
+    .bind(tenant)
+    .bind(&body.feature_key)
+    .bind(&body.scope_type)
+    .bind(body.scope_id)
+    .bind(&body.state)
+    .bind(actor.to_string())
+    .execute(&state.pool)
+    .await;
+    if let Err(e) = write {
+        tracing::error!("set-feature: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+    audit(&state, tenant, actor, "governance.feature.set", "feature_policy", None).await;
+    (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct CreateSpace {
+    pub name: String,
+    pub classification: Option<String>,
+}
+
+/// `POST /rpc/spaces/create` — capability `space.create`. Creates a space owned
+/// by the caller.
+pub async fn spaces_create(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<CreateSpace>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "space.create").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let id = Uuid::new_v4();
+    let write = sqlx::query(
+        "insert into public.spaces (tenant_id, id, name, classification, owner_id, modified_by) \
+         values ($1,$2,$3, coalesce($4,'confidential'), $5, $6)",
+    )
+    .bind(tenant)
+    .bind(id)
+    .bind(&body.name)
+    .bind(&body.classification)
+    .bind(actor)
+    .bind(actor.to_string())
+    .execute(&state.pool)
+    .await;
+    if let Err(e) = write {
+        tracing::error!("spaces_create: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+    audit(&state, tenant, actor, "space.created", "space", Some(id)).await;
+    (StatusCode::OK, Json(json!({ "id": id }))).into_response()
+}
+
 /// Actor-bound audit helper (matches the RW8 with-check: actor_id = auth.uid()).
 async fn audit(
     state: &SharedState,

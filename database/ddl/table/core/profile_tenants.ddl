@@ -1,11 +1,15 @@
 -- database/ddl/table/core/profile_tenants.ddl
 set search_path to core, extensions;
 
+-- RW2: the built `role` enum is REMOVED (no authz reads it). This survives only
+-- as the user↔tenant membership row; RBAC now lives in roles/role_permissions/
+-- profile_roles. `active` flags the caller's active tenant for the JWT claim.
 create table if not exists profile_tenants (
-  profile_id   uuid        primary key
+  profile_id   uuid        primary key references profiles(id) on delete cascade
 , tenant_id    uuid        not null references tenants(id) on delete restrict
-, role         text        not null default 'member'
-    check (role in ('owner', 'admin', 'editor', 'viewer', 'member', 'service'))
+, status       varchar     not null default 'active'
+    check (status in ('active', 'suspended'))
+, active       boolean     not null default true
 , assigned_at  timestamptz not null default now()
 , assigned_by  varchar     not null
 );
@@ -14,9 +18,8 @@ create index if not exists idx_profile_tenants_tenant
   on profile_tenants(tenant_id);
 
 comment on table profile_tenants is
-'Maps user profiles to their tenant. One row per profile (a profile belongs to
-exactly one tenant).
-- profile_id: Supabase auth.users.id
-- assigned_by: ''domain_trigger'' when set automatically, or user/service account
-- role: tenant-level RBAC (owner/admin/editor/viewer/member/service); injected into the JWT by custom_access_token_hook
-- ON DELETE RESTRICT on tenant_id: cannot delete a tenant that has assigned users';
+'Maps user profiles to their tenant (one row per profile). RW2: the role enum is
+REMOVED — RBAC is the roles/role_permissions/profile_roles matrix (decision #4).
+- profile_id: FK core.profiles(id) (= auth.users.id)
+- active: the caller''s active tenant (single-valued tenant_id JWT claim)
+- assigned_by: ''domain_trigger'' when auto-assigned, else a user/service account';

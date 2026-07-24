@@ -1,16 +1,27 @@
 -- RLS · auth-admin read access for the access-token hook
 -- custom_access_token_hook runs as supabase_auth_admin (does NOT bypass RLS), so
 -- it needs explicit read access to the tables it consults during token issuance.
+-- RW2: it now reads profile_tenants (active membership) + profile_roles (role_ids)
+-- + profiles (claims_version). The group-ACL (profile_groups) is retired (RW9).
 
-grant usage on schema core, public to supabase_auth_admin;
-grant select on core.profile_tenants, public.profile_groups to supabase_auth_admin;
+grant usage on schema core to supabase_auth_admin;
+grant select on core.profile_tenants, core.profile_roles, core.profiles
+  to supabase_auth_admin;
 
-alter table core.profile_tenants enable row level security;
-drop policy if exists profile_tenants_auth_admin on core.profile_tenants;
-create policy profile_tenants_auth_admin on core.profile_tenants
-  for select to supabase_auth_admin using (true);
-
-alter table public.profile_groups enable row level security;
-drop policy if exists profile_groups_auth_admin on public.profile_groups;
-create policy profile_groups_auth_admin on public.profile_groups
-  for select to supabase_auth_admin using (true);
+do $$
+declare r record;
+begin
+  for r in select * from (values
+    ('core', 'profile_tenants'),
+    ('core', 'profile_roles'),
+    ('core', 'profiles')
+  ) as x(sch, tbl)
+  loop
+    execute format('alter table %I.%I enable row level security', r.sch, r.tbl);
+    execute format('drop policy if exists %I on %I.%I', r.tbl || '_auth_admin', r.sch, r.tbl);
+    execute format(
+      'create policy %I on %I.%I for select to supabase_auth_admin using (true)',
+      r.tbl || '_auth_admin', r.sch, r.tbl
+    );
+  end loop;
+end $$;

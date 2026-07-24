@@ -1,7 +1,11 @@
 set search_path to public, extensions;
 
+-- RW9/RW10: 1024-dim embeddings (was 384), and the group-ACL branch is retired.
+-- Doc access is space + fixed 4-level classification only: for an authenticated
+-- caller the joins are RLS-filtered (knowledge.sql); for the service_role gateway
+-- the explicit p_tenant_id filter scopes results. user-scoped docs → owner only.
 create or replace function similarity_search(
-  query_embedding   vector(384),
+  query_embedding   vector(1024),
   match_threshold   float    default 0.3,
   match_count       int      default 5,
   scope_filter      text[]   default null,
@@ -39,14 +43,8 @@ language sql stable as $$
     and (p_tenant_id is null or d.tenant_id = p_tenant_id or d.scope = 'system')
     and (
       p_profile_id is null
-      or d.profile_id = p_profile_id
       or d.scope != 'user'
-      or exists (
-        select 1 from user_accessible_documents uad
-        where uad.document_id = d.id
-          and uad.profile_id  = p_profile_id
-          and uad.tenant_id   = p_tenant_id
-      )
+      or d.profile_id = p_profile_id
     )
     and 1 - (de.embedding <=> query_embedding) > match_threshold
   order by de.embedding <=> query_embedding
@@ -54,9 +52,9 @@ language sql stable as $$
 $$;
 
 comment on function similarity_search is
-'Scope-filtered cosine similarity search over document embeddings.
-- p_organization_id renamed to p_tenant_id
-- tenant_id guard ensures cross-tenant data is never returned
-- Group-based access: when p_profile_id is provided, also returns documents
-  accessible to the user via user_accessible_documents (group inheritance)
-- Returns results ordered by similarity (highest first)';
+'RW9/RW10: 1024-dim cosine similarity search over document_embeddings.
+- vector(1024) matches document_embeddings.embedding.
+- tenant_id guard ensures cross-tenant data is never returned.
+- Access = space + fixed 4-level classification (documents RLS for authenticated
+  callers; explicit p_tenant_id for the service_role gateway). Group-ACL retired.
+- Results ordered by similarity (highest first).';

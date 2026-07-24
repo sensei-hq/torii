@@ -142,7 +142,13 @@ async fn reserve_budget(
         .map_err(|e| match e {
             crate::budgets::BudgetError::Exceeded => (
                 StatusCode::PAYMENT_REQUIRED,
-                "budget exceeded — hard cap reached".to_string(),
+                // structured so a client can POST /rpc/budgets/request with the node.
+                serde_json::json!({
+                    "error": "budget exceeded — hard cap reached",
+                    "code": "budget_exceeded",
+                    "budget_node_id": node
+                })
+                .to_string(),
             ),
             crate::budgets::BudgetError::Db(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
             crate::budgets::BudgetError::NoNode => {

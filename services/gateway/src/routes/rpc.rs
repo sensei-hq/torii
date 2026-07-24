@@ -110,6 +110,59 @@ pub async fn budgets_upsert_node(
 }
 
 #[derive(Deserialize)]
+pub struct BudgetIncreaseRequest {
+    pub node_id: Uuid,
+    pub requested_cap: f64,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `POST /rpc/budgets/request` — capability `budget.request`. A caller asks to raise
+/// the cap on a budget node (typically their own leaf, after a 402). Records a
+/// **pending** `budget_requests` row for an admin to approve via
+/// `/budgets/approve-request`; it changes no cap itself. Non-privileged relative to
+/// `budget.write`, so members/editors hold it while only admins/owners approve.
+pub async fn budgets_request(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<BudgetIncreaseRequest>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "budget.request").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    // Insert only if the node exists in the caller's tenant (else 404) — no
+    // cross-tenant request, and no cap change here (admin approval does that).
+    let inserted: Result<Option<Uuid>, _> = sqlx::query_scalar(
+        "insert into public.budget_requests \
+           (tenant_id, node_id, requested_by, requested_cap, reason, status) \
+         select $1, $2, $3, $4::numeric, $5, 'pending' \
+          where exists (select 1 from public.budget_nodes b where b.tenant_id = $1 and b.id = $2) \
+         returning id",
+    )
+    .bind(tenant)
+    .bind(body.node_id)
+    .bind(actor)
+    .bind(body.requested_cap)
+    .bind(&body.reason)
+    .fetch_optional(&state.pool)
+    .await;
+
+    match inserted {
+        Ok(Some(id)) => {
+            audit(&state, tenant, actor, "budget.request.submitted", "budget_request", Some(id)).await;
+            (StatusCode::OK, Json(json!({ "id": id, "status": "pending" }))).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "budget node not found in tenant").into_response(),
+        Err(e) => {
+            tracing::error!("budgets_request: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
 pub struct ApproveRequest {
     pub id: Uuid,
 }

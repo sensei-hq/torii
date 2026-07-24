@@ -212,6 +212,7 @@ async fn main() -> anyhow::Result<()> {
     // runs the claims-version freshness gate server-side.
     let rpc = Router::new()
         .route("/budgets/upsert-node", post(routes::rpc::budgets_upsert_node))
+        .route("/budgets/request", post(routes::rpc::budgets_request))
         .route("/budgets/approve-request", post(routes::rpc::budgets_approve_request))
         .route("/rbac/assign-role", post(routes::rpc::rbac_assign_role))
         .route("/governance/set-feature", post(routes::rpc::governance_set_feature))

@@ -8,6 +8,7 @@ set search_path to core, public, extensions;
 insert into core.capabilities (key, domain, description) values
   ('budget.read','budget','View budgets and spend'),
   ('budget.write','budget','Create/edit budget nodes; approve requests'),
+  ('budget.request','budget','Request a budget increase on an attributed node'),
   ('chain.read','routing','View chains/bindings/policies'),
   ('chain.write','routing','Create/edit chains, bindings, routing policy'),
   ('connection.manage','credentials','Connect/rotate/revoke provider credentials'),
@@ -69,7 +70,8 @@ begin
     insert into core.role_permissions (tenant_id, role_id, capability) values
       (t.id,r_editor,'doc.read'),(t.id,r_editor,'doc.write'),(t.id,r_editor,'doc.delete'),
       (t.id,r_editor,'space.create'),(t.id,r_editor,'space.join'),(t.id,r_editor,'budget.read'),
-      (t.id,r_editor,'chain.read'),(t.id,r_editor,'analytics.read'),(t.id,r_editor,'dataset.manage')
+      (t.id,r_editor,'chain.read'),(t.id,r_editor,'analytics.read'),(t.id,r_editor,'dataset.manage'),
+      (t.id,r_editor,'budget.request')
     on conflict do nothing;
 
     -- viewer: read-only
@@ -81,7 +83,7 @@ begin
     -- member: basic use
     insert into core.role_permissions (tenant_id, role_id, capability) values
       (t.id,r_member,'doc.read'),(t.id,r_member,'doc.write'),(t.id,r_member,'space.join'),
-      (t.id,r_member,'budget.read')
+      (t.id,r_member,'budget.read'),(t.id,r_member,'budget.request')
     on conflict do nothing;
 
     -- service: programmatic inference (read + doc read); no admin caps

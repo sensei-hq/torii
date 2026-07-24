@@ -20,6 +20,7 @@ use gateway::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerManager};
 use gateway::Gateway;
 
 mod auth;
+mod budgets;  // C3: budget-node resolution + hard reserve→commit on the inference hot path
 mod capabilities;  // F2: server-side capability resolution + claims-version gate
 mod config_loader;
 mod crypto;   // F3: DEK/KEK envelope crypto

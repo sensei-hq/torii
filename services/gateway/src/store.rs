@@ -82,12 +82,14 @@ impl GatewayStore for PgGatewayStore {
                 (tenant_id, id, session_id, project_id, capability, chain_id,
                  adapter, model, api_model_id,
                  input_tokens, output_tokens, cost_usd, duration_ms,
-                 status, error_type, fallback_sequence, recorded_at)
+                 status, error_type, fallback_sequence, recorded_at,
+                 budget_node_id)
             VALUES
                 ($1, $2, $3, $4, $5, $6,
                  $7, $8, $9,
                  $10, $11, $12, $13,
-                 $14, $15, $16, $17)
+                 $14, $15, $16, $17,
+                 $18)
             "#,
         )
         .bind(self.tenant_id)
@@ -107,6 +109,9 @@ impl GatewayStore for PgGatewayStore {
         .bind(&call.error_type)
         .bind(fallback_sequence)
         .bind(call.recorded_at)
+        // C3: subject_id carries the resolved budget node → inference_calls.budget_node_id
+        // (the spec's `subject_id := budget_node_id`), so node usage is queryable.
+        .bind(call.subject_id)
         .execute(&self.pool)
         .await
         .map_err(db_err)?;

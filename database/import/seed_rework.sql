@@ -88,5 +88,15 @@ begin
     insert into core.role_permissions (tenant_id, role_id, capability) values
       (t.id,r_service,'doc.read'),(t.id,r_service,'budget.read')
     on conflict do nothing;
+
+    -- C3: default org budget node (the tenant-root budget; unlimited cap → always
+    -- headroom). The C1 hot-path resolves budgets fail-closed, so every tenant needs
+    -- at least this root or all inference is denied; admins add capped children
+    -- (dept/team/user) via /rpc/budgets/upsert-node. Idempotent (one root per tenant).
+    insert into public.budget_nodes (tenant_id, kind, name, cap_amount, enforcement, modified_by)
+    select t.id, 'org', 'Organization', null, 'hard', 'seed'
+    where not exists (
+      select 1 from public.budget_nodes b where b.tenant_id = t.id and b.parent_id is null
+    );
   end loop;
 end $$;

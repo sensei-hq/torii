@@ -107,6 +107,52 @@ fn build_inference_request(req: &ChatRequest) -> InferenceRequest {
     }
 }
 
+/// C3 hot-path preamble: resolve the caller's budget node and hard-reserve a
+/// worst-case estimate BEFORE inference. **Fail-closed** — a token with no tenant,
+/// a caller with no resolvable node, or an over-cap `hard` node is denied (402).
+/// Returns `(tenant, node, hold)` for the commit/release at the end of the call.
+async fn reserve_budget(
+    state: &SharedState,
+    claims: &Claims,
+    max_tokens: u32,
+) -> Result<(Uuid, Uuid, Uuid), (StatusCode, String)> {
+    let tenant = claims.tenant_id.ok_or((
+        StatusCode::PAYMENT_REQUIRED,
+        "budgeted access required: token carries no tenant".to_string(),
+    ))?;
+    let subject = Uuid::parse_str(&claims.sub)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid subject in token".to_string()))?;
+
+    let node = crate::budgets::resolve_node(&state.pool, tenant, subject)
+        .await
+        .map_err(|e| match e {
+            crate::budgets::BudgetError::NoNode => (
+                StatusCode::PAYMENT_REQUIRED,
+                "no budget node for caller — access denied".to_string(),
+            ),
+            crate::budgets::BudgetError::Db(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+            crate::budgets::BudgetError::Exceeded => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "budget error".to_string())
+            }
+        })?;
+
+    let est = crate::budgets::estimate(max_tokens);
+    let hold = crate::budgets::reserve(&state.pool, tenant, node, est, None)
+        .await
+        .map_err(|e| match e {
+            crate::budgets::BudgetError::Exceeded => (
+                StatusCode::PAYMENT_REQUIRED,
+                "budget exceeded — hard cap reached".to_string(),
+            ),
+            crate::budgets::BudgetError::Db(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+            crate::budgets::BudgetError::NoNode => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "budget error".to_string())
+            }
+        })?;
+
+    Ok((tenant, node, hold))
+}
+
 // ---------------------------------------------------------------------------
 // POST /v1/chat
 // ---------------------------------------------------------------------------
@@ -117,14 +163,23 @@ pub async fn post_chat(
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, String)> {
     let ireq = build_inference_request(&req);
+    let max_tokens = req.max_tokens.unwrap_or(1024);
+
+    // C3: resolve the caller's budget node + hard reserve BEFORE inference (fail-closed).
+    let (tenant, node, hold) = reserve_budget(&state, &claims, max_tokens).await?;
 
     let start = Instant::now();
-    let resp = state
-        .gateway
-        .execute(&ireq)
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    let exec = state.gateway.execute(&ireq).await;
     let duration_ms = start.elapsed().as_millis() as u64;
+
+    let resp = match exec {
+        Ok(r) => r,
+        Err(e) => {
+            // inference failed — release the hold so no headroom is consumed.
+            let _ = crate::budgets::release(&state.pool, tenant, hold).await;
+            return Err((StatusCode::BAD_GATEWAY, e.to_string()));
+        }
+    };
 
     // --- Map response ---
     let content = resp.content.clone().unwrap_or_default();
@@ -138,6 +193,11 @@ pub async fn post_chat(
     let input_tokens = resp.usage.as_ref().map(|u| u.input_tokens);
     let output_tokens = resp.usage.as_ref().map(|u| u.output_tokens);
 
+    // C3: commit the actual spend against the reserved hold (releases the surplus).
+    if let Err(e) = crate::budgets::commit(&state.pool, tenant, hold, cost_usd).await {
+        tracing::warn!("chat: budget commit failed (spend not recorded on node): {}", e);
+    }
+
     let chat_response = ChatResponse {
         content,
         model: model.clone(),
@@ -146,8 +206,8 @@ pub async fn post_chat(
         output_tokens,
     };
 
-    // --- Persist (best-effort) ---
-    if let Some(tid) = claims.tenant_id {
+    // --- Persist (best-effort) — tenant is known (reserve_budget errored otherwise) ---
+    {
         let successful_attempt = resp.attempts.last();
         let adapter = successful_attempt
             .map(|a| a.adapter.clone())
@@ -158,7 +218,7 @@ pub async fn post_chat(
             id: Uuid::new_v4(),
             session_id: None,
             project_id: None,
-            subject_id: None, // MIG-2: budget/quota attribution — set by C3 in the rework
+            subject_id: Some(node), // C3: metered against the resolved budget node
             tier: None,
             capability: Capability::TextChat,
             chain_id: req.chain.clone(),
@@ -181,14 +241,12 @@ pub async fn post_chat(
 
         let store = PgGatewayStore {
             pool: state.pool.clone(),
-            tenant_id: tid,
+            tenant_id: tenant,
         };
 
         if let Err(e) = store.insert_inference_call(&call).await {
             tracing::warn!("chat: persist inference_call failed (best-effort): {}", e);
         }
-    } else {
-        tracing::debug!("chat: no tenant_id in claims — skipping persist");
     }
 
     Ok(Json(chat_response))
@@ -215,6 +273,25 @@ pub async fn post_chat_stream(
     Json(req): Json<ChatRequest>,
 ) -> Response {
     let ireq = build_inference_request(&req);
+    let max_tokens = req.max_tokens.unwrap_or(1024);
+
+    // C3: resolve budget node + hard reserve BEFORE streaming (fail-closed). A denied
+    // caller gets a synchronous JSON error — the stream is never opened (no bypass).
+    let (tenant, node, hold) = match reserve_budget(&state, &claims, max_tokens).await {
+        Ok(v) => v,
+        Err((code, msg)) => {
+            return Response::builder()
+                .status(code)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::json!({ "error": msg }).to_string()))
+                .unwrap_or_else(|_| {
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Body::empty())
+                        .unwrap()
+                });
+        }
+    };
 
     // Channel that carries SSE-formatted lines as raw bytes.
     let (tx, rx) = mpsc::channel::<Result<Vec<u8>, std::convert::Infallible>>(32);
@@ -248,8 +325,13 @@ pub async fn post_chat_stream(
                 });
                 let _ = tx.send(Ok(sse_data(&done_chunk))).await;
 
-                // Best-effort persist (mirror of post_chat)
-                if let Some(tid) = claims.tenant_id {
+                // C3: commit the actual spend against the reserved hold.
+                if let Err(e) = crate::budgets::commit(&state.pool, tenant, hold, cost_usd).await {
+                    tracing::warn!("chat/stream: budget commit failed: {}", e);
+                }
+
+                // Best-effort persist (mirror of post_chat) — tenant known via reserve.
+                {
                     let duration_ms = start.elapsed().as_millis() as u64;
                     let successful_attempt = resp.attempts.last();
                     let adapter = successful_attempt
@@ -261,7 +343,7 @@ pub async fn post_chat_stream(
                         id: Uuid::new_v4(),
                         session_id: None,
                         project_id: None,
-                        subject_id: None, // MIG-2: budget/quota attribution — set by C3 in the rework
+                        subject_id: Some(node), // C3: metered against the resolved budget node
                         tier: None,
                         capability: Capability::TextChat,
                         chain_id: req.chain.clone(),
@@ -278,13 +360,15 @@ pub async fn post_chat_stream(
                         recorded_at: Utc::now(),
                     };
 
-                    let store = PgGatewayStore { pool: state.pool.clone(), tenant_id: tid };
+                    let store = PgGatewayStore { pool: state.pool.clone(), tenant_id: tenant };
                     if let Err(e) = store.insert_inference_call(&call).await {
                         tracing::warn!("chat/stream: persist failed (best-effort): {}", e);
                     }
                 }
             }
             Err(e) => {
+                // inference failed — release the hold (no spend).
+                let _ = crate::budgets::release(&state.pool, tenant, hold).await;
                 tracing::error!("chat/stream: gateway execute error: {}", e);
                 let _ = tx.send(Ok(sse_error(&e.to_string()))).await;
             }

@@ -10,7 +10,7 @@ create table if not exists budget_nodes (
     check (kind in ('org', 'dept', 'team', 'user', 'service'))
 , name               varchar(200) not null
 , ref_id             uuid          -- entity this node maps to (e.g. user kind → profile_id)
-, cap_amount         numeric(12,2)
+, cap_amount         numeric(14,6)  -- micro-dollar precision: per-call costs are sub-cent
 , period             varchar(10) not null default 'monthly'
     check (period in ('daily', 'weekly', 'monthly'))
 , enforcement        varchar(10) not null default 'hard'
@@ -18,7 +18,7 @@ create table if not exists budget_nodes (
 , alert_threshold    numeric(4,3)  -- fraction 0..1 (e.g. 0.800 = alert at 80%)
     check (alert_threshold is null or (alert_threshold >= 0 and alert_threshold <= 1))
 , free_floor_enabled boolean not null default true
-, spent_amount       numeric(12,2) not null default 0
+, spent_amount       numeric(14,6) not null default 0  -- micro-dollar precision (see cap_amount)
 , currency           varchar(3) not null default 'USD'
 , created_at         timestamptz not null default now()
 , modified_at        timestamptz not null default now()
@@ -43,6 +43,6 @@ comment on table budget_nodes is
 - A call is allowed only if every ancestor node (user→team→dept→org) has headroom.';
 
 -- RW7 (DECISIONS §2 W2): hard-reserve columns.
-alter table budget_nodes add column if not exists reserved_amount     numeric(12,2) not null default 0;
+alter table budget_nodes add column if not exists reserved_amount     numeric(14,6) not null default 0;
 alter table budget_nodes add column if not exists period_started_at   timestamptz   not null default now();
-alter table budget_nodes add column if not exists soft_overshoot_limit numeric(12,2);
+alter table budget_nodes add column if not exists soft_overshoot_limit numeric(14,6);

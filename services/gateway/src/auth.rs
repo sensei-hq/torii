@@ -53,6 +53,11 @@ pub enum AuthError {
     InvalidToken(#[from] jsonwebtoken::errors::Error),
     #[error("no JWK matched the token kid")]
     NoMatchingKey,
+    /// H2: an API-key credential (`sk_str_…`) failed to authenticate — malformed,
+    /// unknown/revoked prefix, or secret mismatch. Deliberately opaque (carries no
+    /// secret and does not distinguish the cause) so the mapped 401 leaks nothing.
+    #[error("API key authentication failed")]
+    InvalidApiKey,
 }
 
 impl IntoResponse for AuthError {
@@ -178,6 +183,20 @@ pub async fn require_auth(
         Err(e) => return e.into_response(),
     };
 
+    // H2: API-key branch. Programmatic callers present `sk_str_…` keys; everything
+    // else is a Supabase JWT and takes the unchanged path below. The key only
+    // AUTHENTICATES — budget/capabilities come from the identity it binds, never
+    // the key (see `authenticate_api_key`).
+    if token.starts_with("sk_str_") {
+        return match authenticate_api_key(&state.pool, &token).await {
+            Ok(claims) => {
+                req.extensions_mut().insert(claims);
+                next.run(req).await
+            }
+            Err(e) => e.into_response(),
+        };
+    }
+
     // Scope the read-lock so it drops before any await point.
     let initial_result = {
         let jwks = state.jwks.read().await;
@@ -220,6 +239,114 @@ pub async fn require_auth(
 
     req.extensions_mut().insert(claims);
     next.run(req).await
+}
+
+// ---------------------------------------------------------------------------
+// H2 · API-key authentication
+// ---------------------------------------------------------------------------
+
+/// Far-future `exp` stamped on API-key-derived [`Claims`] (year 2100). API keys carry
+/// no JWT expiry — revocation is by `api_keys.status`, not by clock — so this simply
+/// satisfies any downstream `exp` check without ever expiring a live key.
+const API_KEY_EXP: usize = 4_102_444_800;
+
+/// H2: authenticate a raw `sk_str_<env>_<prefix>.<secret>` API key into [`Claims`].
+///
+/// **Fail-closed by construction**: any malformed key, unknown/revoked prefix, secret
+/// mismatch, or DB error resolves to `Err(AuthError::InvalidApiKey)` → 401. Nothing
+/// here trusts the key for authority.
+///
+/// The key only *authenticates*; the identity, tenant, budget node, and capabilities
+/// all come from the profile / service account the key is BOUND to (via `profile_id`
+/// XOR `service_account_id`), never from the key itself (RW4 / DECISIONS §2 W2). The
+/// resulting [`Claims`] mirror the JWT contract so every downstream consumer
+/// (capability resolution, the C3 budget hot-path) works identically for both.
+async fn authenticate_api_key(pool: &sqlx::PgPool, token: &str) -> Result<Claims, AuthError> {
+    // a. Split into (prefix, secret). Malformed ⇒ fail closed.
+    let (prefix, secret) = crate::apikeys::parse(token).ok_or(AuthError::InvalidApiKey)?;
+
+    // b. Look the key up by its PUBLIC prefix — PARAMETERIZED (never interpolated),
+    //    so a prefix crafted to look like SQL is just an inert bind value.
+    let row: Option<(Uuid, String, Option<Uuid>, Option<Uuid>, Uuid, String)> = sqlx::query_as(
+        "select id, hashed_secret, profile_id, service_account_id, tenant_id, status \
+           from public.api_keys where prefix = $1",
+    )
+    .bind(prefix)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| AuthError::InvalidApiKey)?;
+
+    let (id, hashed_secret, profile_id, service_account_id, tenant, status) =
+        row.ok_or(AuthError::InvalidApiKey)?;
+    if status != "active" {
+        // Revoked (or any non-active status) ⇒ deny. Revocation is status-driven.
+        return Err(AuthError::InvalidApiKey);
+    }
+
+    // c. Constant-time argon2id verification of the presented secret.
+    if !crate::apikeys::verify(secret, &hashed_secret) {
+        return Err(AuthError::InvalidApiKey);
+    }
+
+    // d. Resolve the bound identity into Claims (roles/version from the identity).
+    let claims = if let Some(pid) = profile_id {
+        // Person-bound: capabilities come from the profile's tenant roles.
+        let role_ids: Vec<Uuid> = sqlx::query_scalar(
+            "select role_id from core.profile_roles where profile_id = $1 and tenant_id = $2",
+        )
+        .bind(pid)
+        .bind(tenant)
+        .fetch_all(pool)
+        .await
+        .map_err(|_| AuthError::InvalidApiKey)?;
+
+        let claims_version: i64 =
+            sqlx::query_scalar("select coalesce(claims_version, 0) from core.profiles where id = $1")
+                .bind(pid)
+                .fetch_optional(pool)
+                .await
+                .map_err(|_| AuthError::InvalidApiKey)?
+                .unwrap_or(0);
+
+        Claims {
+            sub: pid.to_string(),
+            tenant_id: Some(tenant),
+            role_ids,
+            claims_version,
+            role: Some("apikey".to_string()),
+            exp: API_KEY_EXP,
+            aud: None,
+        }
+    } else if let Some(sa) = service_account_id {
+        // Service-account-bound: capabilities come from the tenant's `service` role.
+        let role_ids: Vec<Uuid> =
+            sqlx::query_scalar("select id from core.roles where tenant_id = $1 and key = 'service'")
+                .bind(tenant)
+                .fetch_all(pool)
+                .await
+                .map_err(|_| AuthError::InvalidApiKey)?;
+
+        Claims {
+            sub: sa.to_string(),
+            tenant_id: Some(tenant),
+            role_ids,
+            claims_version: 0,
+            role: Some("service".to_string()),
+            exp: API_KEY_EXP,
+            aud: None,
+        }
+    } else {
+        // The `api_keys_one_identity` CHECK makes this unreachable; fail closed anyway.
+        return Err(AuthError::InvalidApiKey);
+    };
+
+    // f. Best-effort last-used stamp — never gate auth on it.
+    let _ = sqlx::query("update public.api_keys set last_used_at = now() where id = $1")
+        .bind(id)
+        .execute(pool)
+        .await;
+
+    Ok(claims)
 }
 
 // ---------------------------------------------------------------------------

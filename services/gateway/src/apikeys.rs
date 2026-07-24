@@ -5,8 +5,8 @@
 //! the budget node comes from the identity, never the key (DECISIONS §1.2 / §2 W2).
 //! Only the `prefix` (lookup) + an argon2id PHC `hashed_secret` are persisted — the
 //! raw secret is shown to the operator exactly once at issuance and never logged.
-//! Issuance is a privileged `/rpc` write; verification on the auth path is a separate
-//! step (next increment).
+//! Issuance is a privileged `/rpc` write; verification on the auth path lives in
+//! [`crate::auth::require_auth`] (the `sk_str_` branch → `authenticate_api_key`).
 
 use argon2::password_hash::rand_core::{OsRng, RngCore};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
@@ -44,7 +44,6 @@ pub fn mint() -> Result<NewApiKey, argon2::password_hash::Error> {
 }
 
 /// Constant-time verify a presented secret against a stored argon2id PHC hash.
-#[allow(dead_code)] // consumed by the auth path (next increment)
 pub fn verify(secret: &str, hashed: &str) -> bool {
     match PasswordHash::new(hashed) {
         Ok(parsed) => Argon2::default()
@@ -55,7 +54,6 @@ pub fn verify(secret: &str, hashed: &str) -> bool {
 }
 
 /// Split `sk_str_<env>_<prefix>.<secret>` → `(prefix, secret)`. `None` if malformed.
-#[allow(dead_code)] // consumed by the auth path (next increment)
 pub fn parse(key: &str) -> Option<(&str, &str)> {
     let rest = key.strip_prefix("sk_str_")?;
     let (env_prefix, secret) = rest.split_once('.')?;

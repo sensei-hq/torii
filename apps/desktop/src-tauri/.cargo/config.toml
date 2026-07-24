@@ -1,0 +1,10 @@
+# The desktop's in-process inference engine (sensei `local-llama-cpp` →
+# `llama-cpp-sys-2`) vendors llama.cpp, whose `ggml-backend-reg.cpp` /
+# `ggml-backend-dl.cpp` use `std::filesystem`. libc++ marks `std::filesystem`
+# as available only for a macOS deployment target >= 10.15, so without an
+# explicit target the native build fails with:
+#   error: 'std::filesystem::path' is unavailable: introduced in macOS 10.15
+# Setting MACOSX_DEPLOYMENT_TARGET here propagates to cc/cmake for every desktop
+# cargo build (dev, build, e2e), unblocking the native compile.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "11.0"

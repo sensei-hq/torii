@@ -470,6 +470,13 @@ pub async fn spaces_create(
 }
 
 /// Actor-bound audit helper (matches the RW8 with-check: actor_id = auth.uid()).
+///
+/// O1/#12: a privileged mutation must never silently lack its audit row. This runs
+/// on autocommit after the mutation, so it cannot atomically roll the mutation back
+/// on failure — but a failed audit write is now surfaced at **ERROR** (the audit's
+/// stated "at minimum, emit an error-level alert" bar) so it is alertable rather than
+/// silent. Full transactional mutation+audit atomicity is a tracked follow-up
+/// (several handlers do multi-step writes; wrapping each in one tx is the ideal).
 async fn audit(
     state: &SharedState,
     tenant: Uuid,
@@ -478,7 +485,7 @@ async fn audit(
     target_type: &str,
     target_id: Option<Uuid>,
 ) {
-    let _ = sqlx::query(
+    if let Err(e) = sqlx::query(
         "insert into public.audit_events (tenant_id, actor_id, action, target_type, target_id) \
          values ($1, $2, $3, $4, $5)",
     )
@@ -488,5 +495,11 @@ async fn audit(
     .bind(target_type)
     .bind(target_id)
     .execute(&state.pool)
-    .await;
+    .await
+    {
+        tracing::error!(
+            %actor, action, %tenant, error = %e,
+            "AUDIT WRITE FAILED — privileged mutation committed without its audit row"
+        );
+    }
 }

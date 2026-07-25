@@ -1,5 +1,5 @@
 <script>
-	let { items = [], active, appName = 'Strategos', version = 0, onnavigate, footer } = $props()
+	let { items = [], active, appName = 'Torii', version = 0, onnavigate, footer } = $props()
 </script>
 
 <nav

@@ -11,10 +11,10 @@
 >
 	<span
 		class={env.offline
-			? 'i-lucide:cloud-off h-3 w-3'
+			? 'i-solar-cloud-cross-bold-duotone h-3 w-3'
 			: env.web
-				? 'i-lucide:globe h-3 w-3'
-				: 'i-lucide:monitor h-3 w-3'}
+				? 'i-solar-global-bold-duotone h-3 w-3'
+				: 'i-solar-monitor-bold-duotone h-3 w-3'}
 	></span>
 	{env.mode}
 </button>

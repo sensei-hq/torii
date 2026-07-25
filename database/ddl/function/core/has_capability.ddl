@@ -19,6 +19,7 @@ as $$
       join core.profile_roles    pr on pr.profile_id = pt.profile_id
                                     and pr.tenant_id  = pt.tenant_id
       join core.role_permissions rp on rp.role_id    = pr.role_id
+                                    and rp.tenant_id  = pt.tenant_id
      where pt.profile_id = auth.uid()
        and pt.tenant_id  = (auth.jwt() ->> 'tenant_id')::uuid
        and pt.status     = 'active'

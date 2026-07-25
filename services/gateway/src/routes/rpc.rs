@@ -302,6 +302,70 @@ pub async fn rbac_assign_role(
         Ok(v) => v,
         Err(resp) => return resp,
     };
+
+    // #8 target-tenant guard: the target profile must be an ACTIVE member of the
+    // caller's tenant, else 404 — no cross-tenant `profile_roles` insert and (with
+    // the bump below now gated on this) no cross-tenant claims_version DoS (#9).
+    let member: bool = sqlx::query_scalar(
+        "select exists(select 1 from core.profile_tenants \
+           where profile_id = $1 and tenant_id = $2 and status = 'active')",
+    )
+    .bind(body.profile_id)
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(false);
+    if !member {
+        return (StatusCode::NOT_FOUND, "profile not found in tenant").into_response();
+    }
+
+    // #8 role-tenant guard: the role must belong to the caller's tenant, else 404.
+    let role_in_tenant: bool = sqlx::query_scalar(
+        "select exists(select 1 from core.roles where id = $1 and tenant_id = $2)",
+    )
+    .bind(body.role_id)
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(false);
+    if !role_in_tenant {
+        return (StatusCode::NOT_FOUND, "role not found in tenant").into_response();
+    }
+
+    // #3 anti-escalation subset guard: the assigned role's capabilities must be a
+    // SUBSET of the ACTOR's own resolved capabilities. This blocks an admin (holds
+    // `role.manage`, lacks `tenant.manage`) from granting `owner` (holds
+    // `tenant.manage`) — to self or anyone — thereby escalating.
+    let assigned_caps: Vec<String> = match sqlx::query_scalar(
+        "select capability from core.role_permissions where role_id = $1 and tenant_id = $2",
+    )
+    .bind(body.role_id)
+    .bind(tenant)
+    .fetch_all(&state.pool)
+    .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("assign-role: resolve assigned caps: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+        }
+    };
+    let actor_caps = match CapabilitySet::resolve(&state.pool, &claims).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("assign-role: resolve actor caps: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if !assigned_caps.iter().all(|c| actor_caps.has(c)) {
+        return (
+            StatusCode::FORBIDDEN,
+            "cannot assign a role exceeding your own capabilities",
+        )
+            .into_response();
+    }
+
+    // Guards passed (target in-tenant, role in-tenant, no escalation) — now write.
     let assign = sqlx::query(
         "insert into core.profile_roles (tenant_id, profile_id, role_id, assigned_by) \
          values ($1,$2,$3,$4) on conflict do nothing",
@@ -316,7 +380,7 @@ pub async fn rbac_assign_role(
         tracing::error!("assign-role: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
     }
-    // Freshness gate: invalidate the target's existing tokens.
+    // Freshness gate: invalidate the target's existing tokens (target is tenant-validated).
     let _ = sqlx::query("update core.profiles set claims_version = claims_version + 1 where id = $1")
         .bind(body.profile_id)
         .execute(&state.pool)

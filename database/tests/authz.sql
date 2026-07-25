@@ -95,4 +95,39 @@ begin;
   end $$;
 rollback;
 
+-- 9. Anti-escalation subset guard (HIGH #3): `/rpc/rbac/assign-role` refuses to
+-- grant a role whose capabilities are NOT a subset of the actor's own. Proven here
+-- as the data invariant the gateway guard relies on: `owner`'s capabilities are NOT
+-- a subset of `admin`'s (admin holds `role.manage` but NOT `tenant.manage`), so an
+-- admin assigning `owner` (to self or anyone) hits assigned ⊄ actor → 403.
+begin;
+  do $$
+  declare
+    t          uuid := '00000000-0000-0000-0000-000000000000';
+    owner_role uuid := (select id from core.roles where tenant_id = t and key = 'owner');
+    admin_role uuid := (select id from core.roles where tenant_id = t and key = 'admin');
+    escalating int;
+  begin
+    -- Capabilities `owner` grants that `admin` does not → the subset check denies them.
+    select count(*) into escalating
+      from core.role_permissions o
+     where o.role_id = owner_role and o.tenant_id = t
+       and not exists (
+         select 1 from core.role_permissions a
+          where a.role_id = admin_role and a.tenant_id = t
+            and a.capability = o.capability);
+    if escalating = 0 then
+      raise exception 'FAIL escalation-subset: owner adds no capability beyond admin — guard would wrongly ALLOW admin→owner';
+    end if;
+    -- The canonical escalation cap must be owner-only (admin cannot self-grant it).
+    if not exists (select 1 from core.role_permissions
+                     where role_id = owner_role and tenant_id = t and capability = 'tenant.manage')
+       or exists (select 1 from core.role_permissions
+                    where role_id = admin_role and tenant_id = t and capability = 'tenant.manage') then
+      raise exception 'FAIL escalation-subset: tenant.manage is not owner-only as expected';
+    end if;
+    raise notice 'RW12 anti-escalation subset: admin CANNOT gain tenant.manage via owner (owner ⊄ admin) ✓';
+  end $$;
+rollback;
+
 \echo 'ALL RW12 ADVERSARIAL AUTHZ TESTS PASSED'

@@ -140,3 +140,33 @@ Author the **full v1 surface**: **new screens** — Tools & MCP, API-keys/servic
 **Confirmed calls (Jerry, 2026-07-25):** the *central* gateway daemon is **torii** (torii is the whole engine, not merely the local piece); the shared npm scope is **`@torii/*`**; the two apps split by brand (`@seiki/admin`, `@torii/desktop`), with the shared kit under torii and consumed by both.
 
 **Sweep order (safe tiers, commit each):** T1 npm scope + package names + imports → T2 crate rename → T3 Tauri id + brand strings + env. **Deferred:** the Supabase `project_id` rename (resets the local DB — do at a coordinated `dbd reset`) and the ~164 doc files (context-dependent: Strategos→Torii for engine/app/gateway docs, →Seiki for web-SaaS/admin/billing docs). The separate-Supabase-instances decision stands (see the rebrand memory).
+
+## 9. Auth + deployment architecture (RATIFIED 2026-07-25)
+
+**One hosted Supabase** backs the whole torii+seiki suite (one `auth.users`; a user's
+account works across the desktop app *and* the web portal). Tenant isolation is RLS + a
+`custom_access_token_hook` stamping `tenant_id`/`role_ids`/`claims_version`. This is
+SEPARATE from sensei-dojo's Supabase (§8, cross-*product* isolation) — but WITHIN
+torii+seiki it is shared (one product). The **Torii desktop and Seiki web are both clients**
+of that one Supabase; a desktop install on any machine connects to the *same hosted URL*
+over the internet — `localhost` Supabase is **dev-only**. The **Supabase URL ≠ the web-app
+URL**: `seiki.sensei-hq.com` is the portal; Supabase is `https://<ref>.supabase.co` (or a
+custom domain). JWT signing is **RS256/JWKS** (W3); the gateway verifies via JWKS, trusts no
+capability from the token.
+
+**Hosting — two workloads, two hosts:**
+- **Seiki web** (`apps/admin`, SvelteKit adapter-cloudflare) → **Cloudflare Workers**
+  (`wrangler deploy`, mirrors dojo) at **`seiki.sensei-hq.com`**.
+- **torii-gateway** (`services/gateway`, Rust/Axum + Postgres pool + tokio tasks) →
+  **Fly.io** (container) at **`api.torii.sensei-hq.com`**. It **cannot** run on Cloudflare
+  Pages/Workers (native binary, persistent DB pool, background tasks). `api.` prefix leaves
+  `torii.sensei-hq.com` free for a product page; on Fly the (2nd-level) subdomain gets a
+  Let's Encrypt cert (point DNS-only, which also avoids proxy buffering on the SSE
+  `/v1/chat/stream`). The gateway binds `HOST:PORT` (`HOST=0.0.0.0` in the container).
+- **Torii desktop** (Tauri) → per-OS installer; prod env baked in points at the hosted
+  Supabase + `api.torii.sensei-hq.com`; `torii://` deep link for OAuth/magic-link redirects.
+
+Docs: `docs/ops/supabase-configuration.md`, `docs/ops/deployment.md`. Config:
+`apps/admin/wrangler.jsonc`, `services/gateway/{Dockerfile,fly.toml}`. **Prod build note:**
+pin the `sensei-gateway` git dep to `tag = "v0.4.6"` (today unpinned); the Dockerfile
+strips the dev `[patch]` (local sibling repo) so it builds from the tag.

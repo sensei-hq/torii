@@ -1,0 +1,34 @@
+{
+	// Seiki web SaaS → Cloudflare Workers (Static Assets), mirroring
+	// ~/Developer/sensei-hq/sensei/dojo/wrangler.jsonc. Committed so `wrangler deploy`
+	// deploys the SvelteKit (adapter-cloudflare) output directly instead of running its
+	// interactive auto-config. This is a WORKERS deploy (`wrangler deploy`), not a Pages
+	// deploy. `name` must match the Cloudflare Worker/project name.
+	//
+	// Unlike dojo, apps/admin is a CLIENT-ONLY SPA (supabase-js session in the browser,
+	// all privileged data via the gateway) — no SvelteKit server hooks — so it does NOT
+	// need `nodejs_compat`. Add it only if Seiki later grows SSR auth like dojo.
+	//
+	// Env is managed in the Cloudflare dashboard as encrypted SECRETS (never in git):
+	//   PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY (publishable),
+	//   PUBLIC_GATEWAY_URL=https://api.torii.sensei-hq.com
+	// `wrangler deploy` never deletes Secrets; keep_vars:true also preserves any dashboard
+	// plaintext Variables. At runtime SvelteKit reads these via $env/dynamic/public.
+	// Local dev: `bun run dev` (Vite) reads the gitignored .env.
+	"name": "seiki",
+	"compatibility_date": "2026-06-13",
+	"keep_vars": true,
+	"workers_dev": true,
+	"preview_urls": true,
+	"main": ".svelte-kit/cloudflare/_worker.js",
+	"assets": {
+		"binding": "ASSETS",
+		"directory": ".svelte-kit/cloudflare"
+	},
+	"observability": {
+		"logs": {
+			"enabled": true,
+			"invocation_logs": true
+		}
+	}
+}

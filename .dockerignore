@@ -1,0 +1,13 @@
+# torii-gateway Docker build (context = repo root). Keep the context tiny.
+target
+**/target
+node_modules
+**/node_modules
+.git
+.svelte-kit
+**/.svelte-kit
+**/build
+**/dist
+apps/desktop/src-tauri/target
+.playwright-mcp
+**/*.png

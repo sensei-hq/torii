@@ -64,6 +64,10 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|p| p.parse().ok())
         .unwrap_or(8787);
 
+    // Bind host: 127.0.0.1 for local dev (not externally exposed); set HOST=0.0.0.0 in a
+    // container (Fly/Docker) so the platform's proxy can reach it.
+    let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+
     // Connect Postgres pool
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(10)
@@ -263,8 +267,8 @@ async fn main() -> anyhow::Result<()> {
         .layer(cors)
         .with_state(state);
 
-    let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
-    tracing::info!("torii-gateway listening on 127.0.0.1:{}", port);
+    let listener = TcpListener::bind(format!("{}:{}", host, port)).await?;
+    tracing::info!("torii-gateway listening on {}:{}", host, port);
     axum::serve(listener, app).await?;
 
     Ok(())

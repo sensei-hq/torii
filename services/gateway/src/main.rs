@@ -25,6 +25,7 @@ mod budgets;  // C3: budget-node resolution + hard reserve→commit on the infer
 mod capabilities;  // F2: server-side capability resolution + claims-version gate
 mod config_loader;
 mod crypto;   // F3: DEK/KEK envelope crypto
+mod governance;  // C4: output redaction + injection scan + why-this-model governance
 mod judge;    // C6: opt-in LLM-as-judge (local gemma4) → judge_score signal
 mod keys;
 mod quality;  // C6: quality-signal capture (one implicit batch per inference call)

@@ -224,7 +224,12 @@ pub async fn post_chat(
     };
 
     // --- Map response ---
-    let content = resp.content.clone().unwrap_or_default();
+    // C4 governance: redact the model's OUTPUT before it reaches the client (a model
+    // must not echo a secret back out) and count redactions for the governance signal.
+    let (content, output_redactions) = {
+        let (clean, hits) = crate::redact::Redactor.redact(&resp.content.clone().unwrap_or_default());
+        (clean, hits.len() as u32)
+    };
     let model = resp.model.clone();
     let cost_usd = resp
         .actual_cost
@@ -314,6 +319,40 @@ pub async fn post_chat(
                     success: resp.success,
                 },
             )
+            .await;
+
+            // C4: governance signal — redaction counts, prompt-injection flag, and the
+            // "why-this-model" routing trace (advisory in v1; classification defaults to
+            // 'internal' until C5/RAG supplies per-space/citation classification).
+            let injection = req
+                .messages
+                .iter()
+                .any(|m| crate::governance::scan_injection(&m.content));
+            let why = crate::governance::why_model(
+                &call.model,
+                &call.adapter,
+                resp.attempts.len(),
+                req.chain.as_deref(),
+            );
+            let gov = serde_json::json!({
+                "input_redactions": redactions,
+                "output_redactions": output_redactions,
+                "injection_suspected": injection,
+                "why_model": why,
+                "classification": "internal",
+            });
+            let _ = sqlx::query(
+                "insert into public.quality_signals \
+                   (tenant_id, id, inference_call_id, signal_key, signal_class, \
+                    value_json, source, actor_id, schema_version) \
+                 values ($1, gen_random_uuid(), $2, 'governance', 'implicit', \
+                         $3::jsonb, 'gateway', $4, 1)",
+            )
+            .bind(tenant)
+            .bind(call.id)
+            .bind(gov.to_string())
+            .bind(node)
+            .execute(&state.pool)
             .await;
         }
     }

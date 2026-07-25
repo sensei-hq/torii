@@ -48,3 +48,17 @@ Full suite: `DATABASE_URL=postgresql://…@127.0.0.1:55322/postgres database/tes
 - **API-key auth (H2)** — ✅ **landed / pushed** to `origin/develop` (HEAD `b701c01`, "consume identity-bound API keys in require_auth"). Fail-closed, parameterized lookup, argon2id constant-time verify, JWT path unchanged; identity/budget/caps from the key's bound identity, never the key. Verified live on the isolated local stack (`chain:"local"`, $0): build clean, 10/10 adversarial assertions PASS, mint→200→revoke→401 round-trip, 0 secret leaks / panics / stray processes. Independently reviewed → APPROVED (one *informational* prefix-timing note, not a vulnerability).
 - **Security audit** — full sweep across 8 dimensions (budget-integrity, rpc-privilege, tenant-isolation, auth, redaction-dlp, vault-crypto, secrets-logging, api-key-auth); report in [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md). **15 findings confirmed** (each verified against real code/DDL): **1 critical, 2 high, 6 medium, 6 low.** Top items: (C) idempotency-key hold reuse → K-1 free inferences (budget bypass); (H) reserve ignores input-token cost → hard-cap overshoot; (H) `rbac_assign_role` self-escalation to `owner`.
 - **No remediation code was written this run** — findings are report-only. **Human review recommended before acting on findings.** No paid cloud calls; no secrets printed; stayed on `develop` inside the monorepo.
+- **Security fixes (post-audit)** — **14/15 remediated + verified** in gated batches (build+tests+live re-verify per group): #1 critical (idempotency budget-bypass removed), #2/#3 high (input-cost reserve; `rbac_assign_role` subset+tenant guards), #4–#11 medium (DLP recall, claims-version fail-closed, JWKS anti-poisoning, cross-tenant RBAC, `has_capability` scope), #13–#15 low (zeroize, generic errors). #12 (audit atomicity) **MITIGATED** (error-level alert on audit-write failure). Consolidated re-verify: build clean, 29/29 unit, DB suite 7/7 (RLS confirmed sound; 2 test-infra bugs fixed).
+
+## P6 — Governance / Audit / Quality (trust spine) — ✅ COMPLETE (no-RAG scope)
+
+| Module | What | Verification |
+|---|---|---|
+| **C6 · quality capture** | one implicit `quality_signals` row per call (latency/cost/tokens/redactions/plane/success), keyed to the ledger | live: 1 row/call |
+| **C6 · LLM-as-judge** | opt-in (default-off), async, self-budgeted, own ledger row; local **gemma4** ($0). Root-caused the empty-output bug: gemma4 is a **reasoning model** → needs `max_tokens≥512` to emit the score | live: judges score 1.0/0.9/1.0 |
+| **O1 · append-only audit** | `audit_events` immutable even to `service_role` (trigger `forbid_mutation`) | `authz.sql` |
+| **O1 · read surface** | capability-gated `GET /v1/audit` + `/v1/requests` (tenant-scoped, `audit.read`) | live 200 / 401 |
+| **O1 · SIEM streaming** | background streamer → `siem` `notification_channels`, per-tenant `(created_at,id)` cursor, at-least-once, resume-after-restart | live: mock sink got 9 events, cursor advanced |
+| **C4 · governance** | **output** redaction (model can't echo secrets) + heuristic injection scan + "why-this-model" trace → `governance` signal | live: `input_redactions=1, injection_suspected=true, why_model=…` |
+
+**Deferred to P7 (need C5/RAG):** grounded-only citation coverage + per-space classification. **Follow-ups:** #12 full transactional audit atomicity; audit hash-chain tamper-evidence; a `/rpc` to manage SIEM channels; the heavier `crates/governance` refactor (shared with desktop D2).

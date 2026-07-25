@@ -212,7 +212,14 @@ pub async fn require_auth(
                 .unwrap_or_else(|_| "http://127.0.0.1:55321".to_string());
             let new_jwks = fetch_jwks(&supabase_url).await;
             let retry = validate_token(&token, &new_jwks);
-            *state.jwks.write().await = new_jwks;
+            // Only replace the cache when the refetch actually returned keys.
+            // `fetch_jwks` yields an empty set on any network/parse error, and a
+            // bad-`kid` token is unauthenticated — clobbering the good cached keys
+            // with `[]` would 401 every legitimate JWT (cache poisoning) and let a
+            // flood amplify upstream fetches. A non-empty set is a fresh, valid JWKS.
+            if !new_jwks.keys.is_empty() {
+                *state.jwks.write().await = new_jwks;
+            }
 
             match retry {
                 Ok(c) => c,

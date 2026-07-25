@@ -70,15 +70,75 @@ pub async fn check_claims_version(pool: &PgPool, claims: &Claims) -> Result<(), 
         Ok(u) => u,
         Err(_) => return Err(CapabilityError::StaleToken),
     };
-    let current: Option<i64> =
+    // Fail CLOSED: pass ONLY when the profile row exists AND the token is at least
+    // as fresh as it. A missing row (hard-deleted / revoked identity) or any DB
+    // error is treated as stale — never `.ok().flatten()` past a security gate.
+    let current: Result<Option<i64>, sqlx::Error> =
         sqlx::query_scalar("select claims_version from core.profiles where id = $1")
             .bind(uid)
             .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
+            .await;
     match current {
-        Some(v) if v > claims.claims_version => Err(CapabilityError::StaleToken),
-        _ => Ok(()),
+        Ok(Some(v)) if v <= claims.claims_version => Ok(()),
+        Ok(Some(_)) => Err(CapabilityError::StaleToken),
+        Ok(None) => Err(CapabilityError::StaleToken),
+        Err(_) => Err(CapabilityError::StaleToken),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn claims_for(sub: &str, claims_version: i64) -> Claims {
+        Claims {
+            sub: sub.to_string(),
+            tenant_id: None,
+            role_ids: vec![],
+            claims_version,
+            role: None,
+            exp: 4_102_444_800,
+            aud: None,
+        }
+    }
+
+    /// Fail-closed revocation gate (finding #6): a subject with NO profile row and
+    /// an unparseable subject must both be REJECTED, while an existing profile whose
+    /// `claims_version` is not ahead of the token is accepted. DB-gated: skips
+    /// silently when `DATABASE_URL` is unset so the plain unit run stays offline.
+    #[tokio::test]
+    async fn check_claims_version_fails_closed_on_missing_row() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            eprintln!("skip check_claims_version test: DATABASE_URL unset");
+            return;
+        };
+        let pool = PgPool::connect(&url).await.expect("connect");
+
+        // Unparseable subject → stale (never trusts a malformed token).
+        assert!(matches!(
+            check_claims_version(&pool, &claims_for("not-a-uuid", 0)).await,
+            Err(CapabilityError::StaleToken)
+        ));
+
+        // Missing profile row (hard-deleted / revoked identity) → stale, NOT Ok.
+        let ghost = Uuid::new_v4().to_string();
+        assert!(matches!(
+            check_claims_version(&pool, &claims_for(&ghost, 0)).await,
+            Err(CapabilityError::StaleToken)
+        ));
+
+        // Existing profile: fresh token (>= profile) passes, older token is stale.
+        if let Ok(Some((id, ver))) =
+            sqlx::query_as::<_, (Uuid, i64)>("select id, claims_version from core.profiles limit 1")
+                .fetch_optional(&pool)
+                .await
+        {
+            let sub = id.to_string();
+            assert!(check_claims_version(&pool, &claims_for(&sub, ver)).await.is_ok());
+            assert!(matches!(
+                check_claims_version(&pool, &claims_for(&sub, ver - 1)).await,
+                Err(CapabilityError::StaleToken)
+            ));
+        }
     }
 }

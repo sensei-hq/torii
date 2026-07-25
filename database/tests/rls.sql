@@ -98,16 +98,19 @@ begin;
     exception when insufficient_privilege then null;
     end;
 
-    -- inference_calls: tenant B cannot see tenant A's calls
-    if (select count(*) from public.inference_calls) <> 0 then
-      raise exception 'FAIL cross-tenant: tenant B can see inference_calls belonging to tenant A (count=%)',
-        (select count(*) from public.inference_calls);
+    -- inference_calls: the platform user cannot see the OTHER tenant's calls.
+    -- Assert on the foreign tenant's rows specifically — the platform tenant may
+    -- legitimately hold its own inference_calls, so a bare count(*)=0 is non-hermetic
+    -- (it only passed on an empty table). RLS must hide the 99999999… rows.
+    if exists (select 1 from public.inference_calls
+                where tenant_id = '99999999-9999-9999-9999-999999999999') then
+      raise exception 'FAIL cross-tenant: platform user can see another tenant''s inference_calls';
     end if;
 
-    -- execution_traces: tenant B cannot see tenant A's traces
-    if (select count(*) from public.execution_traces) <> 0 then
-      raise exception 'FAIL cross-tenant: tenant B can see execution_traces belonging to tenant A (count=%)',
-        (select count(*) from public.execution_traces);
+    -- execution_traces: same invariant — cannot see the other tenant's traces.
+    if exists (select 1 from public.execution_traces
+                where tenant_id = '99999999-9999-9999-9999-999999999999') then
+      raise exception 'FAIL cross-tenant: platform user can see another tenant''s execution_traces';
     end if;
 
     raise notice 'isolation negatives OK';

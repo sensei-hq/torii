@@ -18,6 +18,14 @@ suite=(
 
 for t in "${suite[@]}"; do
   echo "── $t ──"
-  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$here/$t" | grep -E 'NOTICE|PASSED' || true
+  # Capture output so a psql failure (ON_ERROR_STOP → non-zero) fails the suite.
+  # grep is display-only; piping psql to `grep … || true` previously swallowed
+  # harness failures (a broken security test would report PASSED — dangerous).
+  if ! out="$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$here/$t" 2>&1)"; then
+    echo "$out"
+    echo "❌ FAILED: $t"
+    exit 1
+  fi
+  echo "$out" | grep -E 'NOTICE|PASSED' || true
 done
 echo "✅ ALL DB SECURITY TESTS PASSED"

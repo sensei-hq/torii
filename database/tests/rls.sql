@@ -23,7 +23,8 @@ begin
   ) t
   where t.relrowsecurity = false
      or (
-       t.tablename not in ('router_keys', 'tenant_keys')   -- deny-all secrets: RLS on, 0 policies is correct
+       -- deny-all, service_role-only tables: RLS on + 0 policies is the correct posture
+       t.tablename not in ('router_keys', 'tenant_keys', 'siem_cursors')
        and not exists (
          select 1 from pg_policies p
          where p.schemaname = t.schemaname and p.tablename = t.tablename

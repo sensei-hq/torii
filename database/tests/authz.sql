@@ -130,4 +130,26 @@ begin;
   end $$;
 rollback;
 
+\echo '== O1 append-only: audit_events is immutable even to superuser =='
+begin;
+  do $$
+  begin
+    -- this connection is the postgres superuser (RLS-bypassing); prove the
+    -- append-only trigger denies UPDATE/DELETE on audit_events regardless of role.
+    if not exists (select 1 from public.audit_events) then
+      insert into public.audit_events (tenant_id, action, actor_id)
+        values ('00000000-0000-0000-0000-000000000000', 'test.append_only', null);
+    end if;
+    begin
+      update public.audit_events set action = 'tampered';
+      raise exception 'FAIL append-only: UPDATE allowed on audit_events (superuser)';
+    exception when insufficient_privilege then null; end;
+    begin
+      delete from public.audit_events;
+      raise exception 'FAIL append-only: DELETE allowed on audit_events (superuser)';
+    exception when insufficient_privilege then null; end;
+    raise notice 'O1 audit_events append-only (immutable to superuser) ✓';
+  end $$;
+rollback;
+
 \echo 'ALL RW12 ADVERSARIAL AUTHZ TESTS PASSED'

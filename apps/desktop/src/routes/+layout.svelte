@@ -7,7 +7,7 @@
 	import { page } from '$app/state'
 	import { vibe } from '@rokkit/states'
 	import { themable } from '@rokkit/actions'
-	import { createStrategosKavach, session, createGuard } from '@strategos/core'
+	import { createStrategosKavach, session, createGuard } from '@torii/core'
 	import { SUPABASE_URL, SUPABASE_ANON_KEY } from '$lib/env'
 
 	let { children } = $props()

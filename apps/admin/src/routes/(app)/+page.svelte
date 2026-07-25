@@ -1,6 +1,6 @@
 <script>
 	import { onMount } from 'svelte'
-	import { AppShell, PageHeader, Card, CardHead, Stat, Meter, Chip } from '@strategos/ui'
+	import { AppShell, PageHeader, Card, CardHead, Stat, Meter, Chip } from '@torii/ui'
 	import { api } from '$lib/api'
 
 	/** @type {import('$lib/api').RequestRow[]} */

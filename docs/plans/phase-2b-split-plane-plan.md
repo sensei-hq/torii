@@ -24,7 +24,7 @@ milestone: Phase-2b
 
 **Architecture:** Extend Phase 1b. Add a **cloud leg**: `src/lib/cloud.ts` POSTs to C1 (`PUBLIC_GATEWAY_URL`, default `http://127.0.0.1:8787`) `/v1/chat` with `Authorization: Bearer <session.accessToken>`; maps C1's `ChatResponse` → the same `InferResult` shape the local leg returns. A **split-plane router** (`src/lib/plane.ts`) picks the leg from a `plane` state (`local` | `cloud`) and tags the turn's `exec.plane`. The `ask` store calls the router instead of the local `gateway.infer` directly. The Ask UI gains a Local/Cloud toggle and shows the real plane in `ExecBadge`. **Provider keys never touch the desktop** — cloud inference is C1's job.
 
-**Tech Stack:** SvelteKit static/Svelte 5 · `@tauri-apps/api` (local IPC, Phase 1b) · `fetch` → C1 (cloud) · `@strategos/core` session (JWT) · Playwright.
+**Tech Stack:** SvelteKit static/Svelte 5 · `@tauri-apps/api` (local IPC, Phase 1b) · `fetch` → C1 (cloud) · `@torii/core` session (JWT) · Playwright.
 
 **Scope note (D4 deferred):** Realtime config sync + `update_config` hot-reload + the offline usage buffer are **NOT** in this plan — they're the next slice. Here the desktop just routes to whichever plane the user selects.
 
@@ -63,7 +63,7 @@ apps/desktop/.env        # (modify) PUBLIC_GATEWAY_URL=http://127.0.0.1:8787
 
 - [ ] **Step 1:** add `accessToken = $state<string | null>(null)` to the `SessionStore`, and in `#apply(session)` set it from the supabase session's `access_token` (the raw session object — `(session as any)?.access_token ?? null`). Clear to `null` when no session.
 - [ ] **Step 2:** ensure `init()` (which calls `getSession()`) and `onAuthStateChange` both flow through `#apply`, so `accessToken` stays current.
-- [ ] **Step 3:** `bun run --filter @strategos/core test` + `check` clean (the guard tests are unaffected). Commit — `feat(core): expose session accessToken for the cloud leg`.
+- [ ] **Step 3:** `bun run --filter @torii/core test` + `check` clean (the guard tests are unaffected). Commit — `feat(core): expose session accessToken for the cloud leg`.
 
 ---
 
@@ -75,7 +75,7 @@ apps/desktop/.env        # (modify) PUBLIC_GATEWAY_URL=http://127.0.0.1:8787
 - [ ] **Step 2:** `src/lib/cloud.ts`:
 ```ts
 import { GATEWAY_URL } from './env'
-import { session } from '@strategos/core'
+import { session } from '@torii/core'
 import type { ChatMessage, InferResult } from './gateway'
 
 interface C1ChatResponse { content: string; model?: string; cost_usd: number; input_tokens?: number; output_tokens?: number }

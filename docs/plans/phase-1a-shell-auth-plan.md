@@ -294,7 +294,7 @@ test('guard forbids a member from an admin-only route', () => {
 
 **Files:** create `src/lib/env.ts`, `src/routes/signin/+page.svelte`; modify `src/routes/+layout.svelte`. Add `@kavach/ui` + kavach deps to the desktop `package.json`.
 
-- [ ] **Step 1: deps** — add to `apps/desktop/package.json` dependencies: `"@strategos/core": "workspace:*"` (already present), `"kavach": "link:kavach"`, `"@kavach/adapter-supabase": "link:@kavach/adapter-supabase"`, `"@kavach/ui": "link:@kavach/ui"`, `"@kavach/sentry": "link:@kavach/sentry"`, `"@supabase/supabase-js": "^2.101.1"`. Run `bun install`.
+- [ ] **Step 1: deps** — add to `apps/desktop/package.json` dependencies: `"@torii/core": "workspace:*"` (already present), `"kavach": "link:kavach"`, `"@kavach/adapter-supabase": "link:@kavach/adapter-supabase"`, `"@kavach/ui": "link:@kavach/ui"`, `"@kavach/sentry": "link:@kavach/sentry"`, `"@supabase/supabase-js": "^2.101.1"`. Run `bun install`.
 
 - [ ] **Step 2: `src/lib/env.ts`** — expose the Supabase config from static public env (works in the SPA build)
 
@@ -317,7 +317,7 @@ export const SUPABASE_ANON_KEY = PUBLIC_SUPABASE_ANON_KEY
   import { page } from '$app/state'
   import { vibe } from '@rokkit/states'
   import { themable } from '@rokkit/actions'
-  import { createStrategosKavach, session, createGuard } from '@strategos/core'
+  import { createStrategosKavach, session, createGuard } from '@torii/core'
   import { SUPABASE_URL, SUPABASE_ANON_KEY } from '$lib/env'
 
   let { children } = $props()
@@ -351,7 +351,7 @@ export const SUPABASE_ANON_KEY = PUBLIC_SUPABASE_ANON_KEY
 
 - [ ] **Step 4: `src/routes/signin/+page.svelte`** — the Sign-in screen (port `docs/mockups/app/view-signin.jsx` structure). Use `@kavach/ui` `AuthPassword` (bind email/password) + a sign-in button calling `session.signInWithPassword(email, password)`; on success `goto('/')`. Two-column layout from the mockup (routing graphic left, sign-in card right) — keep it faithful but minimal. Show `AuthError` on failure. Consult the **svelte** skill.
 
-- [ ] **Step 5: verify boot** — `bun install`, `bun run --filter @strategos/desktop dev`, confirm: visiting `/` while unauthenticated redirects to `/signin` (the sign-in screen renders with the skin); `bun run --filter @strategos/desktop check` clean. (A real login needs a valid Supabase user — that's exercised in E2E Task 6 with a seeded/test session; here just confirm the redirect + render.)
+- [ ] **Step 5: verify boot** — `bun install`, `bun run --filter @torii/desktop dev`, confirm: visiting `/` while unauthenticated redirects to `/signin` (the sign-in screen renders with the skin); `bun run --filter @torii/desktop check` clean. (A real login needs a valid Supabase user — that's exercised in E2E Task 6 with a seeded/test session; here just confirm the redirect + render.)
 
 - [ ] **Step 6: commit** — `feat(desktop): client-only auth wiring + sign-in screen`
 
@@ -367,8 +367,8 @@ export const SUPABASE_ANON_KEY = PUBLIC_SUPABASE_ANON_KEY
 <script>
   import { goto } from '$app/navigation'
   import { page } from '$app/state'
-  import { DesktopShell, DeviceFooter } from '@strategos/ui'
-  import { session } from '@strategos/core'
+  import { DesktopShell, DeviceFooter } from '@torii/ui'
+  import { session } from '@torii/core'
   let { children } = $props()
   const items = ['Workspace', 'Ask', 'Library', 'Playground', 'Workflows', 'Activity', 'Settings']
   const active = $derived(items.find((i) => page.url.pathname.replace('/', '') === i.toLowerCase()) ?? 'Workspace')
@@ -394,7 +394,7 @@ export const SUPABASE_ANON_KEY = PUBLIC_SUPABASE_ANON_KEY
 
 - [ ] **Step 4: delete** the old `src/routes/+page.svelte` (its content moved to `(app)/+page.svelte`). Confirm the guard's `home` (`/`) resolves to the `(app)` group's index.
 
-- [ ] **Step 5: verify** — `bun run --filter @strategos/desktop check` clean; dev server: authenticated view shows the `DesktopShell` (title bar + nav rail + device footer), nav links switch routes, sign-out returns to `/signin`. (Use a real Supabase login or the E2E test session.)
+- [ ] **Step 5: verify** — `bun run --filter @torii/desktop check` clean; dev server: authenticated view shows the `DesktopShell` (title bar + nav rail + device footer), nav links switch routes, sign-out returns to `/signin`. (Use a real Supabase login or the E2E test session.)
 
 - [ ] **Step 6: commit** — `feat(desktop): DesktopShell layout + console nav routes (placeholders)`
 

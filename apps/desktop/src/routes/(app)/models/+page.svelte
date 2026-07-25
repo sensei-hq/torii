@@ -1,7 +1,7 @@
 <script>
 	import { onMount } from 'svelte'
 	import { gateway } from '$lib/gateway.js'
-	import { ExecBadge, Pill } from '@strategos/ui'
+	import { ExecBadge, Pill } from '@torii/ui'
 
 	let models = $state([])
 	let loading = $state(true)

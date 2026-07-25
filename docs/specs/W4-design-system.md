@@ -6,7 +6,7 @@
 
 ---
 
-> **What this module is.** `@strategos/ui` (`packages/ui`) — the single component library and visual
+> **What this module is.** `@torii/ui` (`packages/ui`) — the single component library and visual
 > language every Strategos surface consumes. It is a **pure client-side package**: no gateway-crate
 > dependency, no HTTP/IPC of its own, no F1 table ownership. Its "contracts" are Svelte component
 > props/events, the exported module surface, the UnoCSS/Rokkit token pipeline, and the command
@@ -43,7 +43,7 @@ build/consumption model, the cross-cutting badges/chips/locked-toggle visuals fr
 `mockup-review.md`.
 
 **Out of scope:** screen composition and routing (W1/W2/W3/W5 own their screens), business logic, data
-fetching, auth (F2/`@strategos/core`), any gateway/engine interaction. W4 renders state it is handed; it
+fetching, auth (F2/`@torii/core`), any gateway/engine interaction. W4 renders state it is handed; it
 never fetches, authorizes, or enforces.
 
 **Non-goal / anti-scope:** W4 must **not** port from `_ds/` (Sensei-branded, numbered `-z{n}` tokens) —
@@ -61,7 +61,7 @@ behaviour; do not copy its CSS. It must not re-introduce the legacy `-z{n}` z-sc
    satisfy the DECISIONS aesthetic (washi paper / sumi ink / one rationed vermillion accent) and pass
    contrast (§8.2, §9).
 3. **Own the atom inventory** — a Rokkit-native component for every mockup atom + `zs.css` component class,
-   exported from `@strategos/ui`; migration plan + parity checklist (§8.4).
+   exported from `@torii/ui`; migration plan + parity checklist (§8.4).
 4. **Own the cross-cutting primitives** every screen embeds: execution-location badge, offline banner,
    device/sync chip, desktop-only note, and the **locked-toggle** (governed-control) + **redaction-chip**
    visuals (mockup-review ground rules; items 27/36/38/39/49).
@@ -81,7 +81,7 @@ data layer (never with its own client):
 
 | Table | Access | Use |
 | --- | --- | --- |
-| `user_preferences` | read + self-owned write (RLS: `profile_id = auth.uid()`, benign self-owned row per DECISIONS §2 W1 / F1 §5) | Persist the user's **theme** (`light\|dark\|system`), **skin** choice, and **locale** so the `SkinSwitcherToggle` / `ThemeSwitcherToggle` selections survive reload. W4 exposes the toggle components; the **host app** performs the read/write through `@strategos/core` — W4 receives the current value as a prop and emits change events. |
+| `user_preferences` | read + self-owned write (RLS: `profile_id = auth.uid()`, benign self-owned row per DECISIONS §2 W1 / F1 §5) | Persist the user's **theme** (`light\|dark\|system`), **skin** choice, and **locale** so the `SkinSwitcherToggle` / `ThemeSwitcherToggle` selections survive reload. W4 exposes the toggle components; the **host app** performs the read/write through `@torii/core` — W4 receives the current value as a prop and emits change events. |
 
 W4 renders governed-control state (locked/overridable) and redaction indicators, but the **feature-
 governance resolution** (`feature_states`, precedence workspace→space→role→user) and **redaction data**
@@ -95,13 +95,13 @@ W4's contracts are **package/component contracts**, not network contracts. All c
 runes-based, data-first (`items`, bindable `value`, `fields` field-map, `onchange`/`onselect`), matching
 the Rokkit convention (see `rokkit-components` skill).
 
-### 4.1 Package export surface (`@strategos/ui`)
+### 4.1 Package export surface (`@torii/ui`)
 
 `package.json` exports (existing, extended):
 
 ```jsonc
 {
-  "name": "@strategos/ui",
+  "name": "@torii/ui",
   "svelte": "./src/index.js",
   "exports": {
     ".":              { "svelte": "./src/index.js", "default": "./src/index.js" },
@@ -113,7 +113,7 @@ the Rokkit convention (see `rokkit-components` skill).
 ```
 
 Consuming apps re-export the shared config verbatim (already the pattern):
-`apps/*/rokkit.config.js` → `export { default } from '@strategos/ui/rokkit.config'`, and
+`apps/*/rokkit.config.js` → `export { default } from '@torii/ui/rokkit.config'`, and
 `apps/*/uno.config.js` → `presetRokkit(config)`. This guarantees **one** palette/skin/token source.
 
 ### 4.2 Component API (representative — the enforceable contract shape)
@@ -185,18 +185,18 @@ enforcer:
   trace, not a client heuristic (mockup-review #49) — prevents a mislabelled "ran on device" badge.
 - **Preference writes.** The only write W4 triggers is the theme/skin/locale `user_preferences` update — a
   self-owned benign row explicitly allowed by RLS (`profile_id = auth.uid()`), performed by the host's
-  `@strategos/core` client, not W4.
+  `@torii/core` client, not W4.
 
 ---
 
 ## 6. Key flows
 
-1. **App boot & skin selection.** App imports `@strategos/ui/app.css` once (base + Rokkit themes + `@apply
+1. **App boot & skin selection.** App imports `@torii/ui/app.css` once (base + Rokkit themes + `@apply
    skin-zen-sumi`). Root element gets `data-skin="zen-sumi"` (or `zen-sumi-dark`). `presetRokkit(config)`
    has already emitted the CSS vars at build time; first paint renders with correct tokens (no FOUC).
 2. **Theme/skin switch + persist.** User clicks `ThemeSwitcherToggle`/`SkinSwitcherToggle` → `@rokkit/app`
    updates the `vibe` state + `data-skin` attribute (instant, no reload) → W4 emits `onchange` → host app
-   writes `{theme|skin|locale}` to `user_preferences` via `@strategos/core`. On next boot the host reads
+   writes `{theme|skin|locale}` to `user_preferences` via `@torii/core`. On next boot the host reads
    the preference and passes it as the toggle's initial value. `system` theme follows
    `prefers-color-scheme` until the user overrides.
 3. **Command palette.** App calls `registerShellCommands({ goto, items })` in the shell layout (cleanup on
@@ -297,10 +297,10 @@ re-deriving a palette and keeps light/dark visually coherent.
 
 ### 8.3 Tauri consumes `packages/ui` as a **workspace source dependency**, not a pre-bundled artifact (residual RESOLVED)
 
-**Decision:** the desktop app depends on `@strategos/ui` via `"@strategos/ui": "workspace:*"` (already the
+**Decision:** the desktop app depends on `@torii/ui` via `"@torii/ui": "workspace:*"` (already the
 case in `apps/desktop/package.json`) and imports Svelte **source** — the same as the web apps. There is
 **no** separate pre-bundled/compiled UI artifact. Each app runs its own UnoCSS pass over the shared
-`presetRokkit(config)` (re-exported from `@strategos/ui/rokkit.config`), and Vite/SvelteKit compiles the
+`presetRokkit(config)` (re-exported from `@torii/ui/rokkit.config`), and Vite/SvelteKit compiles the
 `.svelte` sources per app. Rokkit runtime packages stay in `optimizeDeps.exclude` (already configured) so
 Vite doesn't pre-bundle them.
 
@@ -362,14 +362,14 @@ into the shared registry. Conflict detection + i18n follow the Rokkit command sy
 
 ## 9. Acceptance criteria (observable)
 
-1. `bun run --filter @strategos/ui test` and `check` pass; every atom in the §8.4 inventory has a passing
+1. `bun run --filter @torii/ui test` and `check` pass; every atom in the §8.4 inventory has a passing
    `*.spec.svelte.js` render test and is exported from `src/index.js`.
 2. Switching `data-skin` between `zen-sumi` and `zen-sumi-dark` at runtime re-themes the whole UI with **no
    reload and no FOUC**; the computed `--paper`/`--ink`/`--accent` CSS vars match the §8.1/§8.2 OKLCH values
    exactly (assert via `getComputedStyle`).
 3. Both skins pass WCAG AA contrast for body text (`ink` on `paper`, `ink-soft` on `paper-soft`) and for
    the accent-on-paper and on-primary pairings (documented contrast check).
-4. A screen built only from `@strategos/ui` atoms renders with **zero** `-z{n}` utilities and zero inline
+4. A screen built only from `@torii/ui` atoms renders with **zero** `-z{n}` utilities and zero inline
    color literals (lint/grep check passes).
 5. `mod+k` opens the `CommandPalette` in both admin and desktop apps; selecting a registered "Go to X"
    command navigates; unregister cleanup leaves no stale commands after unmount.
@@ -378,8 +378,8 @@ into the shared registry. Conflict detection + i18n follow the Rokkit command sy
 7. `LockedToggle` with `state:'locked'` renders greyed + lock + tooltip and **does not** emit `onchange` on
    click; with `state:'user-overridable'` it is interactive and emits.
 8. `RedactionChip` shows "N items redacted"; `onreveal` fires only when `canReveal` is true.
-9. Desktop (`apps/desktop`) and admin (`apps/admin`) both consume `@strategos/ui` via `workspace:*`, both
-   re-export `@strategos/ui/rokkit.config`, and a token/skin change in `packages/ui` reflects in both apps
+9. Desktop (`apps/desktop`) and admin (`apps/admin`) both consume `@torii/ui` via `workspace:*`, both
+   re-export `@torii/ui/rokkit.config`, and a token/skin change in `packages/ui` reflects in both apps
    after rebuild with no per-app token edits.
 10. Desktop production build (Tauri static SPA) renders the correct skin and shell **offline** (no network),
     proving the UI package + skin CSS are self-contained in the bundle.

@@ -42,14 +42,14 @@ render from mock data with the "agent · v2" badge; no runtime execution path or
 (`apps/desktop`, reused verbatim from W2). The two mockups become:
 (1) a shared **`wf` primitives module** (step/trigger/run-status metadata + `ToolChip` + helpers) — the
 Svelte analogue of the mockup's `window.StrategosWF`; (2) a set of route components under
-`(app)/workflows`. Data comes **only** from the mock `DataSource` (`@strategos/core` — extends the
+`(app)/workflows`. Data comes **only** from the mock `DataSource` (`@torii/core` — extends the
 existing `packages/core/src/mock` layer with `WORKFLOWS` + `TOOLS` fixtures) plus a
 **localStorage-backed edit store** that mirrors the mockup's create/patch/toggle/share/flow behaviour
 (mockup-local persistence only). The screens **never** import `$lib/gateway.js` (the C1 client) — the
 absence of a network call is an asserted invariant (X2-8).
 
 **Tech stack.** SvelteKit · Svelte 5 Runes · Rokkit (W4 named-token vocab: `paper`/`ink`/`primary`/
-`primary-soft`) · UnoCSS presetRokkit · Zod (fixture schemas, `@strategos/core`) · Vitest
+`primary-soft`) · UnoCSS presetRokkit · Zod (fixture schemas, `@torii/core`) · Vitest
 (`*.spec.svelte.js`) · Playwright + `@srsholmes/tauri-playwright` (E2E via the `tauriPage` fixture).
 
 ---
@@ -109,13 +109,13 @@ absence of a network call is an asserted invariant (X2-8).
   The index still supports click-to-open.
 - **PD8 — Reuse existing atoms; add missing W4 atoms in `packages/ui`.** *Rationale:* the mockup uses
   `Switch`, `Meter`, `PageHeader`, `WorkspaceChip`, `Icon` — only `ExecBadge`/`Pill`/shell atoms exist
-  in `@strategos/ui` today. Missing atoms are **W4-owned** primitives; P13 adds them to `packages/ui`
+  in `@torii/ui` today. Missing atoms are **W4-owned** primitives; P13 adds them to `packages/ui`
   (data-first, Rokkit-tokenised, unit-tested) if absent, so W1/W2 reuse them. No bespoke one-off
   styling inside the workflows route.
 - **PD9 — Fixtures are seeded verbatim from `data.jsx`.** *Rationale:* keeps the ported screens
   pixel/behaviour-faithful and gives realistic *Needs review*/agent/stepped states for the AC. The six
   `WORKFLOWS` entries + four `TOOLS` entries + the `WF()` defaults are transcribed into typed
-  (`Zod`-validated) `@strategos/core` fixtures.
+  (`Zod`-validated) `@torii/core` fixtures.
 
 ---
 
@@ -162,7 +162,7 @@ Each feature lists its **layers**, **depends-on**, the **DECISIONS/spec** it sat
 acceptance criteria**, and **Given/When/Then** scenarios. TDD: the spec/E2E is authored first.
 
 ### X2-1 — Workflow mock data layer (fixtures + DataSource + edit store)
-- **Layers:** `@strategos/core` types → mock fixtures → DataSource method → localStorage store
+- **Layers:** `@torii/core` types → mock fixtures → DataSource method → localStorage store
 - **Depends on:** P0 (mock `DataSource`)
 - **Satisfies:** X2 §3.1, PD2, PD9; DECISIONS §2 W1 (mockup-local only)
 - **Acceptance criteria:**
@@ -196,7 +196,7 @@ acceptance criteria**, and **Given/When/Then** scenarios. TDD: the spec/E2E is a
     running` → label + Rokkit token), `STEP_TYPES`, `mkStep(type)`, `toolName(id)`, and the
     `shareOf(w)`/`SHARE` scope metadata — matching the mockup values.
   - `ToolChip.svelte` renders a tool by id (name + lock/router glyph; `allowed===false` → warning tone).
-  - The W4 atoms `Switch`, `Meter`, `PageHeader`, `WorkspaceChip`, `Icon` exist in `@strategos/ui`
+  - The W4 atoms `Switch`, `Meter`, `PageHeader`, `WorkspaceChip`, `Icon` exist in `@torii/ui`
     (added here if absent), are **data-first** (props in, `onchange`/`onclick` out), use W4 named tokens
     (no hard-coded hex, no `--accent` literal), and each has a `*.spec.svelte.js`.
   - Status/step colours resolve to **named Rokkit tokens** (e.g. `success`/`primary`/`warning`/
@@ -329,7 +329,7 @@ acceptance criteria**, and **Given/When/Then** scenarios. TDD: the spec/E2E is a
     any of the following appears: (a) a `plans` / `planned_tasks` / `planned_task_interactions` /
     `hitl_approvals` / `document_collaborators` / `doc_comments` / `doc_suggestions` DDL under
     `database/`; (b) an `/v1/agents`, `/v1/plans`, or `/rpc/agents` route in `services/gateway`; (c) any
-    import of `$lib/gateway`, `@strategos/core` Supabase adapter, `fetch`, or PostgREST from the
+    import of `$lib/gateway`, `@torii/core` Supabase adapter, `fetch`, or PostgREST from the
     `(app)/workflows` tree or the `_wf`/workflow store files.
   - An E2E asserts **zero network requests** originate from the Workflows screens during index → detail
     → builder → runs → agent-builder navigation (Playwright request interception / `browser_network_requests`).

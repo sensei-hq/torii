@@ -1,5 +1,5 @@
 {
-  "name": "@strategos/admin",
+  "name": "@seiki/admin",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -12,8 +12,8 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@strategos/ui": "workspace:*",
-    "@strategos/core": "workspace:*",
+    "@torii/ui": "workspace:*",
+    "@torii/core": "workspace:*",
     "kavach": "link:kavach",
     "@kavach/adapter-supabase": "link:@kavach/adapter-supabase",
     "@kavach/logger": "link:@kavach/logger",

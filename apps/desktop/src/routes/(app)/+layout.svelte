@@ -2,8 +2,8 @@
 	import { goto } from '$app/navigation'
 	import { resolve } from '$app/paths'
 	import { page } from '$app/state'
-	import { DesktopShell } from '@strategos/ui'
-	import { session } from '@strategos/core'
+	import { DesktopShell } from '@torii/ui'
+	import { session } from '@torii/core'
 
 	let { children } = $props()
 	const items = [

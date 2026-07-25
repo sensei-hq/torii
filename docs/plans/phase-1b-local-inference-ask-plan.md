@@ -235,7 +235,7 @@ export const ask = new AskStore()
 
 - [ ] **Step 1: build the Ask screen** — port the layout of `docs/mockups/app/view-ask.jsx`: a header (eyebrow + title + workspace/classification chip), a conversation column (each user turn + each assistant answer showing the model + an `<ExecBadge plane={turn.exec?.plane ?? 'local'} />` reading "on your device" + `$0`), and a minimal composer (input + send button, ⌘↵). Wire it to the `ask` store: the composer calls `ask.send(text)`; render `ask.turns`; show a loading indicator while `ask.loading`; show `ask.error` if set. Use `ExecBadge` + named tokens. Keep the context rail minimal/optional for 1b (the real sources rail is Phase 1b RAG-less → a simple "answered on-device" note).
 
-- [ ] **Step 2: verify (web dev, no Tauri build)** — `bun run --filter @strategos/desktop check` + `lint` clean. The real inference only works in the Tauri window (IPC), but the screen must compile + render. Optionally the controller runs `bun run --filter @strategos/desktop tauri dev` in the background to eyeball a real gemma2:2b answer (manual, optional).
+- [ ] **Step 2: verify (web dev, no Tauri build)** — `bun run --filter @torii/desktop check` + `lint` clean. The real inference only works in the Tauri window (IPC), but the screen must compile + render. Optionally the controller runs `bun run --filter @torii/desktop tauri dev` in the background to eyeball a real gemma2:2b answer (manual, optional).
 
 - [ ] **Step 3: commit** — `feat(desktop): real Ask screen wired to local inference`
 
@@ -259,7 +259,7 @@ export const ask = new AskStore()
 
 - [ ] **Step 2: `e2e/tests/ask.spec.ts`** — seeded member (existing seam) → navigate to `/ask` (click the Ask nav button, per the skill) → type a question in the composer → send → assert the answer text renders AND an `[data-exec-badge][data-plane="local"]` with "on your device" is visible.
 
-- [ ] **Step 3: run (CONTROLLER, background).** The controller runs `bun run --filter @strategos/desktop test:e2e` in a background shell (full Tauri rebuild — slow). Expect all specs (Phase-0 shell, Phase-1a auth-shell, this ask) green. Report the summary.
+- [ ] **Step 3: run (CONTROLLER, background).** The controller runs `bun run --filter @torii/desktop test:e2e` in a background shell (full Tauri rebuild — slow). Expect all specs (Phase-0 shell, Phase-1a auth-shell, this ask) green. Report the summary.
 
 - [ ] **Step 4: commit** — `test(desktop): E2E — ask → on-device answer (stubbed infer)`
 

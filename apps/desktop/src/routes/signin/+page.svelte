@@ -1,7 +1,7 @@
 <script>
 	import { goto } from '$app/navigation'
 	import { resolve } from '$app/paths'
-	import { session } from '@strategos/core'
+	import { session } from '@torii/core'
 
 	let email = $state('')
 	let password = $state('')

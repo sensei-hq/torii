@@ -1,5 +1,5 @@
 <script>
-	import { AppShell } from '@strategos/ui'
+	import { AppShell } from '@torii/ui'
 </script>
 
 <AppShell app="admin" title="Settings">

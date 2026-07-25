@@ -1,5 +1,5 @@
 {
-  "name": "strategos-monorepo",
+  "name": "torii-seiki",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,8 +10,8 @@
     "services/*"
   ],
   "scripts": {
-    "dev:admin": "bun run --filter @strategos/admin dev",
-    "dev:desktop": "bun run --filter @strategos/desktop dev",
+    "dev:admin": "bun run --filter @seiki/admin dev",
+    "dev:desktop": "bun run --filter @torii/desktop dev",
     "build": "bun run --filter '*' build",
     "test": "bun run --filter '*' test",
     "lint": "bun run --filter '*' lint",

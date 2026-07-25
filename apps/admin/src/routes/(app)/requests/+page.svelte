@@ -1,6 +1,6 @@
 <script>
 	import { onMount } from 'svelte'
-	import { AppShell, PageHeader, Card, CardHead, Chip } from '@strategos/ui'
+	import { AppShell, PageHeader, Card, CardHead, Chip } from '@torii/ui'
 	import { api } from '$lib/api'
 
 	let requests = $state([])

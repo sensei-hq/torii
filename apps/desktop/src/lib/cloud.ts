@@ -1,5 +1,5 @@
 import { GATEWAY_URL } from './env'
-import { session } from '@strategos/core'
+import { session } from '@torii/core'
 import type { ChatMessage, InferResult } from './gateway'
 
 interface C1ChatResponse {

@@ -1,7 +1,7 @@
 <script>
 	import { ask } from '$lib/ask.svelte.js'
-	import { ExecBadge } from '@strategos/ui'
-	import { session } from '@strategos/core'
+	import { ExecBadge } from '@torii/ui'
+	import { session } from '@torii/core'
 
 	let draft = $state('')
 

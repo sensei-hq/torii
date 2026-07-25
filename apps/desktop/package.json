@@ -1,5 +1,5 @@
 {
-  "name": "@strategos/desktop",
+  "name": "@torii/desktop",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -20,8 +20,8 @@
     "@rokkit/states": "link:@rokkit/states",
     "@rokkit/ui": "link:@rokkit/ui",
     "@rokkit/unocss": "link:@rokkit/unocss",
-    "@strategos/core": "workspace:*",
-    "@strategos/ui": "workspace:*",
+    "@torii/core": "workspace:*",
+    "@torii/ui": "workspace:*",
     "@supabase/supabase-js": "^2.101.1",
     "@tauri-apps/api": "^2",
     "kavach": "link:kavach"

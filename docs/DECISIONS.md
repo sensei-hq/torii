@@ -112,3 +112,31 @@ Author the **full v1 surface**: **new screens** — Tools & MCP, API-keys/servic
 - `plans/`: fix crate `[patch]`/tags in 0/1b/2a; author **F3, C2, C3, C4, C5, D4, W1, W3, W5, O2, O3, X1** module docs→specs and **Phase 3/3.5/4/5** plans; reconcile the one canonical dependency graph. C5 spec is **research-backed** (§3a) and covers the document center + all retrieval modes.
 - Gateway-repo **issues** (create → implement → close, released via tag bump): per-step `plane`/execution-location on the trace; OAuth/bearer provider-credential support in `sensei-cloud-providers`; (later, optional) `RerankModel` trait.
 - New: `design/mockup-review.md` (§6); `design/rag-and-document-center.md` (§3a — research-backed retrieval + document-center design).
+
+## 8. Rebrand — Strategos → torii + seiki (RATIFIED 2026-07-25)
+
+"Strategos" is retired as the umbrella. The suite splits into two products that parallel the developer-focused **sensei + dojo**:
+
+- **`torii`** = the AI-gateway **engine / product** — the central gateway daemon, the embedded daemon, the desktop app, and the shared UI/core kit. Torii is *the gateway*.
+- **`seiki`** = the commercial **web-SaaS layer** on top — the admin portal, the tenant/billing/org web, and the central multi-tenant Supabase. Seiki is the platform that sells and operates torii.
+
+**Authoritative identifier mapping:**
+
+| Area | Strategos (old) | → New |
+|---|---|---|
+| Central gateway crate | `strategos-gateway` | **`torii-gateway`** |
+| Embedded daemon | gateway-embedded | torii (daemon) |
+| Desktop app pkg | `@torii/desktop` | **`@torii/desktop`** |
+| Shared UI kit | `@torii/ui` | **`@torii/ui`** |
+| Shared core | `@torii/core` | **`@torii/core`** |
+| Web admin portal pkg | `@seiki/admin` | **`@seiki/admin`** |
+| Root monorepo pkg | `torii-seiki` | **`torii-seiki`** |
+| Tauri bundle id | `dev.strategos.console` | **`dev.torii.app`** |
+| Desktop brand string | "Strategos" | **"Torii"** |
+| Web-portal brand string | "Strategos Admin" | **"Seiki"** |
+| Central Supabase project | `strategos` | **`seiki`** *(deferred — destructive local reset)* |
+| Env prefix | `STRATEGOS_*` | `TORII_*` (engine) *(deferred with DB)* |
+
+**Confirmed calls (Jerry, 2026-07-25):** the *central* gateway daemon is **torii** (torii is the whole engine, not merely the local piece); the shared npm scope is **`@torii/*`**; the two apps split by brand (`@seiki/admin`, `@torii/desktop`), with the shared kit under torii and consumed by both.
+
+**Sweep order (safe tiers, commit each):** T1 npm scope + package names + imports → T2 crate rename → T3 Tauri id + brand strings + env. **Deferred:** the Supabase `project_id` rename (resets the local DB — do at a coordinated `dbd reset`) and the ~164 doc files (context-dependent: Strategos→Torii for engine/app/gateway docs, →Seiki for web-SaaS/admin/billing docs). The separate-Supabase-instances decision stands (see the rebrand memory).

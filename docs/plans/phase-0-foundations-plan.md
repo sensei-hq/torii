@@ -99,15 +99,15 @@ monorepo/
 
 ```json
 {
-  "name": "strategos-monorepo",
+  "name": "torii-seiki",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.3.10",
   "workspaces": ["packages/*", "apps/*", "services/*"],
   "scripts": {
-    "dev:admin": "bun run --filter @strategos/admin dev",
-    "dev:desktop": "bun run --filter @strategos/desktop dev",
+    "dev:admin": "bun run --filter @seiki/admin dev",
+    "dev:desktop": "bun run --filter @torii/desktop dev",
     "build": "bun run --filter '*' build",
     "test": "bun run --filter '*' test",
     "lint": "bun run --filter '*' lint",
@@ -266,7 +266,7 @@ git commit -m "docs(phase0): record rokkit + kavach bun-link prerequisites"
 
 ```json
 {
-  "name": "@strategos/ui",
+  "name": "@torii/ui",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -461,7 +461,7 @@ git commit -m "feat(ui): Rokkit design-system foundation (Zen-Sumi skin + Pill a
 
 ```json
 {
-  "name": "@strategos/core",
+  "name": "@torii/core",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -640,7 +640,7 @@ git commit -m "feat(core): swappable DataSource — mock + kavach-supabase adapt
 
 ```json
 {
-  "name": "@strategos/admin",
+  "name": "@seiki/admin",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -652,8 +652,8 @@ git commit -m "feat(core): swappable DataSource — mock + kavach-supabase adapt
     "lint": "prettier --check . && eslint ."
   },
   "dependencies": {
-    "@strategos/ui": "workspace:*",
-    "@strategos/core": "workspace:*",
+    "@torii/ui": "workspace:*",
+    "@torii/core": "workspace:*",
     "kavach": "link:kavach",
     "@kavach/adapter-supabase": "link:@kavach/adapter-supabase",
     "@kavach/logger": "link:@kavach/logger",
@@ -691,7 +691,7 @@ export default { kit: { adapter: adapter() } }
 `apps/admin/rokkit.config.js`:
 
 ```js
-export { default } from '@strategos/ui/rokkit.config'
+export { default } from '@torii/ui/rokkit.config'
 ```
 
 `apps/admin/uno.config.js`:
@@ -766,7 +766,7 @@ export const handle = ({ event, resolve }) => kavach.handle({ event, resolve })
 - [ ] **Step 5: Create `apps/admin/src/app.css`** (re-export the shared token layer)
 
 ```css
-@import '@strategos/ui/app.css';
+@import '@torii/ui/app.css';
 ```
 
 - [ ] **Step 6: Create the layout + a home route rendering the shared shell**
@@ -821,7 +821,7 @@ export const load: LayoutServerLoad = ({ locals }) => ({
 
 ```svelte
 <script>
-  import { AppShell } from '@strategos/ui'
+  import { AppShell } from '@torii/ui'
 </script>
 
 <AppShell app="admin" title="Overview">
@@ -839,7 +839,7 @@ PUBLIC_SUPABASE_ANON_KEY=<from repo .env.local>
 - [ ] **Step 8: Install and boot**
 
 Run: `bun install`
-Then: `bun run --filter @strategos/admin dev`
+Then: `bun run --filter @seiki/admin dev`
 Expected: Vite serves on `http://localhost:5273`; the page renders the `AppShell` with the Zen-Sumi skin (paper background, ink text). No console errors from kavach/rokkit resolution.
 
 - [ ] **Step 9: Commit**
@@ -861,7 +861,7 @@ git commit -m "feat(admin): SvelteKit app boots shared shell + skin (kavach hybr
 
 ```json
 {
-  "name": "@strategos/desktop",
+  "name": "@torii/desktop",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -873,8 +873,8 @@ git commit -m "feat(admin): SvelteKit app boots shared shell + skin (kavach hybr
     "lint": "prettier --check . && eslint ."
   },
   "dependencies": {
-    "@strategos/ui": "workspace:*",
-    "@strategos/core": "workspace:*",
+    "@torii/ui": "workspace:*",
+    "@torii/core": "workspace:*",
     "@rokkit/states": "link:@rokkit/states",
     "@rokkit/actions": "link:@rokkit/actions",
     "@rokkit/app": "link:@rokkit/app",
@@ -948,7 +948,7 @@ export default defineConfig({
 
 ```svelte
 <script>
-  import { AppShell } from '@strategos/ui'
+  import { AppShell } from '@torii/ui'
 </script>
 
 <AppShell app="console" title="Workspace">
@@ -973,10 +973,10 @@ Expected: compiles (a bare Tauri app, no custom commands yet).
 
 - [ ] **Step 6: Boot the web frontend (Tauri window is optional in Phase 0)**
 
-Run: `bun install && bun run --filter @strategos/desktop dev`
+Run: `bun install && bun run --filter @torii/desktop dev`
 Expected: Vite serves on `http://localhost:5274`; renders `AppShell` with the Zen-Sumi skin.
 
-Optional native window: `bun run --filter @strategos/desktop tauri dev` → a Tauri window loading the same UI.
+Optional native window: `bun run --filter @torii/desktop tauri dev` → a Tauri window loading the same UI.
 
 - [ ] **Step 7: Commit**
 
@@ -1385,7 +1385,7 @@ Expected: all package tests pass; lint clean (zero-errors policy).
 - [ ] **Step 2: Boot both apps and confirm the shared shell + skin**
 
 Run (two terminals): `bun run dev:admin` and `bun run dev:desktop`
-Expected: admin on `:5273`, desktop on `:5274`; both render `AppShell` with the Zen-Sumi skin and their own nav rails; no resolution errors for `@rokkit/*`, `@kavach/*`, `@strategos/*`.
+Expected: admin on `:5273`, desktop on `:5274`; both render `AppShell` with the Zen-Sumi skin and their own nav rails; no resolution errors for `@rokkit/*`, `@kavach/*`, `@torii/*`.
 
 - [ ] **Step 3: Confirm the desktop crate compiles in the workspace**
 

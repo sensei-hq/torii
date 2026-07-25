@@ -1,1 +1,1 @@
-export { default } from '@strategos/ui/rokkit.config'
+export { default } from '@torii/ui/rokkit.config'

@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "strategos_gateway=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "torii_gateway=info,tower_http=info".into()),
         )
         .init();
 
@@ -254,7 +254,7 @@ async fn main() -> anyhow::Result<()> {
         .with_state(state);
 
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
-    tracing::info!("strategos-gateway listening on 127.0.0.1:{}", port);
+    tracing::info!("torii-gateway listening on 127.0.0.1:{}", port);
     axum::serve(listener, app).await?;
 
     Ok(())

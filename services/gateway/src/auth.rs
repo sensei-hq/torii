@@ -4,11 +4,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use jsonwebtoken::{
-    decode, decode_header,
-    jwk::JwkSet,
-    Algorithm, DecodingKey, Validation,
-};
+use jsonwebtoken::{decode, decode_header, jwk::JwkSet, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -53,7 +49,7 @@ pub enum AuthError {
     InvalidToken(#[from] jsonwebtoken::errors::Error),
     #[error("no JWK matched the token kid")]
     NoMatchingKey,
-    /// H2: an API-key credential (`sk_str_…`) failed to authenticate — malformed,
+    /// H2: an API-key credential (`sk_tor_…`) failed to authenticate — malformed,
     /// unknown/revoked prefix, or secret mismatch. Deliberately opaque (carries no
     /// secret and does not distinguish the cause) so the mapped 401 leaks nothing.
     #[error("API key authentication failed")]
@@ -183,11 +179,11 @@ pub async fn require_auth(
         Err(e) => return e.into_response(),
     };
 
-    // H2: API-key branch. Programmatic callers present `sk_str_…` keys; everything
-    // else is a Supabase JWT and takes the unchanged path below. The key only
-    // AUTHENTICATES — budget/capabilities come from the identity it binds, never
-    // the key (see `authenticate_api_key`).
-    if token.starts_with("sk_str_") {
+    // H2: API-key branch. Programmatic callers present `sk_tor_…` keys (legacy `sk_str_`
+    // still accepted); everything else is a Supabase JWT and takes the unchanged path
+    // below. The key only AUTHENTICATES — budget/capabilities come from the identity it
+    // binds, never the key (see `authenticate_api_key`).
+    if token.starts_with("sk_tor_") || token.starts_with("sk_str_") {
         return match authenticate_api_key(&state.pool, &token).await {
             Ok(claims) => {
                 req.extensions_mut().insert(claims);
@@ -257,7 +253,7 @@ pub async fn require_auth(
 /// satisfies any downstream `exp` check without ever expiring a live key.
 const API_KEY_EXP: usize = 4_102_444_800;
 
-/// H2: authenticate a raw `sk_str_<env>_<prefix>.<secret>` API key into [`Claims`].
+/// H2: authenticate a raw `sk_tor_<env>_<prefix>.<secret>` API key into [`Claims`].
 ///
 /// **Fail-closed by construction**: any malformed key, unknown/revoked prefix, secret
 /// mismatch, or DB error resolves to `Err(AuthError::InvalidApiKey)` → 401. Nothing
@@ -307,13 +303,14 @@ async fn authenticate_api_key(pool: &sqlx::PgPool, token: &str) -> Result<Claims
         .await
         .map_err(|_| AuthError::InvalidApiKey)?;
 
-        let claims_version: i64 =
-            sqlx::query_scalar("select coalesce(claims_version, 0) from core.profiles where id = $1")
-                .bind(pid)
-                .fetch_optional(pool)
-                .await
-                .map_err(|_| AuthError::InvalidApiKey)?
-                .unwrap_or(0);
+        let claims_version: i64 = sqlx::query_scalar(
+            "select coalesce(claims_version, 0) from core.profiles where id = $1",
+        )
+        .bind(pid)
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| AuthError::InvalidApiKey)?
+        .unwrap_or(0);
 
         Claims {
             sub: pid.to_string(),
@@ -326,12 +323,13 @@ async fn authenticate_api_key(pool: &sqlx::PgPool, token: &str) -> Result<Claims
         }
     } else if let Some(sa) = service_account_id {
         // Service-account-bound: capabilities come from the tenant's `service` role.
-        let role_ids: Vec<Uuid> =
-            sqlx::query_scalar("select id from core.roles where tenant_id = $1 and key = 'service'")
-                .bind(tenant)
-                .fetch_all(pool)
-                .await
-                .map_err(|_| AuthError::InvalidApiKey)?;
+        let role_ids: Vec<Uuid> = sqlx::query_scalar(
+            "select id from core.roles where tenant_id = $1 and key = 'service'",
+        )
+        .bind(tenant)
+        .fetch_all(pool)
+        .await
+        .map_err(|_| AuthError::InvalidApiKey)?;
 
         Claims {
             sub: sa.to_string(),

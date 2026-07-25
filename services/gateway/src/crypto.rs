@@ -36,10 +36,12 @@ pub enum CryptoError {
 pub struct Kek(Zeroizing<[u8; 32]>);
 
 impl Kek {
-    /// Load the KEK from the `STRATEGOS_KEK` env var (base64-encoded 32 bytes).
-    /// Production should replace this with a KMS-backed provider.
+    /// Load the KEK from the `TORII_KEK` env var (base64-encoded 32 bytes); the legacy
+    /// `STRATEGOS_KEK` is accepted as a fallback. Production replaces this with a KMS-backed
+    /// provider.
     pub fn from_env() -> Result<Self, CryptoError> {
-        let raw = std::env::var("STRATEGOS_KEK")
+        let raw = std::env::var("TORII_KEK")
+            .or_else(|_| std::env::var("STRATEGOS_KEK"))
             .map_err(|_| CryptoError::Kek("env var unset".into()))?;
         // `Zeroizing` so the intermediate decoded copy of the KEK is wiped on drop.
         let bytes = Zeroizing::new(
@@ -102,13 +104,19 @@ fn encrypt_gcm(key: &[u8; 32], iv: &[u8; IV_LEN], plaintext: &[u8]) -> Vec<u8> {
 pub fn unseal_dek(kek: &Kek, encrypted_dek: &[u8]) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
     // Wrap the intermediate decrypted Vec so it is wiped on drop too.
     let dek = Zeroizing::new(kek.decrypt(encrypted_dek)?);
-    let arr: [u8; 32] = dek.as_slice().try_into().map_err(|_| CryptoError::Decrypt)?;
+    let arr: [u8; 32] = dek
+        .as_slice()
+        .try_into()
+        .map_err(|_| CryptoError::Decrypt)?;
     Ok(Zeroizing::new(arr))
 }
 
 /// Decrypt a provider credential (sealed by the tenant DEK) → UTF-8 secret.
 /// Returned in `Zeroizing` so the plaintext secret is wiped when the caller drops it.
-pub fn unseal_credential(dek: &[u8; 32], encrypted: &[u8]) -> Result<Zeroizing<String>, CryptoError> {
+pub fn unseal_credential(
+    dek: &[u8; 32],
+    encrypted: &[u8],
+) -> Result<Zeroizing<String>, CryptoError> {
     let pt = decrypt_gcm(dek, encrypted, b"")?;
     let secret = String::from_utf8(pt).map_err(|_| CryptoError::Decrypt)?;
     Ok(Zeroizing::new(secret))
@@ -148,7 +156,10 @@ mod tests {
 
         // Seal a provider key with the DEK, then unseal.
         let sealed_key = encrypt_gcm(&dek, &[2u8; IV_LEN], b"sk-ant-secret-123");
-        assert_eq!(*unseal_credential(&dek, &sealed_key).unwrap(), "sk-ant-secret-123");
+        assert_eq!(
+            *unseal_credential(&dek, &sealed_key).unwrap(),
+            "sk-ant-secret-123"
+        );
     }
 
     #[test]
@@ -158,8 +169,14 @@ mod tests {
         // fresh nonce each call → distinct ciphertext, but both decrypt.
         let sealed2 = seal_credential(&dek, b"sk-ant-live-xyz").unwrap();
         assert_ne!(sealed, sealed2);
-        assert_eq!(*unseal_credential(&dek, &sealed).unwrap(), "sk-ant-live-xyz");
-        assert_eq!(*unseal_credential(&dek, &sealed2).unwrap(), "sk-ant-live-xyz");
+        assert_eq!(
+            *unseal_credential(&dek, &sealed).unwrap(),
+            "sk-ant-live-xyz"
+        );
+        assert_eq!(
+            *unseal_credential(&dek, &sealed2).unwrap(),
+            "sk-ant-live-xyz"
+        );
     }
 
     #[test]
@@ -168,11 +185,17 @@ mod tests {
         let mut sealed = encrypt_gcm(&dek, &[3u8; IV_LEN], b"secret");
         let last = sealed.len() - 1;
         sealed[last] ^= 0x01; // flip a bit
-        assert!(matches!(unseal_credential(&dek, &sealed), Err(CryptoError::Decrypt)));
+        assert!(matches!(
+            unseal_credential(&dek, &sealed),
+            Err(CryptoError::Decrypt)
+        ));
     }
 
     #[test]
     fn short_blob_rejected() {
-        assert!(matches!(unseal_credential(&[0u8; 32], b"tiny"), Err(CryptoError::TooShort(..))));
+        assert!(matches!(
+            unseal_credential(&[0u8; 32], b"tiny"),
+            Err(CryptoError::TooShort(..))
+        ));
     }
 }

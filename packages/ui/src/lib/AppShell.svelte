@@ -1,39 +1,179 @@
 <script>
-	let { app = 'admin', title = '', children } = $props()
-	const NAV = {
-		admin: [
-			'Overview',
-			'Requests',
-			'Organization',
-			'Models',
-			'Routing',
-			'Connections',
-			'Governance',
-			'Billing',
-			'Settings'
-		],
-		console: ['Workspace', 'Ask', 'Library', 'Playground', 'Workflows', 'Activity', 'Settings']
+	// Zen-Sumi admin shell — Chrome top bar + grouped Rail sidebar, modelled on
+	// docs/mockups/app/{admin,shell}.jsx. Uses Rokkit named tokens throughout.
+	import { page } from '$app/state'
+	// Light/dark switcher — drives vibe.mode; the `themable` action in the root layout
+	// writes data-mode to <html>/<body> and persists it (skin-system-rokkit skill).
+	import { vibe } from '@rokkit/states'
+	const toggleMode = () => {
+		vibe.mode = vibe.mode === 'dark' ? 'light' : 'dark'
 	}
-	const items = $derived(NAV[app] ?? [])
+
+	let {
+		app = 'admin',
+		title = 'admin portal',
+		brand = 'Seiki',
+		org = { mark: 'N', name: 'Northwind Estates', sub: 'org · 142 seats' },
+		user = { name: 'Aiko', initial: 'A', role: 'Administrator' },
+		onSignout,
+		children
+	} = $props()
+
+	// Grouped nav — mirrors the mockup's Overview / Tenant / Gateway / Govern sections,
+	// mapped to the routes that exist today (no dead links).
+	const NAV = [
+		{
+			label: 'Overview',
+			items: [
+				{ href: '/', label: 'Overview', icon: 'i-lucide-layout-dashboard' },
+				{ href: '/requests', label: 'Requests & audit', icon: 'i-lucide-clipboard-list', live: true }
+			]
+		},
+		{
+			label: 'Tenant',
+			items: [{ href: '/organization', label: 'Members & roles', icon: 'i-lucide-building-2' }]
+		},
+		{
+			label: 'Gateway',
+			items: [
+				{ href: '/models', label: 'Models', icon: 'i-lucide-cpu' },
+				{ href: '/routing', label: 'Routing', icon: 'i-lucide-route' },
+				{ href: '/connections', label: 'Connections', icon: 'i-lucide-plug' }
+			]
+		},
+		{
+			label: 'Govern',
+			items: [
+				{ href: '/governance', label: 'Governance', icon: 'i-lucide-shield-check' },
+				{ href: '/billing', label: 'Budgets & billing', icon: 'i-lucide-wallet' },
+				{ href: '/settings', label: 'Settings', icon: 'i-lucide-settings' }
+			]
+		}
+	]
+
+	const path = $derived(page.url?.pathname ?? '/')
+	/** @param {string} href */
+	const isActive = (href) => (href === '/' ? path === '/' : path.startsWith(href))
 </script>
 
-<div data-app-shell class="grid h-full grid-cols-[13rem_1fr]">
-	<nav
-		aria-label="Primary"
-		class="flex flex-col gap-1 border-r border-paper-edge bg-paper-soft p-3"
+<div class="grid h-full grid-rows-[auto_1fr]">
+	<!-- Chrome top bar -->
+	<header
+		class="flex h-[42px] flex-shrink-0 items-center gap-3 border-b border-paper-edge bg-paper px-4"
 	>
-		<div class="mb-3 text-sm font-semibold text-accent">Strategos</div>
-		{#each items as item (item)}
-			<a
-				href={item === 'Overview' ? '/' : `/${item.toLowerCase()}`}
-				class="rounded px-2 py-1 text-sm text-ink-soft hover:bg-paper-mute">{item}</a
+		<div class="flex gap-[7px]">
+			<span class="h-3 w-3 rounded-full" style="background:oklch(0.72 0.14 28)"></span>
+			<span class="h-3 w-3 rounded-full" style="background:oklch(0.82 0.13 85)"></span>
+			<span class="h-3 w-3 rounded-full" style="background:oklch(0.72 0.11 145)"></span>
+		</div>
+		<div class="flex-1 text-center text-xs tracking-wide text-ink-mute">
+			{brand} · {title}
+		</div>
+		<div class="flex items-center gap-1.5">
+			<span
+				class="inline-flex items-center gap-1.5 rounded-full border border-paper-edge px-2.5 py-1 text-[11px] text-ink-mute"
 			>
-		{/each}
-	</nav>
-	<section class="flex h-full flex-col">
-		<header class="flex items-center border-b border-paper-edge px-4 py-3">
-			<h1 class="text-base font-medium text-ink-mute">{title}</h1>
-		</header>
-		<div class="flex-1 overflow-auto">{@render children?.()}</div>
-	</section>
+				<span class="i-lucide-cpu h-3 w-3"></span>Desktop app
+			</span>
+			<span class="mx-1 h-4 w-px bg-paper-edge"></span>
+			<button class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute" title="Search"
+				><span class="i-lucide-search h-4 w-4"></span></button
+			>
+			<button class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute" title="Notifications"
+				><span class="i-lucide-bell h-4 w-4"></span></button
+			>
+			<button
+				onclick={toggleMode}
+				class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute"
+				title="Toggle light / dark"
+				aria-label="Toggle light or dark theme"
+			>
+				<span class="{vibe.mode === 'dark' ? 'i-lucide-sun' : 'i-lucide-moon'} block h-4 w-4"></span>
+			</button>
+			<span class="mx-1 h-4 w-px bg-paper-edge"></span>
+			<span class="flex items-center gap-2" title={user.role}>
+				<span
+					class="grid h-[22px] w-[22px] place-items-center rounded-full bg-accent-soft text-[9px] font-semibold text-accent"
+					>{user.initial}</span
+				>
+				<span class="whitespace-nowrap text-[11px] text-ink-soft">{user.name} · {user.role}</span>
+			</span>
+			{#if onSignout}
+				<button
+					class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute"
+					title="Sign out"
+					onclick={onSignout}><span class="i-lucide-log-out h-4 w-4"></span></button
+				>
+			{/if}
+		</div>
+	</header>
+
+	<div class="grid min-h-0 grid-cols-[15rem_1fr]">
+		<!-- Rail sidebar -->
+		<aside class="flex flex-col overflow-y-auto border-r border-paper-edge bg-paper-soft px-3 py-4">
+			<!-- brand -->
+			<div class="flex items-center gap-2.5 px-1.5">
+				<span
+					class="grid h-[22px] w-[22px] place-items-center rounded-full border border-accent text-accent"
+				>
+					<span class="h-2.5 w-2.5 rounded-full border border-accent"></span>
+				</span>
+				<span class="font-heading text-[17px] tracking-tight text-ink">{brand}</span>
+			</div>
+
+			<!-- org header -->
+			<div
+				class="mt-4 flex items-center gap-2.5 rounded-lg border border-paper-edge bg-paper px-2.5 py-2"
+			>
+				<span
+					class="grid h-8 w-8 flex-shrink-0 place-items-center rounded-md bg-paper-mute text-sm font-semibold text-ink"
+					>{org.mark}</span
+				>
+				<div class="min-w-0">
+					<div class="truncate text-sm font-semibold text-ink">{org.name}</div>
+					<div class="font-mono text-[11px] text-ink-mute">{org.sub}</div>
+				</div>
+			</div>
+
+			<!-- nav groups -->
+			{#each NAV as group (group.label)}
+				<div class="mt-5">
+					<div
+						class="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint"
+					>
+						{group.label}
+					</div>
+					<div class="flex flex-col gap-0.5">
+						{#each group.items as it (it.href)}
+							{@const active = isActive(it.href)}
+							<a
+								href={it.href}
+								class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors {active
+									? 'bg-paper-mute font-medium text-ink'
+									: 'text-ink-soft hover:bg-paper-mute/60 hover:text-ink'}"
+								aria-current={active ? 'page' : undefined}
+							>
+								<span
+									class="{it.icon} h-[18px] w-[18px] flex-shrink-0 {active
+										? 'text-accent'
+										: 'text-ink-mute'}"
+								></span>
+								<span class="flex-1 truncate">{it.label}</span>
+								{#if it.live}
+									<span class="h-1.5 w-1.5 rounded-full bg-success"></span>
+								{:else if it.end}
+									<span class="font-mono text-[11px] text-ink-mute">{it.end}</span>
+								{/if}
+							</a>
+						{/each}
+					</div>
+				</div>
+			{/each}
+			<span class="flex-1"></span>
+			<div class="px-2 font-mono text-[10px] text-ink-faint">gateway · healthy · {app}</div>
+		</aside>
+
+		<!-- main content -->
+		<main class="min-h-0 overflow-auto">{@render children?.()}</main>
+	</div>
 </div>

@@ -62,7 +62,10 @@ pub async fn judge_response(
     }
 
     // 1. Budget reserve for the judge call (metered; $0 on local, still flows through C3).
-    let est = crate::budgets::estimate(200, 16);
+    //    gemma4 is a REASONING model — it needs enough output budget to finish its
+    //    chain-of-thought and emit the final score, else `content` comes back empty
+    //    (ollama puts the CoT in `reasoning`, `content` only fills once it concludes).
+    let est = crate::budgets::estimate(200, 512);
     let hold = match crate::budgets::reserve(&state.pool, tenant, node, est, None).await {
         Ok(h) => h,
         // over budget / no node → skip judging (never block, never overspend).
@@ -86,7 +89,8 @@ pub async fn judge_response(
         payload: Payload::Chat {
             messages: vec![Message::text(MessageRole::User, &prompt)],
             system: None,
-            max_tokens: Some(24),
+            // enough for a reasoning model (gemma4) to think + emit the final score.
+            max_tokens: Some(512),
             temperature: None,
             tools: Vec::new(),
         },

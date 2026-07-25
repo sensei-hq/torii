@@ -82,25 +82,30 @@ fn estimate_input_tokens(req: &ChatRequest) -> u32 {
     (chars / 4).min(u32::MAX as usize) as u32
 }
 
-fn build_inference_request(req: &ChatRequest) -> InferenceRequest {
+/// Builds the engine request and returns the total number of redactions applied
+/// across the messages + system prompt (a C6 governance signal).
+fn build_inference_request(req: &ChatRequest) -> (InferenceRequest, u32) {
     // C4 §2 W5 — redact-in-flight: strip secrets/PII from every message and the
     // system prompt BEFORE they egress to any model (cloud especially). One-way
     // placeholders (v1). Redaction counts flow into the governance/quality signal.
     let redactor = crate::redact::Redactor;
+    let mut redactions: u32 = 0;
     let messages: Vec<Message> = req
         .messages
         .iter()
         .map(|m| {
-            let (clean, _) = redactor.redact(&m.content);
+            let (clean, hits) = redactor.redact(&m.content);
+            redactions += hits.len() as u32;
             Message::text(map_role(&m.role), &clean)
         })
         .collect();
-    let system = req
-        .system
-        .as_ref()
-        .map(|s| redactor.redact(s).0);
+    let system = req.system.as_ref().map(|s| {
+        let (clean, hits) = redactor.redact(s);
+        redactions += hits.len() as u32;
+        clean
+    });
 
-    InferenceRequest {
+    let ireq = InferenceRequest {
         capability: Capability::TextChat,
         model: req.model.clone(),
         router: None,
@@ -118,7 +123,8 @@ fn build_inference_request(req: &ChatRequest) -> InferenceRequest {
         auth: None,
         panel: None,
         consensus: None,
-    }
+    };
+    (ireq, redactions)
 }
 
 /// C3 hot-path preamble: resolve the caller's budget node and hard-reserve a
@@ -193,7 +199,7 @@ pub async fn post_chat(
     State(state): State<SharedState>,
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, String)> {
-    let ireq = build_inference_request(&req);
+    let (ireq, redactions) = build_inference_request(&req);
     let max_tokens = req.max_tokens.unwrap_or(1024);
     let input_est = estimate_input_tokens(&req);
 
@@ -282,6 +288,32 @@ pub async fn post_chat(
 
         if let Err(e) = store.insert_inference_call(&call).await {
             tracing::warn!("chat: persist inference_call failed (best-effort): {}", e);
+        } else {
+            // C6: one implicit quality-signal batch per call, keyed to the ledger row.
+            let exec_loc = if call.adapter.contains("embedded")
+                || call.adapter.contains("ollama")
+                || call.adapter.contains("llama")
+            {
+                "local"
+            } else {
+                "cloud"
+            };
+            crate::quality::record_call_signals(
+                &state.pool,
+                tenant,
+                &crate::quality::CallSignals {
+                    inference_call_id: call.id,
+                    actor_id: Some(node),
+                    latency_ms: duration_ms,
+                    cost_usd,
+                    input_tokens,
+                    output_tokens,
+                    redactions,
+                    execution_location: exec_loc.to_string(),
+                    success: resp.success,
+                },
+            )
+            .await;
         }
     }
 
@@ -308,7 +340,7 @@ pub async fn post_chat_stream(
     State(state): State<SharedState>,
     Json(req): Json<ChatRequest>,
 ) -> Response {
-    let ireq = build_inference_request(&req);
+    let (ireq, redactions) = build_inference_request(&req);
     let max_tokens = req.max_tokens.unwrap_or(1024);
     let input_est = estimate_input_tokens(&req);
 
@@ -402,6 +434,32 @@ pub async fn post_chat_stream(
                     let store = PgGatewayStore { pool: state.pool.clone(), tenant_id: tenant };
                     if let Err(e) = store.insert_inference_call(&call).await {
                         tracing::warn!("chat/stream: persist failed (best-effort): {}", e);
+                    } else {
+                        // C6: one implicit quality-signal batch per call, keyed to the ledger row.
+                        let exec_loc = if call.adapter.contains("embedded")
+                            || call.adapter.contains("ollama")
+                            || call.adapter.contains("llama")
+                        {
+                            "local"
+                        } else {
+                            "cloud"
+                        };
+                        crate::quality::record_call_signals(
+                            &state.pool,
+                            tenant,
+                            &crate::quality::CallSignals {
+                                inference_call_id: call.id,
+                                actor_id: Some(node),
+                                latency_ms: duration_ms,
+                                cost_usd,
+                                input_tokens: call.input_tokens,
+                                output_tokens: call.output_tokens,
+                                redactions,
+                                execution_location: exec_loc.to_string(),
+                                success: true,
+                            },
+                        )
+                        .await;
                     }
                 }
             }

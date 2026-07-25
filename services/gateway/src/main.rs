@@ -26,6 +26,7 @@ mod capabilities;  // F2: server-side capability resolution + claims-version gat
 mod config_loader;
 mod crypto;   // F3: DEK/KEK envelope crypto
 mod keys;
+mod quality;  // C6: quality-signal capture (one implicit batch per inference call)
 mod redact;   // C4: secret/PII redaction (DLP, §2 W5)
 mod routes;
 mod state;

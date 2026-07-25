@@ -249,6 +249,7 @@ pub async fn post_chat(
     };
 
     // --- Persist (best-effort) — tenant is known (reserve_budget errored otherwise) ---
+    let main_call_id = Uuid::new_v4(); // hoisted so the C6 judge can key its score to it
     {
         let successful_attempt = resp.attempts.last();
         let adapter = successful_attempt
@@ -257,7 +258,7 @@ pub async fn post_chat(
         let api_model_id = successful_attempt.map(|a| a.api_model_id.clone());
 
         let call = InferenceCall {
-            id: Uuid::new_v4(),
+            id: main_call_id,
             session_id: None,
             project_id: None,
             subject_id: Some(node), // C3: metered against the resolved budget node
@@ -315,6 +316,27 @@ pub async fn post_chat(
             )
             .await;
         }
+    }
+
+    // C6: opt-in LLM-as-judge — score the response on the local `judge` chain (gemma4,
+    // $0), spawned so it never adds latency to this response. Default-off per tenant.
+    if crate::judge::judge_enabled(&state, tenant).await {
+        let question = req
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|m| m.content.clone())
+            .unwrap_or_default();
+        let answer = chat_response.content.clone();
+        tokio::spawn(crate::judge::judge_response(
+            state.clone(),
+            tenant,
+            node,
+            main_call_id,
+            question,
+            answer,
+        ));
     }
 
     Ok(Json(chat_response))

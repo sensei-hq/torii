@@ -318,15 +318,18 @@ pub async fn get_routing(
         Ok(t) => t,
         Err(resp) => return resp,
     };
+    // Read the BASE table (not effective_chain_models, which filters is_active=true) so
+    // disabled steps are shown and can be re-enabled. Includes the step id for the toggle.
     let rows: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.chain_name, t.sequence_order), '[]'::json) from ( \
-           select ec.chain_name, ec.sequence_order, ec.plane, \
+           select fcm.id, fc.name as chain_name, fcm.sequence_order, fcm.plane, fcm.is_active, \
                   coalesce(r.name, '—') as router, \
                   coalesce(m.full_name, '—') as model \
-             from public.effective_chain_models ec \
-             left join config.models m on m.id = ec.model_id \
-             left join config.routers r on r.id = ec.router_id \
-            where ec.tenant_id = $1) t",
+             from public.fallback_chain_models fcm \
+             join public.fallback_chains fc on fc.id = fcm.fallback_chain_id \
+             left join config.models m on m.id = fcm.model_id \
+             left join config.routers r on r.id = fcm.router_id \
+            where fcm.tenant_id = $1) t",
     )
     .bind(tenant)
     .fetch_one(&state.pool)

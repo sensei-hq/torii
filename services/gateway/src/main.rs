@@ -243,6 +243,10 @@ async fn main() -> anyhow::Result<()> {
             "/governance/set-feature",
             post(routes::rpc::governance_set_feature),
         )
+        .route(
+            "/routing/set-step-active",
+            post(routes::rpc::routing_set_step),
+        )
         .route("/spaces/create", post(routes::rpc::spaces_create))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),

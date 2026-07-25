@@ -546,6 +546,57 @@ pub async fn governance_set_feature(
 }
 
 #[derive(Deserialize)]
+pub struct SetChainStep {
+    pub id: Uuid,
+    pub is_active: bool,
+}
+
+/// `POST /rpc/routing/set-step-active` — enable/disable one fallback-chain step (the
+/// gateway skips inactive steps when resolving a chain). Capability `chain.write`.
+pub async fn routing_set_step(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<SetChainStep>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "chain.write").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let write = sqlx::query(
+        "update public.fallback_chain_models \
+            set is_active = $1, modified_by = $2, modified_at = now() \
+          where id = $3 and tenant_id = $4",
+    )
+    .bind(body.is_active)
+    .bind(actor.to_string())
+    .bind(body.id)
+    .bind(tenant)
+    .execute(&state.pool)
+    .await;
+    match write {
+        Ok(r) if r.rows_affected() == 0 => {
+            (StatusCode::NOT_FOUND, "step not found in tenant").into_response()
+        }
+        Ok(_) => {
+            audit(
+                &state,
+                tenant,
+                actor,
+                "routing.step.set",
+                "fallback_chain_model",
+                Some(body.id),
+            )
+            .await;
+            (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+        }
+        Err(e) => {
+            tracing::error!("routing_set_step: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
 pub struct CreateSpace {
     pub name: String,
     pub classification: Option<String>,

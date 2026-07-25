@@ -7,8 +7,9 @@
 	let steps = $state([])
 	let error = $state('')
 	let loading = $state(true)
+	let busy = $state('')
 
-	onMount(async () => {
+	async function load() {
 		try {
 			steps = (await api.routing()).steps
 		} catch (e) {
@@ -16,7 +17,23 @@
 		} finally {
 			loading = false
 		}
-	})
+	}
+	onMount(load)
+
+	/** @param {import('$lib/api').RoutingStep} s */
+	async function toggle(s) {
+		if (busy) return
+		busy = s.id
+		error = ''
+		try {
+			await api.setRoutingStep(s.id, !s.is_active)
+			await load()
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e)
+		} finally {
+			busy = ''
+		}
+	}
 
 	// group steps into ordered chains
 	const chains = $derived(
@@ -62,9 +79,10 @@
 						meta={`${chain.rows.length} step${chain.rows.length === 1 ? '' : 's'}`}
 					/>
 					<div>
-						{#each chain.rows as s (s.sequence_order)}
+						{#each chain.rows as s (s.id)}
 							<div
 								class="flex items-center gap-3 border-b border-paper-edge px-4 py-2.5 last:border-b-0"
+								class:opacity-40={!s.is_active}
 							>
 								<span
 									class="grid h-6 w-6 flex-shrink-0 place-items-center rounded-full bg-paper-mute font-mono text-[11px] text-ink-mute"
@@ -74,6 +92,12 @@
 								<span class="i-solar-alt-arrow-right-bold-duotone h-3.5 w-3.5 text-ink-faint"></span>
 								<span class="flex-1 font-mono text-sm text-ink">{s.model}</span>
 								<Chip tone={planeTone(s.plane)}>{s.plane}</Chip>
+								<button
+									onclick={() => toggle(s)}
+									disabled={busy === s.id}
+									class="w-20 rounded-md border border-paper-edge px-2 py-1 text-[11px] font-medium text-ink-soft hover:bg-paper-mute disabled:opacity-40"
+									>{s.is_active ? 'Disable' : 'Enable'}</button
+								>
 							</div>
 						{/each}
 					</div>

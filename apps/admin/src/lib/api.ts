@@ -159,11 +159,13 @@ export interface Feature {
 export type FeatureState = 'locked' | 'default-on' | 'default-off' | 'user-overridable'
 
 export interface RoutingStep {
+	id: string
 	chain_name: string
 	sequence_order: number
 	plane: string
 	router: string
 	model: string
+	is_active: boolean
 }
 
 export interface ModelRow {
@@ -210,5 +212,8 @@ export const api = {
 			scope_type: 'workspace',
 			scope_id: null,
 			state
-		})
+		}),
+	// enable/disable a fallback-chain step (the gateway skips inactive steps).
+	setRoutingStep: (id: string, is_active: boolean) =>
+		gwPost('/rpc/routing/set-step-active', { id, is_active })
 }

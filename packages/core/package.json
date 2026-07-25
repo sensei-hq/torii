@@ -20,6 +20,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "4",
     "svelte": "^5.55.1",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2"

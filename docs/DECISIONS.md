@@ -168,6 +168,6 @@ capability from the token.
   Supabase + `api-torii.sensei-hq.com`; `torii://` deep link for OAuth/magic-link redirects.
 
 Docs: `docs/ops/supabase-configuration.md`, `docs/ops/deployment.md`. Config:
-`apps/admin/wrangler.jsonc`, `services/gateway/{Dockerfile,fly.toml}`. **Prod build note:**
-pin the `sensei-gateway` git dep to `tag = "v0.4.6"` (today unpinned); the Dockerfile
-strips the dev `[patch]` (local sibling repo) so it builds from the tag.
+`apps/admin/wrangler.jsonc`, `services/gateway/{Dockerfile,fly.toml}`. **Prod build:** the
+`sensei-gateway` git dep is pinned to `tag = "v0.4.6"`; the Dockerfile strips the dev
+`[patch]` (local sibling repo) so it builds from the tag.

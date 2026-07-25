@@ -219,3 +219,61 @@ pub async fn get_connections(
         }
     }
 }
+
+/// `GET /v1/org` — the tenant's people & RBAC: members (with their role keys), roles
+/// (with their granted capabilities = the permission matrix), and the closed capability
+/// catalog (matrix columns). Capability `role.manage` (owner/admin only). Effective
+/// capabilities are the UNION over a member's roles — resolved server-side, never from
+/// the JWT.
+pub async fn get_org(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+) -> Response {
+    let tenant = match require_read(&state, &claims, "role.manage").await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let members: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.display_name), '[]'::json) from ( \
+           select p.id, p.display_name, \
+                  coalesce(json_agg(r.key order by r.key) filter (where r.key is not null), '[]'::json) as roles \
+             from core.profile_roles pr \
+             join core.profiles p on p.id = pr.profile_id \
+             join core.roles r on r.id = pr.role_id \
+            where pr.tenant_id = $1 \
+            group by p.id, p.display_name) t",
+    )
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await;
+    let roles: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.cap_count desc, t.name), '[]'::json) from ( \
+           select r.id, r.key, r.name, r.is_system, \
+                  count(rp.capability) as cap_count, \
+                  coalesce(json_agg(rp.capability order by rp.capability) filter (where rp.capability is not null), '[]'::json) as capabilities \
+             from core.roles r \
+             left join core.role_permissions rp on rp.role_id = r.id \
+            where r.tenant_id = $1 \
+            group by r.id, r.key, r.name, r.is_system) t",
+    )
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await;
+    let capabilities: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.domain, t.key), '[]'::json) from ( \
+           select key, domain, description from core.capabilities) t",
+    )
+    .fetch_one(&state.pool)
+    .await;
+    match (members, roles, capabilities) {
+        (Ok(members), Ok(roles), Ok(capabilities)) => (
+            StatusCode::OK,
+            Json(json!({ "members": members, "roles": roles, "capabilities": capabilities })),
+        )
+            .into_response(),
+        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
+            tracing::error!("get_org: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}

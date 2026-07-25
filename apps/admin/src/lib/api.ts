@@ -122,6 +122,27 @@ export interface IssuedKey {
 	key: string
 }
 
+export interface Member {
+	id: string
+	display_name: string | null
+	roles: string[]
+}
+
+export interface Role {
+	id: string
+	key: string
+	name: string
+	is_system: boolean
+	cap_count: number
+	capabilities: string[]
+}
+
+export interface Capability {
+	key: string
+	domain: string
+	description: string
+}
+
 export const api = {
 	// auth — Supabase password sign-in; the session persists to localStorage and every
 	// gateway call reads its JWT via authHeader().
@@ -137,6 +158,7 @@ export const api = {
 	budgets: () => gwGet<{ nodes: BudgetNode[]; requests: BudgetRequest[] }>('/v1/budgets'),
 	connections: () => gwGet<{ providers: Provider[] }>('/v1/connections'),
 	apikeys: () => gwGet<{ keys: ApiKey[] }>('/v1/apikeys'),
+	org: () => gwGet<{ members: Member[]; roles: Role[]; capabilities: Capability[] }>('/v1/org'),
 	// writes — /rpc/* only:
 	approveBudgetRequest: (id: string) => gwPost('/rpc/budgets/approve-request', { id }),
 	denyBudgetRequest: (id: string) => gwPost('/rpc/budgets/deny-request', { id }),

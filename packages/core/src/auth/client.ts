@@ -2,7 +2,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { getAdapter } from '@kavach/adapter-supabase'
 import { createKavach } from 'kavach'
 
-export interface StrategosKavach {
+export interface ToriiKavach {
 	client: SupabaseClient
 	kavach: ReturnType<typeof createKavach>
 }
@@ -10,7 +10,7 @@ export interface StrategosKavach {
 // UPSTREAM(kavach): package this client-only composition as a first-class kavach client-only session mode.
 // Client-only session: supabase-js persists + refreshes the session in localStorage
 // (persistSession/autoRefreshToken). No SvelteKit server hook, no /auth/session endpoint.
-export function createStrategosKavach(url: string, anonKey: string): StrategosKavach {
+export function createToriiKavach(url: string, anonKey: string): ToriiKavach {
 	const client = createClient(url, anonKey, {
 		auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
 	})

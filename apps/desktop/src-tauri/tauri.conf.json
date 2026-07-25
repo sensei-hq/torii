@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "strategos",
+  "productName": "torii",
   "version": "0.1.0",
-  "identifier": "dev.strategos.console",
+  "identifier": "dev.torii.app",
   "build": {
     "beforeBuildCommand": "bun run build",
     "frontendDist": "../build",
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "Strategos",
+        "title": "Torii",
         "width": 800,
         "height": 600,
         "resizable": true,

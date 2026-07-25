@@ -1,4 +1,4 @@
-import type { StrategosKavach } from './client'
+import type { ToriiKavach } from './client'
 
 export interface SessionUser {
 	id: string
@@ -19,10 +19,10 @@ class SessionStore {
 		return this.user?.role ?? 'anon'
 	}
 
-	#sk: StrategosKavach | null = null
+	#sk: ToriiKavach | null = null
 
 	// Hydrate from the persisted supabase session, then subscribe to changes.
-	async init(sk: StrategosKavach) {
+	async init(sk: ToriiKavach) {
 		this.#sk = sk
 		const { data } = await sk.client.auth.getSession()
 		this.#apply(data.session)

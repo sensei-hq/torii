@@ -7,7 +7,7 @@
 	import { page } from '$app/state'
 	import { vibe } from '@rokkit/states'
 	import { themable } from '@rokkit/actions'
-	import { createStrategosKavach, session, createGuard } from '@torii/core'
+	import { createToriiKavach, session, createGuard } from '@torii/core'
 	import { SUPABASE_URL, SUPABASE_ANON_KEY } from '$lib/env'
 
 	let { children } = $props()
@@ -23,7 +23,7 @@
 		{ path: '/settings', roles: '*' }
 	]
 	const guard = createGuard(rules, { login: '/signin', home: '/' })
-	const sk = createStrategosKavach(SUPABASE_URL, SUPABASE_ANON_KEY)
+	const sk = createToriiKavach(SUPABASE_URL, SUPABASE_ANON_KEY)
 	setContext('kavach', sk.kavach)
 
 	function check(path) {

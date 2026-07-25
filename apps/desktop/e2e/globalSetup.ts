@@ -8,10 +8,10 @@ const APP_REPO = resolve(__dirname, '..') // apps/desktop/
 const MONOREPO_ROOT = resolve(__dirname, '../../..') // monorepo/
 // Workspace target: cargo workspace places bundles in monorepo/target, not src-tauri/target.
 // Binary inside the bundle is named after the crate package name ("app"), not productName.
-const APP_BUNDLE = join(MONOREPO_ROOT, 'target/debug/bundle/macos/strategos.app')
+const APP_BUNDLE = join(MONOREPO_ROOT, 'target/debug/bundle/macos/torii.app')
 const APP_BINARY = join(APP_BUNDLE, 'Contents/MacOS/app')
 const SOCKET = '/tmp/tauri-playwright.sock'
-const PID_FILE = '/tmp/strategos-e2e-pid'
+const PID_FILE = '/tmp/torii-e2e-pid'
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 async function waitForSocket(path: string, timeoutMs: number): Promise<void> {
@@ -31,7 +31,7 @@ export default async function globalSetup(): Promise<void> {
 		env: { ...process.env, VITE_E2E: 'true' }
 	})
 	try {
-		execFileSync('/usr/bin/pkill', ['-f', 'strategos.app'], { stdio: 'ignore' })
+		execFileSync('/usr/bin/pkill', ['-f', 'torii.app'], { stdio: 'ignore' })
 	} catch {}
 	await sleep(1_000)
 	try {
@@ -51,7 +51,7 @@ export default async function globalSetup(): Promise<void> {
 	await sleep(5_000)
 
 	// Record the PID of the running process for teardown.
-	const result = spawnSync('/usr/bin/pgrep', ['-n', '-f', 'strategos.app'], { encoding: 'utf8' })
+	const result = spawnSync('/usr/bin/pgrep', ['-n', '-f', 'torii.app'], { encoding: 'utf8' })
 	const pid = result.stdout.trim()
 	if (pid) writeFileSync(PID_FILE, pid)
 }

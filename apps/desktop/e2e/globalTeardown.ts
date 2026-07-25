@@ -1,7 +1,7 @@
 import { execFileSync } from 'child_process'
 import { existsSync, readFileSync, unlinkSync } from 'fs'
 
-const PID_FILE = '/tmp/strategos-e2e-pid'
+const PID_FILE = '/tmp/torii-e2e-pid'
 const SOCKET = '/tmp/tauri-playwright.sock'
 
 export default async function globalTeardown(): Promise<void> {
@@ -15,7 +15,7 @@ export default async function globalTeardown(): Promise<void> {
 		unlinkSync(PID_FILE)
 	}
 	try {
-		execFileSync('/usr/bin/pkill', ['-f', 'strategos.app'], { stdio: 'ignore' })
+		execFileSync('/usr/bin/pkill', ['-f', 'torii.app'], { stdio: 'ignore' })
 	} catch {}
 	try {
 		unlinkSync(SOCKET)

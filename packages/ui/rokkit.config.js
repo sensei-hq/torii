@@ -58,16 +58,20 @@ export default {
 	},
 
 	typography: {
-		sans: "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif",
-		mono: "'JetBrains Mono', 'SF Mono', Menlo, monospace",
-		display: "'Fraunces', 'Iowan Old Style', Georgia, serif",
+		sans: "'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif",
+		mono: "'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', Menlo, monospace",
+		display: "'Fraunces Variable', 'Fraunces', 'Iowan Old Style', Georgia, serif",
 		kanji: "'Shippori Mincho', 'Yu Mincho', 'Hiragino Mincho ProN', 'Songti SC', serif"
 	},
 
 	// Zen-Sumi radii: --radius 6px / --radius-lg 10px / pill.
 	shape: { radius: 'soft' },
 
-	icons: { lucide: '@iconify-json/lucide/icons.json' },
+	// Solar (bold-duotone) is the mockup's icon set; lucide kept as a fallback.
+	icons: {
+		solar: '@iconify-json/solar/icons.json',
+		lucide: '@iconify-json/lucide/icons.json'
+	},
 	switcher: 'manual',
 	storageKey: 'torii-theme'
 }

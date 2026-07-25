@@ -1,5 +1,8 @@
-/* Zen-Sumi typefaces — Fraunces (display), Inter (UI), JetBrains Mono, Shippori Mincho (kanji). */
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Shippori+Mincho:wght@400;500;600;700&display=swap');
+/* Zen-Sumi typefaces — self-hosted via fontsource (offline-capable, no CDN):
+   Fraunces (display), Inter (UI), JetBrains Mono (mono). */
+@import '@fontsource-variable/fraunces';
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
 @import '@rokkit/themes/base.css';
 @import '@unocss/reset/tailwind.css';
 @import '@rokkit/themes/base';
@@ -14,13 +17,25 @@
   }
   body {
     @apply flex h-full w-full flex-col;
+    /* base UI face = Inter; headings opt into Fraunces via font-heading, code via font-mono */
+    font-family: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
     /* named-token `@apply bg-paper` can't match body when data-mode is on it — use the var */
     background: var(--paper);
     color: var(--ink);
   }
   app {
     @apply h-full w-full;
+    font-family: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
     background: var(--paper);
     color: var(--ink);
   }
+}
+
+/* Plain rules (outside @layer) win over the utility layer — pin the display + mono faces
+   to the fontsource families so they are actually requested + rendered. */
+.font-heading {
+  font-family: 'Fraunces Variable', 'Fraunces', 'Iowan Old Style', Georgia, serif;
+}
+.font-mono {
+  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 }

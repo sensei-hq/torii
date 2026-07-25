@@ -58,7 +58,7 @@
 
 	/** @param {string} host */
 	const providerIcon = (host) =>
-		/ollama|localhost|127\.0\.0\.1/.test(host) ? 'i-lucide-hard-drive' : 'i-lucide-cloud'
+		/ollama|localhost|127\.0\.0\.1/.test(host) ? 'i-solar-database-bold-duotone' : 'i-solar-server-minimalistic-bold-duotone'
 	/** @param {string} url */
 	const hostOf = (url) => {
 		try {
@@ -128,7 +128,7 @@
 					{/if}
 				</div>
 				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
-					<span class="i-lucide-shield-check mt-0.5 h-3.5 w-3.5 text-success"></span>
+					<span class="i-solar-shield-check-bold-duotone mt-0.5 h-3.5 w-3.5 text-success"></span>
 					<span class="text-[11px] leading-relaxed text-ink-mute">
 						Credentials live in the org vault — the gateway proxies every call. Connect, rotate, and
 						per-router custody are managed server-side.
@@ -140,7 +140,7 @@
 			{#if revealed}
 				<Card pad class="border-accent bg-accent-soft">
 					<div class="flex items-start gap-3">
-						<span class="i-lucide-key-round mt-0.5 h-4 w-4 text-accent"></span>
+						<span class="i-solar-key-bold-duotone mt-0.5 h-4 w-4 text-accent"></span>
 						<div class="min-w-0 flex-1">
 							<p class="text-sm font-medium text-ink">
 								Copy this key now — it will not be shown again.
@@ -203,7 +203,7 @@
 							class:opacity-55={k.status === 'revoked'}
 						>
 							<Glyph
-								icon={k.service_account_id ? 'i-lucide-bot' : 'i-lucide-key-round'}
+								icon={k.service_account_id ? 'i-solar-server-bold-duotone' : 'i-solar-key-bold-duotone'}
 								tone="soft"
 							/>
 							<div class="min-w-0 flex-1">
@@ -225,7 +225,7 @@
 					{/if}
 				</div>
 				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
-					<span class="i-lucide-shield mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
+					<span class="i-solar-shield-check-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
 					<span class="text-[11px] leading-relaxed text-ink-mute">
 						Keys are shown once at creation, then stored only as an argon2id hash. A key carries no
 						budget — spend meters to the bound identity's node in the org tree, and every call is

@@ -67,7 +67,7 @@
 						<div
 							class="flex items-center gap-3 border-b border-paper-edge px-4 py-3 last:border-b-0"
 						>
-							<Glyph icon="i-lucide-user" tone="soft" />
+							<Glyph icon="i-solar-user-bold-duotone" tone="soft" />
 							<div class="min-w-0 flex-1">
 								<div class="truncate text-sm text-ink">{m.display_name ?? 'Unnamed'}</div>
 								<div class="font-mono text-[11px] text-ink-mute">{m.id.slice(0, 8)}</div>
@@ -142,7 +142,7 @@
 										{#each roles as r (r.id)}
 											<td class="px-2 py-1.5 text-center">
 												{#if has(r.id, c.key)}
-													<span class="i-lucide-check inline-block h-3.5 w-3.5 text-accent"
+													<span class="i-solar-check-circle-bold-duotone inline-block h-3.5 w-3.5 text-accent"
 													></span>
 												{:else}
 													<span class="text-ink-faint">·</span>
@@ -156,7 +156,7 @@
 					</table>
 				</div>
 				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
-					<span class="i-lucide-shield-check mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
+					<span class="i-solar-shield-check-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
 					<span class="text-[11px] leading-relaxed text-ink-mute">
 						System roles are seeded and undeletable (display name renamable). Grants resolve
 						server-side by RLS + the gateway — a capability outside the closed catalog cannot be

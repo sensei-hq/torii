@@ -25,28 +25,28 @@
 		{
 			label: 'Overview',
 			items: [
-				{ href: '/', label: 'Overview', icon: 'i-lucide-layout-dashboard' },
-				{ href: '/requests', label: 'Requests & audit', icon: 'i-lucide-clipboard-list', live: true }
+				{ href: '/', label: 'Overview', icon: 'i-solar-widget-5-bold-duotone' },
+				{ href: '/requests', label: 'Requests & audit', icon: 'i-solar-clipboard-list-bold-duotone', live: true }
 			]
 		},
 		{
 			label: 'Tenant',
-			items: [{ href: '/organization', label: 'Members & roles', icon: 'i-lucide-building-2' }]
+			items: [{ href: '/organization', label: 'Members & roles', icon: 'i-solar-buildings-3-bold-duotone' }]
 		},
 		{
 			label: 'Gateway',
 			items: [
-				{ href: '/models', label: 'Models', icon: 'i-lucide-cpu' },
-				{ href: '/routing', label: 'Routing', icon: 'i-lucide-route' },
-				{ href: '/connections', label: 'Connections', icon: 'i-lucide-plug' }
+				{ href: '/models', label: 'Models', icon: 'i-solar-cpu-bold-duotone' },
+				{ href: '/routing', label: 'Routing', icon: 'i-solar-routing-2-bold-duotone' },
+				{ href: '/connections', label: 'Connections', icon: 'i-solar-key-bold-duotone' }
 			]
 		},
 		{
 			label: 'Govern',
 			items: [
-				{ href: '/governance', label: 'Governance', icon: 'i-lucide-shield-check' },
-				{ href: '/billing', label: 'Budgets & billing', icon: 'i-lucide-wallet' },
-				{ href: '/settings', label: 'Settings', icon: 'i-lucide-settings' }
+				{ href: '/governance', label: 'Governance', icon: 'i-solar-shield-keyhole-bold-duotone' },
+				{ href: '/billing', label: 'Budgets & billing', icon: 'i-solar-wallet-2-bold-duotone' },
+				{ href: '/settings', label: 'Settings', icon: 'i-solar-settings-bold-duotone' }
 			]
 		}
 	]
@@ -73,14 +73,14 @@
 			<span
 				class="inline-flex items-center gap-1.5 rounded-full border border-paper-edge px-2.5 py-1 text-[11px] text-ink-mute"
 			>
-				<span class="i-lucide-cpu h-3 w-3"></span>Desktop app
+				<span class="i-solar-cpu-bold-duotone h-3 w-3"></span>Desktop app
 			</span>
 			<span class="mx-1 h-4 w-px bg-paper-edge"></span>
 			<button class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute" title="Search"
-				><span class="i-lucide-search h-4 w-4"></span></button
+				><span class="i-solar-magnifer-bold-duotone h-4 w-4"></span></button
 			>
 			<button class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute" title="Notifications"
-				><span class="i-lucide-bell h-4 w-4"></span></button
+				><span class="i-solar-bell-bold-duotone h-4 w-4"></span></button
 			>
 			<button
 				onclick={toggleMode}
@@ -88,7 +88,7 @@
 				title="Toggle light / dark"
 				aria-label="Toggle light or dark theme"
 			>
-				<span class="{vibe.mode === 'dark' ? 'i-lucide-sun' : 'i-lucide-moon'} block h-4 w-4"></span>
+				<span class="{vibe.mode === 'dark' ? 'i-solar-sun-2-bold-duotone' : 'i-solar-moon-bold-duotone'} block h-4 w-4"></span>
 			</button>
 			<span class="mx-1 h-4 w-px bg-paper-edge"></span>
 			<span class="flex items-center gap-2" title={user.role}>
@@ -102,7 +102,7 @@
 				<button
 					class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute"
 					title="Sign out"
-					onclick={onSignout}><span class="i-lucide-log-out h-4 w-4"></span></button
+					onclick={onSignout}><span class="i-solar-logout-3-bold-duotone h-4 w-4"></span></button
 				>
 			{/if}
 		</div>
@@ -113,11 +113,7 @@
 		<aside class="flex flex-col overflow-y-auto border-r border-paper-edge bg-paper-soft px-3 py-4">
 			<!-- brand -->
 			<div class="flex items-center gap-2.5 px-1.5">
-				<span
-					class="grid h-[22px] w-[22px] place-items-center rounded-full border border-accent text-accent"
-				>
-					<span class="h-2.5 w-2.5 rounded-full border border-accent"></span>
-				</span>
+				<img src="/logo.svg" alt="" class="h-[22px] w-[22px]" />
 				<span class="font-heading text-[17px] tracking-tight text-ink">{brand}</span>
 			</div>
 

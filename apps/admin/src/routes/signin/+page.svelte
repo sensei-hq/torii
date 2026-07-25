@@ -39,17 +39,17 @@
 	}
 	const VALUE = [
 		{
-			ic: 'i-lucide-route',
+			ic: 'i-solar-routing-2-bold-duotone',
 			t: 'Route across every provider',
 			s: 'One endpoint. Step-down routing and a free-tier floor pick the cheapest model that still answers well.'
 		},
 		{
-			ic: 'i-lucide-wallet',
+			ic: 'i-solar-wallet-2-bold-duotone',
 			t: 'Spend with intent',
 			s: 'Org, team and user budgets with hard caps — every call reserved and committed against a ledger.'
 		},
 		{
-			ic: 'i-lucide-shield-check',
+			ic: 'i-solar-shield-check-bold-duotone',
 			t: 'Govern with confidence',
 			s: 'Role-based access and a full request ledger — every call traceable, every key accounted for.'
 		}
@@ -61,11 +61,7 @@
 		<!-- header · spans both columns -->
 		<header class="flex flex-wrap items-center justify-between gap-4 border-b border-paper-edge pb-3">
 			<span class="flex items-center gap-3">
-				<span
-					class="grid h-8 w-8 place-items-center rounded-full border border-accent text-accent"
-				>
-					<span class="h-3.5 w-3.5 rounded-full border border-accent"></span>
-				</span>
+				<img src="/logo.svg" alt="" class="h-8 w-8" />
 				<span class="font-heading text-[28px] tracking-tight text-ink">Seiki</span>
 				<span
 					class="rounded-full border border-paper-edge px-2 py-0.5 font-mono text-[11px] text-ink-mute"
@@ -193,7 +189,7 @@
 								title="Fast-follow — not yet enabled"
 								class="flex h-10 w-full items-center justify-center gap-2 rounded-md border border-paper-edge text-sm text-ink-soft opacity-60"
 							>
-								<span class="i-lucide-globe h-4 w-4"></span> Continue with Google
+								<span class="i-solar-global-bold-duotone h-4 w-4"></span> Continue with Google
 							</button>
 							<button
 								disabled
@@ -206,7 +202,7 @@
 					</div>
 
 					<p class="mt-4 flex items-center justify-center gap-1.5 text-center text-[11px] text-ink-faint">
-						<span class="i-lucide-shield h-3 w-3"></span>
+						<span class="i-solar-shield-check-bold-duotone h-3 w-3"></span>
 						Email + OAuth · SAML SSO fast-follow · session pinned to your tenant region
 					</p>
 				</div>

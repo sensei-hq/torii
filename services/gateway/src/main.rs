@@ -1,9 +1,13 @@
 use std::sync::Arc;
 
-use axum::{middleware, routing::{get, post}, Router};
 use axum::http::{
     header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
     Method,
+};
+use axum::{
+    middleware,
+    routing::{get, post},
+    Router,
 };
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
@@ -14,27 +18,27 @@ use tower_http::cors::{Any, CorsLayer};
 // `AdapterRegistry::register(Arc::new(adapter))` dispatches via `RegisterInto`
 // (no `dyn InferenceAdapter` cast). Cloud adapters are re-exported under the
 // historical `gateway::adapters::<provider>` paths (feature `cloud`, default-on).
-use gateway::adapters::AdapterRegistry;
 use gateway::adapters::noop::NoopAdapter;
+use gateway::adapters::AdapterRegistry;
 use gateway::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerManager};
 use gateway::Gateway;
 
-mod apikeys;  // H2: API-key generation + argon2 hash/verify (identity-bound)
+mod apikeys; // H2: API-key generation + argon2 hash/verify (identity-bound)
 mod auth;
-mod budgets;  // C3: budget-node resolution + hard reserve→commit on the inference hot path
-mod capabilities;  // F2: server-side capability resolution + claims-version gate
+mod budgets; // C3: budget-node resolution + hard reserve→commit on the inference hot path
+mod capabilities; // F2: server-side capability resolution + claims-version gate
 mod config_loader;
-mod crypto;   // F3: DEK/KEK envelope crypto
-mod governance;  // C4: output redaction + injection scan + why-this-model governance
-mod judge;    // C6: opt-in LLM-as-judge (local gemma4) → judge_score signal
+mod crypto; // F3: DEK/KEK envelope crypto
+mod governance; // C4: output redaction + injection scan + why-this-model governance
+mod judge; // C6: opt-in LLM-as-judge (local gemma4) → judge_score signal
 mod keys;
-mod quality;  // C6: quality-signal capture (one implicit batch per inference call)
-mod redact;   // C4: secret/PII redaction (DLP, §2 W5)
+mod quality; // C6: quality-signal capture (one implicit batch per inference call)
+mod redact; // C4: secret/PII redaction (DLP, §2 W5)
 mod routes;
-mod siem;     // O1: background audit → SIEM streamer (per-tenant cursor, at-least-once)
+mod siem; // O1: background audit → SIEM streamer (per-tenant cursor, at-least-once)
 mod state;
 mod store;
-mod vault;    // F3: DB-backed credential vault (replaces the env-key shim)
+mod vault; // F3: DB-backed credential vault (replaces the env-key shim)
 
 use state::{AppState, SharedState};
 
@@ -77,18 +81,14 @@ async fn main() -> anyhow::Result<()> {
     let adapters = AdapterRegistry::new();
 
     // Always register noop as graceful degradation fallback
-    adapters
-        .register(Arc::new(NoopAdapter))
-        .await;
+    adapters.register(Arc::new(NoopAdapter)).await;
 
     // Probe Ollama at localhost:11434 before registering
     if probe_ollama().await {
         match gateway::adapters::ollama::OllamaAdapter::new() {
             Ok(adapter) => {
                 tracing::info!("Gateway: Ollama adapter registered");
-                adapters
-                    .register(Arc::new(adapter))
-                    .await;
+                adapters.register(Arc::new(adapter)).await;
             }
             Err(e) => tracing::warn!("Gateway: Ollama adapter failed to initialize: {}", e),
         }
@@ -101,9 +101,7 @@ async fn main() -> anyhow::Result<()> {
     match gateway::adapters::anthropic::AnthropicAdapter::new() {
         Ok(adapter) => {
             tracing::info!("Gateway: Anthropic adapter registered");
-            adapters
-                .register(Arc::new(adapter))
-                .await;
+            adapters.register(Arc::new(adapter)).await;
         }
         Err(e) => tracing::warn!("Gateway: Anthropic adapter failed: {}", e),
     }
@@ -111,9 +109,7 @@ async fn main() -> anyhow::Result<()> {
     match gateway::adapters::openai::OpenAIAdapter::new() {
         Ok(adapter) => {
             tracing::info!("Gateway: OpenAI adapter registered");
-            adapters
-                .register(Arc::new(adapter))
-                .await;
+            adapters.register(Arc::new(adapter)).await;
         }
         Err(e) => tracing::warn!("Gateway: OpenAI adapter failed: {}", e),
     }
@@ -123,9 +119,7 @@ async fn main() -> anyhow::Result<()> {
         match gateway::adapters::openai::OpenAIAdapter::with_id(id) {
             Ok(adapter) => {
                 tracing::info!("Gateway: OpenAI-compatible adapter registered as '{id}'");
-                adapters
-                    .register(Arc::new(adapter))
-                    .await;
+                adapters.register(Arc::new(adapter)).await;
             }
             Err(e) => tracing::warn!("Gateway: '{id}' adapter failed: {e}"),
         }
@@ -134,9 +128,7 @@ async fn main() -> anyhow::Result<()> {
     match gateway::adapters::grok::GrokAdapter::new() {
         Ok(adapter) => {
             tracing::info!("Gateway: Grok adapter registered");
-            adapters
-                .register(Arc::new(adapter))
-                .await;
+            adapters.register(Arc::new(adapter)).await;
         }
         Err(e) => tracing::warn!("Gateway: Grok adapter failed: {}", e),
     }
@@ -144,9 +136,7 @@ async fn main() -> anyhow::Result<()> {
     match gateway::adapters::gemini::GeminiAdapter::new() {
         Ok(adapter) => {
             tracing::info!("Gateway: Gemini adapter registered");
-            adapters
-                .register(Arc::new(adapter))
-                .await;
+            adapters.register(Arc::new(adapter)).await;
         }
         Err(e) => tracing::warn!("Gateway: Gemini adapter failed: {}", e),
     }
@@ -156,9 +146,7 @@ async fn main() -> anyhow::Result<()> {
     match gateway::adapters::bedrock::BedrockAdapter::new().await {
         Ok(adapter) => {
             tracing::info!("Gateway: Bedrock adapter registered");
-            adapters
-                .register(Arc::new(adapter))
-                .await;
+            adapters.register(Arc::new(adapter)).await;
         }
         Err(e) => tracing::warn!("Gateway: Bedrock adapter failed: {}", e),
     }
@@ -176,10 +164,18 @@ async fn main() -> anyhow::Result<()> {
 
     // Inject provider (BYOK) keys from the process environment (Task 5).
     // F3 vault decryption is deferred; keys resolve via std::env::var.
-    gw.refresh_router_keys(keys::env_key_resolver(router_env.clone())).await;
-    let resolved = router_env.values().filter(|v| std::env::var(v).is_ok()).count();
+    gw.refresh_router_keys(keys::env_key_resolver(router_env.clone()))
+        .await;
+    let resolved = router_env
+        .values()
+        .filter(|v| std::env::var(v).is_ok())
+        .count();
     let total = router_env.len();
-    tracing::info!("keys: {}/{} routers have a provider key in env", resolved, total);
+    tracing::info!(
+        "keys: {}/{} routers have a provider key in env",
+        resolved,
+        total
+    );
 
     let state: SharedState = Arc::new(AppState {
         pool,
@@ -213,6 +209,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/audit", get(routes::ledger::get_audit))
         .route("/requests", get(routes::ledger::get_requests))
         .route("/budgets", get(routes::ledger::get_budgets))
+        .route("/apikeys", get(routes::ledger::get_apikeys))
+        .route("/connections", get(routes::ledger::get_connections))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::require_auth,
@@ -222,13 +220,25 @@ async fn main() -> anyhow::Result<()> {
     // middleware as `/v1`; each handler additionally resolves capabilities +
     // runs the claims-version freshness gate server-side.
     let rpc = Router::new()
-        .route("/budgets/upsert-node", post(routes::rpc::budgets_upsert_node))
+        .route(
+            "/budgets/upsert-node",
+            post(routes::rpc::budgets_upsert_node),
+        )
         .route("/budgets/request", post(routes::rpc::budgets_request))
-        .route("/budgets/approve-request", post(routes::rpc::budgets_approve_request))
-        .route("/budgets/deny-request", post(routes::rpc::budgets_deny_request))
+        .route(
+            "/budgets/approve-request",
+            post(routes::rpc::budgets_approve_request),
+        )
+        .route(
+            "/budgets/deny-request",
+            post(routes::rpc::budgets_deny_request),
+        )
         .route("/apikeys/issue", post(routes::rpc::apikeys_issue))
         .route("/rbac/assign-role", post(routes::rpc::rbac_assign_role))
-        .route("/governance/set-feature", post(routes::rpc::governance_set_feature))
+        .route(
+            "/governance/set-feature",
+            post(routes::rpc::governance_set_feature),
+        )
         .route("/spaces/create", post(routes::rpc::spaces_create))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),

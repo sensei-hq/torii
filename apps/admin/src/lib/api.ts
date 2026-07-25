@@ -97,6 +97,31 @@ export interface BudgetRequest {
 	created_at: string
 }
 
+export interface Provider {
+	name: string
+	api_base_url: string
+	configured: boolean
+	is_active: boolean
+}
+
+export interface ApiKey {
+	id: string
+	prefix: string
+	profile_id: string | null
+	service_account_id: string | null
+	scope: unknown
+	status: string
+	last_used_at: string | null
+	created_at: string
+}
+
+/** The reveal-once mint result — `key` is the raw secret, shown exactly once. */
+export interface IssuedKey {
+	id: string
+	prefix: string
+	key: string
+}
+
 export const api = {
 	// auth — Supabase password sign-in; the session persists to localStorage and every
 	// gateway call reads its JWT via authHeader().
@@ -110,8 +135,12 @@ export const api = {
 	audit: (limit = 100) => gwGet<{ events: AuditEvent[] }>(`/v1/audit?limit=${limit}`),
 	requests: (limit = 100) => gwGet<{ requests: RequestRow[] }>(`/v1/requests?limit=${limit}`),
 	budgets: () => gwGet<{ nodes: BudgetNode[]; requests: BudgetRequest[] }>('/v1/budgets'),
+	connections: () => gwGet<{ providers: Provider[] }>('/v1/connections'),
+	apikeys: () => gwGet<{ keys: ApiKey[] }>('/v1/apikeys'),
 	// writes — /rpc/* only:
 	approveBudgetRequest: (id: string) => gwPost('/rpc/budgets/approve-request', { id }),
 	denyBudgetRequest: (id: string) => gwPost('/rpc/budgets/deny-request', { id }),
-	upsertBudgetNode: (node: Record<string, unknown>) => gwPost('/rpc/budgets/upsert-node', node)
+	upsertBudgetNode: (node: Record<string, unknown>) => gwPost('/rpc/budgets/upsert-node', node),
+	// mint an identity-bound API key — the raw secret is returned once, never re-fetchable.
+	issueApiKey: (name?: string) => gwPost<IssuedKey>('/rpc/apikeys/issue', { name })
 }

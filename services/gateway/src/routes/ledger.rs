@@ -27,19 +27,30 @@ use crate::{
 };
 
 /// Freshness gate + capability check for a read; returns the caller's tenant.
-async fn require_read(state: &SharedState, claims: &Claims, capability: &str) -> Result<Uuid, Response> {
+async fn require_read(
+    state: &SharedState,
+    claims: &Claims,
+    capability: &str,
+) -> Result<Uuid, Response> {
     let tenant = claims
         .tenant_id
         .ok_or_else(|| (StatusCode::FORBIDDEN, "no active tenant").into_response())?;
     check_claims_version(&state.pool, claims)
         .await
         .map_err(|_| (StatusCode::UNAUTHORIZED, "stale token — re-authenticate").into_response())?;
-    let caps = CapabilitySet::resolve(&state.pool, claims).await.map_err(|e| {
-        tracing::error!("ledger: capability resolve: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+    let caps = CapabilitySet::resolve(&state.pool, claims)
+        .await
+        .map_err(|e| {
+            tracing::error!("ledger: capability resolve: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        })?;
+    caps.require(capability).map_err(|_| {
+        (
+            StatusCode::FORBIDDEN,
+            format!("missing capability {capability}"),
+        )
+            .into_response()
     })?;
-    caps.require(capability)
-        .map_err(|_| (StatusCode::FORBIDDEN, format!("missing capability {capability}")).into_response())?;
     Ok(tenant)
 }
 
@@ -144,11 +155,66 @@ pub async fn get_budgets(
     .fetch_one(&state.pool)
     .await;
     match (nodes, requests) {
-        (Ok(nodes), Ok(requests)) => {
-            (StatusCode::OK, Json(json!({ "nodes": nodes, "requests": requests }))).into_response()
-        }
+        (Ok(nodes), Ok(requests)) => (
+            StatusCode::OK,
+            Json(json!({ "nodes": nodes, "requests": requests })),
+        )
+            .into_response(),
         (Err(e), _) | (_, Err(e)) => {
             tracing::error!("get_budgets: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}
+
+/// `GET /v1/apikeys` — the tenant's API keys, **masked** (prefix/binding/scope/status,
+/// never the secret or hash). Capability `apikey.manage`.
+pub async fn get_apikeys(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+) -> Response {
+    let tenant = match require_read(&state, &claims, "apikey.manage").await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let rows: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.created_at desc), '[]'::json) from ( \
+           select id, prefix, profile_id, service_account_id, scope, status, \
+                  last_used_at, created_at \
+             from public.api_keys where tenant_id = $1) t",
+    )
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await;
+    match rows {
+        Ok(keys) => (StatusCode::OK, Json(json!({ "keys": keys }))).into_response(),
+        Err(e) => {
+            tracing::error!("get_apikeys: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}
+
+/// `GET /v1/connections` — the provider/router catalog (name, base URL, whether a
+/// credential env var is configured — never the secret). Capability `connection.manage`.
+pub async fn get_connections(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+) -> Response {
+    if let Err(resp) = require_read(&state, &claims, "connection.manage").await {
+        return resp;
+    }
+    let rows: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.name), '[]'::json) from ( \
+           select name, api_base_url, (api_key_env_var is not null) as configured, is_active \
+             from config.routers) t",
+    )
+    .fetch_one(&state.pool)
+    .await;
+    match rows {
+        Ok(providers) => (StatusCode::OK, Json(json!({ "providers": providers }))).into_response(),
+        Err(e) => {
+            tracing::error!("get_connections: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
         }
     }

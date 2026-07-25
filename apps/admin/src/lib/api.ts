@@ -29,8 +29,28 @@ async function authHeader(): Promise<Record<string, string>> {
 	return token ? { authorization: `Bearer ${token}` } : {}
 }
 
+// A 401 means the token is stale (expired, or its claims_version was bumped by a role
+// change / device revoke — the downgrade-revocation gate). Clear the dead session and
+// bounce to sign-in once, rather than surfacing a raw error on every screen.
+let redirecting = false
+async function onUnauthorized(): Promise<void> {
+	if (typeof window === 'undefined') return
+	if (redirecting || window.location.pathname.startsWith('/signin')) return
+	redirecting = true
+	try {
+		await sb().auth.signOut()
+	} catch {
+		/* already gone */
+	}
+	window.location.assign('/signin')
+}
+
 async function gwGet<T>(path: string): Promise<T> {
 	const res = await fetch(`${GATEWAY_URL}${path}`, { headers: await authHeader() })
+	if (res.status === 401) {
+		await onUnauthorized()
+		throw new Error('session expired — signing you in again')
+	}
 	if (!res.ok) throw new Error(`${path} → ${res.status}`)
 	return res.json() as Promise<T>
 }
@@ -41,6 +61,10 @@ async function gwPost<T>(path: string, body: unknown): Promise<T> {
 		headers: { 'content-type': 'application/json', ...(await authHeader()) },
 		body: JSON.stringify(body)
 	})
+	if (res.status === 401) {
+		await onUnauthorized()
+		throw new Error('session expired — signing you in again')
+	}
 	if (!res.ok) throw new Error(`${path} → ${res.status}: ${await res.text().catch(() => '')}`)
 	return res.json() as Promise<T>
 }

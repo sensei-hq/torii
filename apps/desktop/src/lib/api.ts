@@ -1,13 +1,34 @@
 // Torii desktop — typed gateway reads for the member console. The desktop forwards the
 // Kavach/Supabase session JWT; provider keys + enforcement stay server-side on C1.
+import { goto } from '$app/navigation'
+import { resolve } from '$app/paths'
 import { GATEWAY_URL } from './env'
 import { session } from '@torii/core'
+
+// A 401 means the token is stale (expired, or its claims_version was bumped by a role
+// change / device revoke). Clear the dead session and bounce to sign-in once.
+let redirecting = false
+async function onUnauthorized(): Promise<void> {
+	if (redirecting || (typeof window !== 'undefined' && window.location.pathname.endsWith('/signin')))
+		return
+	redirecting = true
+	try {
+		await session.signOut()
+	} catch {
+		/* already gone */
+	}
+	goto(resolve('/signin'))
+}
 
 async function gwGet<T>(path: string): Promise<T> {
 	const token = session.accessToken
 	const res = await fetch(`${GATEWAY_URL}${path}`, {
 		headers: token ? { authorization: `Bearer ${token}` } : {}
 	})
+	if (res.status === 401) {
+		await onUnauthorized()
+		throw new Error('session expired — signing you in again')
+	}
 	if (!res.ok) throw new Error(`${path} → ${res.status}`)
 	return res.json() as Promise<T>
 }

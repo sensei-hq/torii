@@ -75,6 +75,28 @@ export interface RequestRow {
 	recorded_at: string
 }
 
+export interface BudgetNode {
+	id: string
+	parent_id: string | null
+	kind: string
+	name: string
+	cap_amount: number | null
+	spent_amount: number
+	reserved_amount: number
+	enforcement: string
+	period: string
+}
+
+export interface BudgetRequest {
+	id: string
+	node_id: string
+	requested_by: string | null
+	requested_cap: number
+	reason: string | null
+	status: string
+	created_at: string
+}
+
 export const api = {
 	// auth — Supabase password sign-in; the session persists to localStorage and every
 	// gateway call reads its JWT via authHeader().
@@ -87,7 +109,9 @@ export const api = {
 	whoami: () => gwGet<WhoAmI>('/v1/whoami'),
 	audit: (limit = 100) => gwGet<{ events: AuditEvent[] }>(`/v1/audit?limit=${limit}`),
 	requests: (limit = 100) => gwGet<{ requests: RequestRow[] }>(`/v1/requests?limit=${limit}`),
-	// writes (consumed by later screens) — /rpc/* only:
+	budgets: () => gwGet<{ nodes: BudgetNode[]; requests: BudgetRequest[] }>('/v1/budgets'),
+	// writes — /rpc/* only:
 	approveBudgetRequest: (id: string) => gwPost('/rpc/budgets/approve-request', { id }),
+	denyBudgetRequest: (id: string) => gwPost('/rpc/budgets/deny-request', { id }),
 	upsertBudgetNode: (node: Record<string, unknown>) => gwPost('/rpc/budgets/upsert-node', node)
 }

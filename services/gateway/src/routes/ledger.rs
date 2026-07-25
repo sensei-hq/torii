@@ -113,3 +113,43 @@ pub async fn get_requests(
         }
     }
 }
+
+/// `GET /v1/budgets` — the tenant's budget tree (cap/spent/reserved per node) + its
+/// pending increase requests (capability `budget.read`).
+pub async fn get_budgets(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+) -> Response {
+    let tenant = match require_read(&state, &claims, "budget.read").await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let nodes: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.kind), '[]'::json) from ( \
+           select id, parent_id, kind, name, \
+                  cap_amount::float8 as cap_amount, spent_amount::float8 as spent_amount, \
+                  reserved_amount::float8 as reserved_amount, enforcement, period \
+             from public.budget_nodes where tenant_id = $1) t",
+    )
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await;
+    let requests: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.created_at desc), '[]'::json) from ( \
+           select id, node_id, requested_by, requested_cap::float8 as requested_cap, \
+                  reason, status, created_at \
+             from public.budget_requests where tenant_id = $1 and status = 'pending') t",
+    )
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await;
+    match (nodes, requests) {
+        (Ok(nodes), Ok(requests)) => {
+            (StatusCode::OK, Json(json!({ "nodes": nodes, "requests": requests }))).into_response()
+        }
+        (Err(e), _) | (_, Err(e)) => {
+            tracing::error!("get_budgets: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}

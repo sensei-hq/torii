@@ -285,6 +285,41 @@ pub async fn budgets_approve_request(
     }
 }
 
+/// `POST /rpc/budgets/deny-request` — capability `budget.write`. Marks a pending
+/// request denied (no cap change).
+pub async fn budgets_deny_request(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<ApproveRequest>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "budget.write").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let write = sqlx::query(
+        "update public.budget_requests set status='denied', resolved_by=$2, resolved_at=now() \
+          where tenant_id=$1 and id=$3 and status='pending'",
+    )
+    .bind(tenant)
+    .bind(actor)
+    .bind(body.id)
+    .execute(&state.pool)
+    .await;
+    match write {
+        Ok(r) if r.rows_affected() == 0 => {
+            (StatusCode::NOT_FOUND, "no pending request").into_response()
+        }
+        Ok(_) => {
+            audit(&state, tenant, actor, "budget.request.denied", "budget_request", Some(body.id)).await;
+            (StatusCode::OK, Json(json!({ "denied": body.id }))).into_response()
+        }
+        Err(e) => {
+            tracing::error!("deny-request: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response()
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct AssignRole {
     pub profile_id: Uuid,

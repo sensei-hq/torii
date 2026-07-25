@@ -212,6 +212,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/status", get(routes::status::get_status))
         .route("/audit", get(routes::ledger::get_audit))
         .route("/requests", get(routes::ledger::get_requests))
+        .route("/budgets", get(routes::ledger::get_budgets))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::require_auth,
@@ -224,6 +225,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/budgets/upsert-node", post(routes::rpc::budgets_upsert_node))
         .route("/budgets/request", post(routes::rpc::budgets_request))
         .route("/budgets/approve-request", post(routes::rpc::budgets_approve_request))
+        .route("/budgets/deny-request", post(routes::rpc::budgets_deny_request))
         .route("/apikeys/issue", post(routes::rpc::apikeys_issue))
         .route("/rbac/assign-role", post(routes::rpc::rbac_assign_role))
         .route("/governance/set-feature", post(routes::rpc::governance_set_feature))

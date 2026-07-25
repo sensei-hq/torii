@@ -1,8 +1,11 @@
 name: coverage
 
-# Test coverage -> Qlty Cloud. Uploads Rust (torii-gateway) + JS (@torii/core) lcov as two
-# per-commit reports which Qlty merges for total coverage. Needs repo secret
+# Test coverage -> Qlty Cloud for the torii-gateway (Rust). Needs repo secret
 # QLTY_COVERAGE_TOKEN. No untrusted github.event.* is used in any run: step (injection-safe).
+#
+# JS coverage (@torii/core) is deferred: packages/core depends on local `link:` Kavach
+# packages (@kavach/sentry, @kavach/adapter-supabase) that aren't resolvable in CI. Re-add a
+# JS job once Kavach is published or checked out as a sibling in CI.
 on:
   push:
     branches: [develop, main]
@@ -13,12 +16,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  coverage:
+  rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # --- Rust: torii-gateway ---
       # Strip the dev-in-place [patch] (points sensei-* at the local sibling ../gateway,
       # absent in CI) so the build resolves the pinned git tag v0.4.6 from the PUBLIC
       # sensei-hq/gateway repo. Cloud/HTTP-only crate -> a plain Rust build.
@@ -34,25 +36,9 @@ jobs:
       - name: Rust coverage (torii-gateway)
         run: cargo llvm-cov -p torii-gateway --lcov --output-path lcov-rust.info
 
-      # --- JS: @torii/core ---
-      - uses: oven-sh/setup-bun@v2
-      - run: bun install --frozen-lockfile
-      - name: JS coverage (@torii/core)
-        working-directory: packages/core
-        run: bunx vitest run --coverage --coverage.provider=v8 --coverage.reporter=lcov
-
-      # --- Upload to Qlty (two reports; prefixes map lcov paths to repo-relative) ---
-      - name: Upload Rust coverage
+      - name: Upload to Qlty
         uses: qltysh/qlty-action/coverage@v2.3.0
         with:
           token: ${{ secrets.QLTY_COVERAGE_TOKEN }}
           files: lcov-rust.info
           strip-prefix: ${{ github.workspace }}/
-          tag: rust
-      - name: Upload JS coverage
-        uses: qltysh/qlty-action/coverage@v2.3.0
-        with:
-          token: ${{ secrets.QLTY_COVERAGE_TOKEN }}
-          files: packages/core/coverage/lcov.info
-          add-prefix: packages/core
-          tag: js

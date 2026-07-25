@@ -8,6 +8,8 @@
 	let error = $state('')
 	let loading = $state(true)
 	let busy = $state('')
+	let editing = $state('') // node id being edited
+	let capDraft = $state('')
 
 	async function load() {
 		try {
@@ -32,6 +34,35 @@
 		try {
 			if (action === 'approve') await api.approveBudgetRequest(id)
 			else await api.denyBudgetRequest(id)
+			await load()
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e)
+		} finally {
+			busy = ''
+		}
+	}
+
+	/** @param {import('$lib/api').BudgetNode} n */
+	function startEdit(n) {
+		editing = n.id
+		capDraft = n.cap_amount == null ? '' : String(n.cap_amount)
+		error = ''
+	}
+	/** @param {import('$lib/api').BudgetNode} n → save the node's cap via the upsert RPC */
+	async function saveCap(n) {
+		busy = n.id
+		error = ''
+		try {
+			const raw = capDraft.trim()
+			await api.upsertBudgetNode({
+				id: n.id,
+				kind: n.kind,
+				name: n.name,
+				cap_amount: raw === '' ? null : Number(raw),
+				enforcement: n.enforcement,
+				period: n.period
+			})
+			editing = ''
 			await load()
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e)
@@ -76,18 +107,52 @@
 							<span class="w-36 truncate text-sm text-ink">{n.name}</span>
 							<Chip>{n.kind}</Chip>
 							<div class="flex-1">
-								<Meter
-									value={n.spent_amount}
-									max={meterMax(n)}
-									tone={meterTone(n)}
-									display={`${money(n.spent_amount)} / ${money(n.cap_amount)}`}
-								/>
+								{#if editing === n.id}
+									<div class="flex items-center gap-2">
+										<span class="text-[11px] text-ink-mute">cap $</span>
+										<input
+											bind:value={capDraft}
+											inputmode="decimal"
+											placeholder="∞ (blank = no cap)"
+											class="w-32 rounded-md border border-paper-edge bg-paper px-2 py-1 font-mono text-xs text-ink focus:border-ink focus:outline-none"
+											onkeydown={(e) => e.key === 'Enter' && saveCap(n)}
+										/>
+										<button
+											onclick={() => saveCap(n)}
+											disabled={busy === n.id}
+											class="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-on-primary disabled:opacity-40"
+											>Save</button
+										>
+										<button
+											onclick={() => (editing = '')}
+											class="rounded-md border border-paper-edge px-2.5 py-1 text-xs text-ink-soft hover:bg-paper-mute"
+											>Cancel</button
+										>
+									</div>
+								{:else}
+									<Meter
+										value={n.spent_amount}
+										max={meterMax(n)}
+										tone={meterTone(n)}
+										display={`${money(n.spent_amount)} / ${money(n.cap_amount)}`}
+									/>
+								{/if}
 							</div>
 							<span
 								class="w-12 text-right text-[11px] {n.enforcement === 'hard'
 									? 'text-ink-soft'
 									: 'text-ink-mute'}">{n.enforcement}</span
 							>
+							{#if editing !== n.id}
+								<button
+									onclick={() => startEdit(n)}
+									aria-label="Edit cap"
+									title="Edit cap"
+									class="rounded-md p-1 text-ink-mute hover:bg-paper-mute hover:text-ink"
+								>
+									<span class="i-solar-pen-2-bold-duotone block h-3.5 w-3.5"></span>
+								</button>
+							{/if}
 						</div>
 					{/each}
 				</div>
@@ -109,7 +174,7 @@
 							<button
 								onclick={() => resolve(r.id, 'approve')}
 								disabled={busy === r.id}
-								class="rounded-md bg-ink px-3 py-1 text-xs font-medium text-paper disabled:opacity-40"
+								class="rounded-md bg-primary px-3 py-1 text-xs font-medium text-on-primary disabled:opacity-40"
 								>Approve</button
 							>
 							<button

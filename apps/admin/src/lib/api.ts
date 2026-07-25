@@ -219,6 +219,24 @@ export const api = {
 	},
 	signOut: () => sb().auth.signOut(),
 	hasSession: async () => !!(await sb().auth.getSession()).data.session,
+	// the signed-in user's shell identity — real email (from the session) + server-resolved
+	// role (whoami). Replaces the mock "Aiko · Administrator" default in AppShell.
+	identity: async (): Promise<{ email: string | null; role: string | null }> => {
+		const { data } = await sb().auth.getSession()
+		const email = data.session?.user?.email ?? null
+		let role: string | null = null
+		try {
+			const r = (await gwGet<WhoAmI>('/v1/whoami')).role
+			// The gateway returns the Supabase JWT `role` claim, which is always
+			// "authenticated" for any signed-in user — not the app role (owner/admin/member
+			// live in profile_roles, and are multi-valued). Drop the artifact rather than
+			// display a meaningless or fabricated role.
+			role = r && r !== 'authenticated' ? r : null
+		} catch {
+			/* role is advisory for the shell; email alone renders a real identity */
+		}
+		return { email, role }
+	},
 	whoami: () => gwGet<WhoAmI>('/v1/whoami'),
 	audit: (limit = 100) => gwGet<{ events: AuditEvent[] }>(`/v1/audit?limit=${limit}`),
 	requests: (limit = 100) => gwGet<{ requests: RequestRow[] }>(`/v1/requests?limit=${limit}`),

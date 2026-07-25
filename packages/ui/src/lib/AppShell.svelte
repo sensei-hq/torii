@@ -1,6 +1,7 @@
 <script>
 	// Zen-Sumi admin shell — Chrome top bar + grouped Rail sidebar, modelled on
 	// docs/mockups/app/{admin,shell}.jsx. Uses Rokkit named tokens throughout.
+	import { getContext } from 'svelte'
 	import { page } from '$app/state'
 	// Light/dark switcher — drives vibe.mode; the `themable` action in the root layout
 	// writes data-mode to <html>/<body> and persists it (skin-system-rokkit skill).
@@ -14,10 +15,17 @@
 		title = 'admin portal',
 		brand = 'Seiki',
 		org = { mark: 'N', name: 'Northwind Estates', sub: 'org · 142 seats' },
-		user = { name: 'Aiko', initial: 'A', role: 'Administrator' },
-		onSignout,
+		user: userProp,
+		onSignout: onSignoutProp,
 		children
 	} = $props()
+
+	// Real identity + sign-out come from the (app) layout via the `adminShell` context
+	// (see apps/admin/.../(app)/+layout.svelte). Props remain a fallback for standalone
+	// use; the fallback is a neutral label — never a fabricated person.
+	const shell = getContext('adminShell')
+	const user = $derived(shell?.user ?? userProp ?? { name: 'Account', initial: '·', role: '' })
+	const onSignout = $derived(shell?.onSignout ?? onSignoutProp)
 
 	// Grouped nav — mirrors the mockup's Overview / Tenant / Gateway / Govern sections,
 	// mapped to the routes that exist today (no dead links).
@@ -96,7 +104,9 @@
 					class="grid h-[22px] w-[22px] place-items-center rounded-full bg-accent-soft text-[9px] font-semibold text-accent"
 					>{user.initial}</span
 				>
-				<span class="whitespace-nowrap text-[11px] text-ink-soft">{user.name} · {user.role}</span>
+				<span class="whitespace-nowrap text-[11px] text-ink-soft"
+				>{user.name}{user.role ? ` · ${user.role}` : ''}</span
+			>
 			</span>
 			{#if onSignout}
 				<button

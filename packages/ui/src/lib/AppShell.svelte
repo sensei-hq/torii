@@ -25,7 +25,7 @@
 		<div class="mb-3 text-sm font-semibold text-primary-500">Strategos</div>
 		{#each items as item (item)}
 			<a
-				href={`#${item.toLowerCase()}`}
+				href={item === 'Overview' ? '/' : `/${item.toLowerCase()}`}
 				class="rounded px-2 py-1 text-sm text-ink-soft hover:bg-paper-mute">{item}</a
 			>
 		{/each}

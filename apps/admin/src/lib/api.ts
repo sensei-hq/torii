@@ -76,6 +76,14 @@ export interface RequestRow {
 }
 
 export const api = {
+	// auth — Supabase password sign-in; the session persists to localStorage and every
+	// gateway call reads its JWT via authHeader().
+	signIn: async (email: string, password: string) => {
+		const { error } = await sb().auth.signInWithPassword({ email, password })
+		if (error) throw new Error(error.message)
+	},
+	signOut: () => sb().auth.signOut(),
+	hasSession: async () => !!(await sb().auth.getSession()).data.session,
 	whoami: () => gwGet<WhoAmI>('/v1/whoami'),
 	audit: (limit = 100) => gwGet<{ events: AuditEvent[] }>(`/v1/audit?limit=${limit}`),
 	requests: (limit = 100) => gwGet<{ requests: RequestRow[] }>(`/v1/requests?limit=${limit}`),

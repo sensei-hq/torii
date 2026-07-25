@@ -204,6 +204,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/chat", post(routes::chat::post_chat))
         .route("/chat/stream", post(routes::chat::post_chat_stream))
         .route("/status", get(routes::status::get_status))
+        .route("/audit", get(routes::ledger::get_audit))
+        .route("/requests", get(routes::ledger::get_requests))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::require_auth,

@@ -1,0 +1,22 @@
+<script>
+	// Zen-Sumi page header: eyebrow (uppercase, tracked) + display-serif title + optional
+	// sub, with an optional right-aligned `actions` snippet.
+	let { eyebrow = '', title = '', sub = '', actions } = $props()
+</script>
+
+<div class="flex items-start justify-between gap-4 px-5 pb-3 pt-5">
+	<div class="min-w-0">
+		{#if eyebrow}
+			<div class="mb-0.5 text-[11px] font-semibold uppercase tracking-wider text-ink-mute">
+				{eyebrow}
+			</div>
+		{/if}
+		<h1 class="font-display text-xl font-semibold tracking-tight text-ink">{title}</h1>
+		{#if sub}
+			<p class="mt-1 max-w-xl text-sm text-ink-soft">{sub}</p>
+		{/if}
+	</div>
+	{#if actions}
+		<div class="flex flex-shrink-0 items-center gap-2">{@render actions()}</div>
+	{/if}
+</div>

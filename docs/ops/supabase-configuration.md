@@ -17,7 +17,7 @@ sensei-dojo's** (cross-product isolation — see `DECISIONS.md §8`).
 | | `PUBLIC_SUPABASE_URL` (web + desktop) | `PUBLIC_GATEWAY_URL` |
 |---|---|---|
 | **Local dev** | `http://127.0.0.1:55321` | `http://127.0.0.1:8787` |
-| **Production** | `https://<ref>.supabase.co` | `https://api.torii.sensei-hq.com` |
+| **Production** | `https://<ref>.supabase.co` | `https://api-torii.sensei-hq.com` |
 
 The anon (publishable) key ships to browsers **and** is baked into the desktop binary —
 it is public by design. Security is RLS + the gateway + JWT verification, never client
@@ -90,10 +90,10 @@ service-level DB credential).
 
 - **Seiki web (`apps/admin`)** → Cloudflare secrets `PUBLIC_SUPABASE_URL`,
   `PUBLIC_SUPABASE_ANON_KEY`, `PUBLIC_GATEWAY_URL`.
-- **Torii desktop (`apps/desktop`)** → injected at build time into the release env
-  (`PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY`, `PUBLIC_GATEWAY_URL`). The tracked
-  `.env` currently points at a dead project — replace it with the hosted values or move to
-  a build-time secret. Local dev uses the gitignored `apps/desktop/.env.local`.
+- **Torii desktop (`apps/desktop`)** → the tracked `.env` holds the **local-dev** values
+  (127.0.0.1) so `bun run dev` works out of the box; the **production** values
+  (`PUBLIC_SUPABASE_URL`, `PUBLIC_SUPABASE_ANON_KEY`, `PUBLIC_GATEWAY_URL`) are injected at
+  **build time** (`cargo tauri build`) into the release, never committed.
 - **Gateway** → `DATABASE_URL`, `PUBLIC_SUPABASE_URL`, `TORII_KEK`, provider BYOK keys —
   set as host secrets (see `docs/ops/deployment.md`).
 

@@ -158,13 +158,14 @@ capability from the token.
 - **Seiki web** (`apps/admin`, SvelteKit adapter-cloudflare) → **Cloudflare Workers**
   (`wrangler deploy`, mirrors dojo) at **`seiki.sensei-hq.com`**.
 - **torii-gateway** (`services/gateway`, Rust/Axum + Postgres pool + tokio tasks) →
-  **Fly.io** (container) at **`api.torii.sensei-hq.com`**. It **cannot** run on Cloudflare
-  Pages/Workers (native binary, persistent DB pool, background tasks). `api.` prefix leaves
-  `torii.sensei-hq.com` free for a product page; on Fly the (2nd-level) subdomain gets a
-  Let's Encrypt cert (point DNS-only, which also avoids proxy buffering on the SSE
-  `/v1/chat/stream`). The gateway binds `HOST:PORT` (`HOST=0.0.0.0` in the container).
+  **Fly.io** (container) at **`api-torii.sensei-hq.com`**. It **cannot** run on Cloudflare
+  Pages/Workers (native binary, persistent DB pool, background tasks). Hyphenated
+  `api-torii` is a **first-level** subdomain (covered by free Universal SSL, unlike a nested
+  `api.torii.…`) and leaves `torii.sensei-hq.com` free for a product page; point DNS-only →
+  Fly issues the cert + avoids proxy buffering on the SSE `/v1/chat/stream`. The gateway
+  binds `HOST:PORT` (`HOST=0.0.0.0` in the container).
 - **Torii desktop** (Tauri) → per-OS installer; prod env baked in points at the hosted
-  Supabase + `api.torii.sensei-hq.com`; `torii://` deep link for OAuth/magic-link redirects.
+  Supabase + `api-torii.sensei-hq.com`; `torii://` deep link for OAuth/magic-link redirects.
 
 Docs: `docs/ops/supabase-configuration.md`, `docs/ops/deployment.md`. Config:
 `apps/admin/wrangler.jsonc`, `services/gateway/{Dockerfile,fly.toml}`. **Prod build note:**

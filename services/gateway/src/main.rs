@@ -214,6 +214,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/org", get(routes::ledger::get_org))
         .route("/models", get(routes::ledger::get_models))
         .route("/routing", get(routes::ledger::get_routing))
+        .route("/governance", get(routes::ledger::get_governance))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::require_auth,

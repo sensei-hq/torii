@@ -143,6 +143,16 @@ export interface Capability {
 	description: string
 }
 
+export interface Feature {
+	slug: string
+	title: string
+	description: string | null
+	purpose: string | null
+	enabled: boolean
+	mandatory: boolean
+	sequence: number
+}
+
 export interface RoutingStep {
 	chain_name: string
 	sequence_order: number
@@ -181,6 +191,7 @@ export const api = {
 	org: () => gwGet<{ members: Member[]; roles: Role[]; capabilities: Capability[] }>('/v1/org'),
 	models: () => gwGet<{ models: ModelRow[] }>('/v1/models'),
 	routing: () => gwGet<{ steps: RoutingStep[] }>('/v1/routing'),
+	governance: () => gwGet<{ features: Feature[] }>('/v1/governance'),
 	// writes — /rpc/* only:
 	approveBudgetRequest: (id: string) => gwPost('/rpc/budgets/approve-request', { id }),
 	denyBudgetRequest: (id: string) => gwPost('/rpc/budgets/deny-request', { id }),

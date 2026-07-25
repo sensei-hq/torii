@@ -339,3 +339,28 @@ pub async fn get_routing(
         }
     }
 }
+
+/// `GET /v1/governance` — the feature-governance catalog: each governed feature with its
+/// default enabled/mandatory posture. Capability `governance.manage`. (Global config.)
+pub async fn get_governance(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+) -> Response {
+    if let Err(resp) = require_read(&state, &claims, "governance.manage").await {
+        return resp;
+    }
+    let rows: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.sequence), '[]'::json) from ( \
+           select slug, title, description, purpose, enabled, mandatory, sequence \
+             from config.features) t",
+    )
+    .fetch_one(&state.pool)
+    .await;
+    match rows {
+        Ok(features) => (StatusCode::OK, Json(json!({ "features": features }))).into_response(),
+        Err(e) => {
+            tracing::error!("get_governance: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}

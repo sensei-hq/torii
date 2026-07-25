@@ -50,8 +50,13 @@ async fn authorize(
             tracing::error!("capability resolve: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         })?;
-    caps.require(capability)
-        .map_err(|_| (StatusCode::FORBIDDEN, format!("missing capability {capability}")).into_response())?;
+    caps.require(capability).map_err(|_| {
+        (
+            StatusCode::FORBIDDEN,
+            format!("missing capability {capability}"),
+        )
+            .into_response()
+    })?;
 
     Ok((tenant, actor))
 }
@@ -105,7 +110,15 @@ pub async fn budgets_upsert_node(
         return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
     }
 
-    audit(&state, tenant, actor, "budget.node.upserted", "budget_node", Some(id)).await;
+    audit(
+        &state,
+        tenant,
+        actor,
+        "budget.node.upserted",
+        "budget_node",
+        Some(id),
+    )
+    .await;
     (StatusCode::OK, Json(json!({ "id": id }))).into_response()
 }
 
@@ -151,8 +164,20 @@ pub async fn budgets_request(
 
     match inserted {
         Ok(Some(id)) => {
-            audit(&state, tenant, actor, "budget.request.submitted", "budget_request", Some(id)).await;
-            (StatusCode::OK, Json(json!({ "id": id, "status": "pending" }))).into_response()
+            audit(
+                &state,
+                tenant,
+                actor,
+                "budget.request.submitted",
+                "budget_request",
+                Some(id),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(json!({ "id": id, "status": "pending" })),
+            )
+                .into_response()
         }
         Ok(None) => (StatusCode::NOT_FOUND, "budget node not found in tenant").into_response(),
         Err(e) => {
@@ -197,7 +222,8 @@ pub async fn apikeys_issue(
             .await
             .unwrap_or(false);
             if !ok {
-                return (StatusCode::NOT_FOUND, "service account not found in tenant").into_response();
+                return (StatusCode::NOT_FOUND, "service account not found in tenant")
+                    .into_response();
             }
             (None, Some(sa))
         }
@@ -273,9 +299,19 @@ pub async fn budgets_approve_request(
     .execute(&state.pool)
     .await;
     match write {
-        Ok(r) if r.rows_affected() == 0 => (StatusCode::NOT_FOUND, "no pending request").into_response(),
+        Ok(r) if r.rows_affected() == 0 => {
+            (StatusCode::NOT_FOUND, "no pending request").into_response()
+        }
         Ok(_) => {
-            audit(&state, tenant, actor, "budget.request.approved", "budget_request", Some(body.id)).await;
+            audit(
+                &state,
+                tenant,
+                actor,
+                "budget.request.approved",
+                "budget_request",
+                Some(body.id),
+            )
+            .await;
             (StatusCode::OK, Json(json!({ "approved": body.id }))).into_response()
         }
         Err(e) => {
@@ -310,7 +346,15 @@ pub async fn budgets_deny_request(
             (StatusCode::NOT_FOUND, "no pending request").into_response()
         }
         Ok(_) => {
-            audit(&state, tenant, actor, "budget.request.denied", "budget_request", Some(body.id)).await;
+            audit(
+                &state,
+                tenant,
+                actor,
+                "budget.request.denied",
+                "budget_request",
+                Some(body.id),
+            )
+            .await;
             (StatusCode::OK, Json(json!({ "denied": body.id }))).into_response()
         }
         Err(e) => {
@@ -416,11 +460,20 @@ pub async fn rbac_assign_role(
         return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
     }
     // Freshness gate: invalidate the target's existing tokens (target is tenant-validated).
-    let _ = sqlx::query("update core.profiles set claims_version = claims_version + 1 where id = $1")
-        .bind(body.profile_id)
-        .execute(&state.pool)
-        .await;
-    audit(&state, tenant, actor, "role.assigned", "profile_role", Some(body.profile_id)).await;
+    let _ =
+        sqlx::query("update core.profiles set claims_version = claims_version + 1 where id = $1")
+            .bind(body.profile_id)
+            .execute(&state.pool)
+            .await;
+    audit(
+        &state,
+        tenant,
+        actor,
+        "role.assigned",
+        "profile_role",
+        Some(body.profile_id),
+    )
+    .await;
     (StatusCode::OK, Json(json!({ "assigned": body.role_id }))).into_response()
 }
 
@@ -443,26 +496,52 @@ pub async fn governance_set_feature(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let write = sqlx::query(
-        "insert into public.feature_policies \
-           (tenant_id, feature_key, scope_type, scope_id, state, modified_by) \
-         values ($1,$2,$3,$4,$5,$6) \
-         on conflict (tenant_id, feature_key, scope_type, scope_id) \
-         do update set state = excluded.state, modified_by = excluded.modified_by, modified_at = now()",
-    )
-    .bind(tenant)
-    .bind(&body.feature_key)
-    .bind(&body.scope_type)
-    .bind(body.scope_id)
-    .bind(&body.state)
-    .bind(actor.to_string())
-    .execute(&state.pool)
+    // Delete-then-insert (idempotent). `on conflict` is unreliable here because a
+    // workspace-scope policy has scope_id NULL, and Postgres treats NULLs as DISTINCT in
+    // the unique index — so ON CONFLICT never fires and rows accumulate. `is not distinct
+    // from` matches the NULL correctly.
+    let write = async {
+        let mut tx = state.pool.begin().await?;
+        sqlx::query(
+            "delete from public.feature_policies \
+              where tenant_id = $1 and feature_key = $2 and scope_type = $3 \
+                and scope_id is not distinct from $4",
+        )
+        .bind(tenant)
+        .bind(&body.feature_key)
+        .bind(&body.scope_type)
+        .bind(body.scope_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "insert into public.feature_policies \
+               (tenant_id, feature_key, scope_type, scope_id, state, modified_by) \
+             values ($1,$2,$3,$4,$5,$6)",
+        )
+        .bind(tenant)
+        .bind(&body.feature_key)
+        .bind(&body.scope_type)
+        .bind(body.scope_id)
+        .bind(&body.state)
+        .bind(actor.to_string())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await
+    }
     .await;
     if let Err(e) = write {
         tracing::error!("set-feature: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
     }
-    audit(&state, tenant, actor, "governance.feature.set", "feature_policy", None).await;
+    audit(
+        &state,
+        tenant,
+        actor,
+        "governance.feature.set",
+        "feature_policy",
+        None,
+    )
+    .await;
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 

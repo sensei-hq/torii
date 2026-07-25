@@ -7,8 +7,17 @@
 	let features = $state([])
 	let error = $state('')
 	let loading = $state(true)
+	let busy = $state('')
 
-	onMount(async () => {
+	/** @type {{ v: import('$lib/api').FeatureState, label: string }[]} */
+	const STATES = [
+		{ v: 'locked', label: 'Locked' },
+		{ v: 'default-on', label: 'On' },
+		{ v: 'default-off', label: 'Off' },
+		{ v: 'user-overridable', label: 'User' }
+	]
+
+	async function load() {
 		try {
 			features = (await api.governance()).features
 		} catch (e) {
@@ -16,17 +25,39 @@
 		} finally {
 			loading = false
 		}
-	})
+	}
+	onMount(load)
 
-	const on = $derived(features.filter((f) => f.enabled).length)
-	const locked = $derived(features.filter((f) => f.mandatory).length)
+	/** @param {import('$lib/api').Feature} f → the effective posture (policy override, else default) */
+	const effective = (f) =>
+		f.policy_state ?? (f.mandatory ? 'locked' : f.enabled ? 'default-on' : 'default-off')
+
+	/**
+	 * @param {string} slug
+	 * @param {import('$lib/api').FeatureState} state
+	 */
+	async function set(slug, state) {
+		if (busy) return
+		busy = slug
+		error = ''
+		try {
+			await api.setFeature(slug, state)
+			await load()
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e)
+		} finally {
+			busy = ''
+		}
+	}
+
+	const overrides = $derived(features.filter((f) => f.policy_state).length)
 </script>
 
 <AppShell app="admin" title="Governance">
 	<PageHeader
 		eyebrow="Govern"
 		title="Feature governance"
-		sub="Every governed capability and its posture. Mandatory features are locked on for the whole tenant; the rest are overridable per space and role (resolved server-side)."
+		sub="Set each governed capability's workspace posture — locked on, default on/off, or user-overridable. Overrides resolve server-side and can only tighten per space and role."
 	/>
 
 	{#if loading}
@@ -35,7 +66,7 @@
 		<div class="px-5">
 			<Card pad
 				><p class="text-sm text-danger">
-					{error}{error.includes('403') ? ' — needs the governance.manage capability.' : ''}
+					{error}{error.includes('403') ? ' — needs the governance.manage / feature.manage capability.' : ''}
 				</p></Card
 			>
 		</div>
@@ -47,12 +78,14 @@
 					<div class="font-heading text-2xl font-light text-ink">{features.length}</div>
 				</Card>
 				<Card pad>
-					<div class="text-[11px] font-semibold uppercase tracking-wider text-ink-mute">Enabled</div>
-					<div class="font-heading text-2xl font-light text-ink">{on}</div>
+					<div class="text-[11px] font-semibold uppercase tracking-wider text-ink-mute">Overridden</div>
+					<div class="font-heading text-2xl font-light text-ink">{overrides}</div>
 				</Card>
 				<Card pad>
 					<div class="text-[11px] font-semibold uppercase tracking-wider text-ink-mute">Locked</div>
-					<div class="font-heading text-2xl font-light text-ink">{locked}</div>
+					<div class="font-heading text-2xl font-light text-ink">
+						{features.filter((f) => effective(f) === 'locked').length}
+					</div>
 				</Card>
 			</div>
 
@@ -60,21 +93,41 @@
 				<CardHead title="Governed features" meta={`${features.length}`} />
 				<div>
 					{#each features as f (f.slug)}
+						{@const eff = effective(f)}
 						<div class="flex items-center gap-3 border-b border-paper-edge px-4 py-3 last:border-b-0">
 							<Glyph
-								icon={f.mandatory ? 'i-solar-lock-keyhole-minimalistic-bold-duotone' : 'i-solar-widget-bold-duotone'}
-								tone={f.enabled ? 'accent' : 'mute'}
+								icon={eff === 'locked'
+									? 'i-solar-lock-keyhole-minimalistic-bold-duotone'
+									: 'i-solar-widget-bold-duotone'}
+								tone={eff === 'default-off' ? 'mute' : 'accent'}
 							/>
 							<div class="min-w-0 flex-1">
 								<div class="flex flex-wrap items-center gap-2">
 									<span class="text-sm font-semibold text-ink">{f.title}</span>
-									{#if f.mandatory}<Chip tone="accent">locked</Chip>{/if}
+									{#if f.policy_state}<Chip tone="accent">override</Chip>{/if}
 								</div>
 								{#if f.description}
 									<div class="mt-0.5 truncate text-[13px] text-ink-mute">{f.description}</div>
 								{/if}
 							</div>
-							<Chip tone={f.enabled ? 'success' : 'mute'}>{f.enabled ? 'enabled' : 'off'}</Chip>
+							<!-- 4-state posture control -->
+							<div
+								class="inline-flex overflow-hidden rounded-md border border-paper-edge"
+								class:opacity-50={busy === f.slug}
+							>
+								{#each STATES as s (s.v)}
+									<button
+										type="button"
+										disabled={busy === f.slug}
+										onclick={() => set(f.slug, s.v)}
+										aria-pressed={eff === s.v}
+										class="border-l border-paper-edge px-2.5 py-1 text-[11px] font-medium first:border-l-0 {eff ===
+										s.v
+											? 'bg-primary text-on-primary'
+											: 'text-ink-soft hover:bg-paper-mute'}">{s.label}</button
+									>
+								{/each}
+							</div>
 						</div>
 					{/each}
 					{#if features.length === 0}
@@ -84,8 +137,8 @@
 				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
 					<span class="i-solar-shield-keyhole-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
 					<span class="text-[11px] leading-relaxed text-ink-mute">
-						Posture resolves server-side: a mandatory feature can't be overridden, and a per-space or
-						per-role override can only tighten (never loosen) the tenant default.
+						Posture writes to the tenant's workspace scope and resolves server-side; a per-space or
+						per-role override can only tighten (never loosen) it, and every change is audited.
 					</span>
 				</div>
 			</Card>

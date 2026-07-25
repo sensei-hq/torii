@@ -341,19 +341,28 @@ pub async fn get_routing(
 }
 
 /// `GET /v1/governance` — the feature-governance catalog: each governed feature with its
-/// default enabled/mandatory posture. Capability `governance.manage`. (Global config.)
+/// default posture (enabled/mandatory) AND the tenant's workspace-scope policy override
+/// (`policy_state`, null = unset → use the default). Capability `governance.manage`.
 pub async fn get_governance(
     Extension(claims): Extension<Claims>,
     State(state): State<SharedState>,
 ) -> Response {
-    if let Err(resp) = require_read(&state, &claims, "governance.manage").await {
-        return resp;
-    }
+    let tenant = match require_read(&state, &claims, "governance.manage").await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
     let rows: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.sequence), '[]'::json) from ( \
-           select slug, title, description, purpose, enabled, mandatory, sequence \
-             from config.features) t",
+           select f.slug, f.title, f.description, f.purpose, f.enabled, f.mandatory, f.sequence, \
+                  fp.state as policy_state \
+             from config.features f \
+             left join lateral ( \
+                select state from public.feature_policies p \
+                 where p.feature_key = f.slug and p.tenant_id = $1 \
+                   and p.scope_type = 'workspace' and p.scope_id is null \
+                 order by p.modified_at desc limit 1) fp on true) t",
     )
+    .bind(tenant)
     .fetch_one(&state.pool)
     .await;
     match rows {

@@ -151,7 +151,12 @@ export interface Feature {
 	enabled: boolean
 	mandatory: boolean
 	sequence: number
+	/** workspace-scope policy override; null = unset (use the default posture). */
+	policy_state: string | null
 }
+
+/** 4-state feature-governance posture (RW6). */
+export type FeatureState = 'locked' | 'default-on' | 'default-off' | 'user-overridable'
 
 export interface RoutingStep {
 	chain_name: string
@@ -197,5 +202,13 @@ export const api = {
 	denyBudgetRequest: (id: string) => gwPost('/rpc/budgets/deny-request', { id }),
 	upsertBudgetNode: (node: Record<string, unknown>) => gwPost('/rpc/budgets/upsert-node', node),
 	// mint an identity-bound API key — the raw secret is returned once, never re-fetchable.
-	issueApiKey: (name?: string) => gwPost<IssuedKey>('/rpc/apikeys/issue', { name })
+	issueApiKey: (name?: string) => gwPost<IssuedKey>('/rpc/apikeys/issue', { name }),
+	// set a feature's workspace-scope governance posture (4-state).
+	setFeature: (feature_key: string, state: FeatureState) =>
+		gwPost('/rpc/governance/set-feature', {
+			feature_key,
+			scope_type: 'workspace',
+			scope_id: null,
+			state
+		})
 }

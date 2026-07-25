@@ -10,17 +10,17 @@
 
 	const VALUE = [
 		{
-			icon: '→',
+			icon: 'i-solar-routing-2-bold-duotone',
 			title: 'Route across every provider',
 			body: 'One endpoint. Step-down routing picks the best model for the budget.'
 		},
 		{
-			icon: '◎',
+			icon: 'i-solar-wallet-2-bold-duotone',
 			title: 'Spend with intent',
 			body: 'Org, team and user budgets with hard caps. Blended cost tracked per call.'
 		},
 		{
-			icon: '◈',
+			icon: 'i-solar-shield-check-bold-duotone',
 			title: 'Govern with confidence',
 			body: 'Role-based access and a full request ledger — every call traceable.'
 		}
@@ -46,12 +46,15 @@
 		<!-- header -->
 		<header class="sgn-head">
 			<div class="flex items-center justify-between gap-4 flex-wrap">
-				<span class="text-lg font-semibold tracking-tight text-ink">Strategos</span>
+				<span class="flex items-center gap-2.5">
+					<img src="/logo.svg" alt="" class="h-7 w-7" />
+					<span class="font-heading text-2xl tracking-tight text-ink">Torii</span>
+				</span>
 				<span class="text-xs font-medium tracking-widest text-accent uppercase">
 					AI gateway · routing &amp; governance
 				</span>
 			</div>
-			<h1 class="mt-6 text-3xl font-semibold leading-tight text-ink">
+			<h1 class="mt-6 font-heading text-3xl font-light leading-tight text-ink">
 				One endpoint for every model.
 			</h1>
 		</header>
@@ -60,7 +63,7 @@
 			<!-- left: routing graphic + value props -->
 			<section class="sgn-intro">
 				<p class="text-sm text-ink-soft mb-5" style="max-width:460px">
-					Strategos routes every request across Anthropic, Google, OpenAI and your local models —
+					Torii routes every request across Anthropic, Google, OpenAI and your local models —
 					then keeps spend, access and answer quality under one roof.
 				</p>
 
@@ -69,7 +72,7 @@
 						class="w-full h-auto"
 						viewBox="0 0 420 232"
 						role="img"
-						aria-label="Strategos routes requests from many model providers through one gateway to your apps."
+						aria-label="Torii routes requests from many model providers through one gateway to your apps."
 						fill="none"
 					>
 						<!-- connectors base -->
@@ -146,15 +149,8 @@
 						<!-- hub circle -->
 						<circle cx="300" cy="116" r="29" fill="var(--accent-soft)" />
 						<circle cx="300" cy="116" r="29" stroke="var(--paper-edge)" stroke-width="1" />
-						<text
-							x="300"
-							y="120"
-							text-anchor="middle"
-							font-family="monospace"
-							font-size="12"
-							fill="var(--accent)"
-							font-weight="600">SG</text
-						>
+						<circle cx="300" cy="116" r="9" stroke="var(--ink)" stroke-width="1.5" />
+						<circle cx="300" cy="116" r="3" fill="var(--accent)" />
 						<text
 							x="300"
 							y="166"
@@ -188,9 +184,9 @@
 					{#each VALUE as v (v.title)}
 						<div class="grid gap-3" style="grid-template-columns:36px 1fr">
 							<span
-								class="flex items-center justify-center w-9 h-9 rounded border border-paper-edge bg-paper-soft text-ink-mute text-base"
+								class="flex items-center justify-center w-9 h-9 rounded border border-paper-edge bg-paper-soft"
 							>
-								{v.icon}
+								<span class="{v.icon} h-[18px] w-[18px] text-accent"></span>
 							</span>
 							<span>
 								<span class="block text-sm font-semibold text-ink">{v.title}</span>
@@ -205,8 +201,8 @@
 			<main class="sgn-main">
 				<div class="w-full" style="max-width:400px">
 					<div class="rounded border border-paper-edge bg-paper-soft p-6">
-						<h2 class="text-xl font-semibold text-ink text-center">Sign in to your workspace</h2>
-						<p class="text-sm text-ink-mute text-center mt-1.5 mb-5">Strategos Console · gateway</p>
+						<h2 class="font-heading text-xl text-ink text-center">Sign in to your workspace</h2>
+						<p class="text-sm text-ink-mute text-center mt-1.5 mb-5">Torii Console · gateway</p>
 
 						<form onsubmit={handleSubmit} class="flex flex-col gap-4">
 							<div>

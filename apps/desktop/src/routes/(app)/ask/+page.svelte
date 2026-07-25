@@ -41,7 +41,7 @@
 					? 'inline-flex items-center gap-1 rounded-full bg-paper-soft px-2.5 py-1 font-medium text-primary-500'
 					: 'inline-flex items-center gap-1 px-2.5 py-1 text-ink-mute'}
 			>
-				<span class="i-lucide:cpu h-3 w-3"></span>Local
+				<span class="i-solar-cpu-bold-duotone h-3 w-3"></span>Local
 			</button>
 			<button
 				type="button"
@@ -51,7 +51,7 @@
 					? 'inline-flex items-center gap-1 rounded-full bg-paper-soft px-2.5 py-1 font-medium text-primary-500'
 					: 'inline-flex items-center gap-1 px-2.5 py-1 text-ink-mute'}
 			>
-				<span class="i-lucide:cloud h-3 w-3"></span>Cloud
+				<span class="i-solar-server-minimalistic-bold-duotone h-3 w-3"></span>Cloud
 			</button>
 		</div>
 	</header>

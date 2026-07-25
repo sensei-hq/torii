@@ -6,9 +6,9 @@ export default {
 		{ mode: 'password', name: 'password', label: 'Email & password' }
 	],
 	logging: { level: 'error', table: 'audit_events' },
-	routes: { auth: '/auth', data: '/data', logout: '/logout', home: '/' },
+	routes: { auth: '/signin', data: '/data', logout: '/logout', home: '/' },
 	rules: [
-		{ path: '/auth', public: true },
-		{ path: '/', public: true } // Phase 0: shell boots publicly. Phase 1 tightens to roles:'*' + a real /auth page.
+		{ path: '/signin', public: true }, // the real login page — auth redirects land here, not a 404 /auth
+		{ path: '/', public: true } // Phase 0: shell boots publicly. Phase 1 tightens to roles:'*' + server-side session.
 	]
 }

@@ -30,6 +30,7 @@ mod keys;
 mod quality;  // C6: quality-signal capture (one implicit batch per inference call)
 mod redact;   // C4: secret/PII redaction (DLP, §2 W5)
 mod routes;
+mod siem;     // O1: background audit → SIEM streamer (per-tenant cursor, at-least-once)
 mod state;
 mod store;
 mod vault;    // F3: DB-backed credential vault (replaces the env-key shim)
@@ -184,6 +185,9 @@ async fn main() -> anyhow::Result<()> {
         gateway: Arc::new(gw),
         jwks: RwLock::new(jwks),
     });
+
+    // O1: background audit → SIEM streamer (no-op until a `siem` notification_channel exists).
+    siem::spawn(Arc::clone(&state));
 
     // CORS: explicit method + header lists — wildcard is rejected by WKWebView/Safari
     let cors = CorsLayer::new()

@@ -38,7 +38,7 @@
 				data-plane="local"
 				onclick={() => ask.setPlane('local')}
 				class={ask.plane === 'local'
-					? 'inline-flex items-center gap-1 rounded-full bg-paper-soft px-2.5 py-1 font-medium text-primary-500'
+					? 'inline-flex items-center gap-1 rounded-full bg-paper-soft px-2.5 py-1 font-medium text-accent'
 					: 'inline-flex items-center gap-1 px-2.5 py-1 text-ink-mute'}
 			>
 				<span class="i-solar-cpu-bold-duotone h-3 w-3"></span>Local
@@ -48,7 +48,7 @@
 				data-plane="cloud"
 				onclick={() => ask.setPlane('cloud')}
 				class={ask.plane === 'cloud'
-					? 'inline-flex items-center gap-1 rounded-full bg-paper-soft px-2.5 py-1 font-medium text-primary-500'
+					? 'inline-flex items-center gap-1 rounded-full bg-paper-soft px-2.5 py-1 font-medium text-accent'
 					: 'inline-flex items-center gap-1 px-2.5 py-1 text-ink-mute'}
 			>
 				<span class="i-solar-server-minimalistic-bold-duotone h-3 w-3"></span>Cloud
@@ -118,19 +118,19 @@
 				{onkeydown}
 				placeholder="Ask anything… (Enter to send)"
 				disabled={ask.loading}
-				class="flex-1 rounded border border-paper-edge bg-paper-soft px-3 py-2 text-sm text-ink placeholder:text-ink-mute disabled:opacity-50 focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+				class="flex-1 rounded border border-paper-edge bg-paper-soft px-3 py-2 text-sm text-ink placeholder:text-ink-mute disabled:opacity-50 focus:outline-none focus:ring-1 focus:ring-accent focus:border-accent"
 			/>
 			<button
 				data-send
 				onclick={submit}
 				disabled={ask.loading || !draft.trim()}
-				class="rounded bg-primary-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+				class="rounded bg-primary px-4 py-2 text-sm font-medium text-on-primary disabled:opacity-40"
 			>
 				Send
 			</button>
 		</div>
 		{#if ask.plane === 'cloud' && !session.authenticated}
-			<p class="mt-1.5 text-xs text-amber-600">Sign in to use the cloud plane.</p>
+			<p class="mt-1.5 text-xs text-warning">Sign in to use the cloud plane.</p>
 		{:else}
 			<p class="mt-1.5 text-xs text-ink-mute">
 				{ask.plane === 'cloud'

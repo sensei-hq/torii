@@ -546,6 +546,51 @@ pub async fn governance_set_feature(
 }
 
 #[derive(Deserialize)]
+pub struct SetModelEnabled {
+    pub model_full_name: String,
+    pub enabled: bool,
+}
+
+/// `POST /rpc/models/set-enabled` — enable/disable a model for the tenant (absent row =
+/// enabled). Capability `model.manage`. pk is (tenant, model) so ON CONFLICT is exact.
+pub async fn models_set_enabled(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<SetModelEnabled>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "model.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let write = sqlx::query(
+        "insert into public.tenant_model_state (tenant_id, model_full_name, enabled, modified_by) \
+         values ($1,$2,$3,$4) \
+         on conflict (tenant_id, model_full_name) \
+         do update set enabled = excluded.enabled, modified_by = excluded.modified_by, modified_at = now()",
+    )
+    .bind(tenant)
+    .bind(&body.model_full_name)
+    .bind(body.enabled)
+    .bind(actor.to_string())
+    .execute(&state.pool)
+    .await;
+    if let Err(e) = write {
+        tracing::error!("models_set_enabled: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+    audit(
+        &state,
+        tenant,
+        actor,
+        "model.enabled.set",
+        "tenant_model_state",
+        None,
+    )
+    .await;
+    (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
+#[derive(Deserialize)]
 pub struct SetChainStep {
     pub id: Uuid,
     pub is_active: bool,

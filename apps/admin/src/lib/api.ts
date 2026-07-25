@@ -178,6 +178,7 @@ export interface ModelRow {
 	deprecated_on: string | null
 	provider: string
 	reachable: boolean
+	enabled: boolean
 }
 
 export const api = {
@@ -215,5 +216,8 @@ export const api = {
 		}),
 	// enable/disable a fallback-chain step (the gateway skips inactive steps).
 	setRoutingStep: (id: string, is_active: boolean) =>
-		gwPost('/rpc/routing/set-step-active', { id, is_active })
+		gwPost('/rpc/routing/set-step-active', { id, is_active }),
+	// enable/disable a model for the tenant (absent state = enabled).
+	setModelEnabled: (model_full_name: string, enabled: boolean) =>
+		gwPost('/rpc/models/set-enabled', { model_full_name, enabled })
 }

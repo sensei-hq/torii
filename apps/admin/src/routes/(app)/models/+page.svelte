@@ -7,8 +7,9 @@
 	let models = $state([])
 	let error = $state('')
 	let loading = $state(true)
+	let busy = $state('')
 
-	onMount(async () => {
+	async function load() {
 		try {
 			models = (await api.models()).models
 		} catch (e) {
@@ -16,7 +17,23 @@
 		} finally {
 			loading = false
 		}
-	})
+	}
+	onMount(load)
+
+	/** @param {import('$lib/api').ModelRow} m */
+	async function toggle(m) {
+		if (busy) return
+		busy = m.full_name
+		error = ''
+		try {
+			await api.setModelEnabled(m.full_name, !m.enabled)
+			await load()
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e)
+		} finally {
+			busy = ''
+		}
+	}
 
 	// group by provider for the catalog display
 	const byProvider = $derived(
@@ -81,11 +98,15 @@
 									<th class="!text-right">Context</th>
 									<th class="!text-right">Max output</th>
 									<th>Status</th>
+									<th class="!text-right">Access</th>
 								</tr>
 							</thead>
 							<tbody class="[&_td]:px-4 [&_td]:py-2">
 								{#each rows as m (m.full_name)}
-									<tr class="border-b border-paper-edge last:border-b-0 hover:bg-paper-mute/40">
+									<tr
+										class="border-b border-paper-edge last:border-b-0 hover:bg-paper-mute/40"
+										class:opacity-40={!m.enabled}
+									>
 										<td class="text-ink">{m.display_name ?? m.full_name}</td>
 										<td class="font-mono text-ink-mute">{m.full_name}</td>
 										<td class="text-right font-mono text-ink-soft">{ctx(m.context_window)}</td>
@@ -94,6 +115,14 @@
 											<Chip tone={m.reachable ? 'success' : 'mute'}>
 												{m.reachable ? 'reachable' : 'no endpoint'}
 											</Chip>
+										</td>
+										<td class="text-right">
+											<button
+												onclick={() => toggle(m)}
+												disabled={busy === m.full_name}
+												class="w-20 rounded-md border border-paper-edge px-2 py-1 text-[11px] font-medium text-ink-soft hover:bg-paper-mute disabled:opacity-40"
+												>{m.enabled ? 'Disable' : 'Enable'}</button
+											>
 										</td>
 									</tr>
 								{/each}

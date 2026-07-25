@@ -247,6 +247,7 @@ async fn main() -> anyhow::Result<()> {
             "/routing/set-step-active",
             post(routes::rpc::routing_set_step),
         )
+        .route("/models/set-enabled", post(routes::rpc::models_set_enabled))
         .route("/spaces/create", post(routes::rpc::spaces_create))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),

@@ -307,3 +307,35 @@ pub async fn get_models(
         }
     }
 }
+
+/// `GET /v1/routing` — the tenant's fallback chains as ordered steps
+/// (router → model, sequence, plane). Capability `chain.read`. Frontend groups by chain.
+pub async fn get_routing(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+) -> Response {
+    let tenant = match require_read(&state, &claims, "chain.read").await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let rows: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.chain_name, t.sequence_order), '[]'::json) from ( \
+           select ec.chain_name, ec.sequence_order, ec.plane, \
+                  coalesce(r.name, '—') as router, \
+                  coalesce(m.full_name, '—') as model \
+             from public.effective_chain_models ec \
+             left join config.models m on m.id = ec.model_id \
+             left join config.routers r on r.id = ec.router_id \
+            where ec.tenant_id = $1) t",
+    )
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await;
+    match rows {
+        Ok(steps) => (StatusCode::OK, Json(json!({ "steps": steps }))).into_response(),
+        Err(e) => {
+            tracing::error!("get_routing: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}

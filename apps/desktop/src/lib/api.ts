@@ -17,7 +17,8 @@ async function onUnauthorized(): Promise<void> {
 	} catch {
 		/* already gone */
 	}
-	goto(resolve('/signin'))
+	await goto(resolve('/signin'))
+	redirecting = false // re-arm: a future session can hit 401 and redirect again
 }
 
 async function gwGet<T>(path: string): Promise<T> {

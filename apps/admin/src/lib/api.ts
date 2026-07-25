@@ -8,6 +8,7 @@
 // UX gating uses `whoami().capabilities` (advisory); the server is the only gate.
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { goto } from '$app/navigation'
 
 import { GATEWAY_URL, SUPABASE_ANON_KEY, SUPABASE_URL } from './env'
 
@@ -42,7 +43,11 @@ async function onUnauthorized(): Promise<void> {
 	} catch {
 		/* already gone */
 	}
-	window.location.assign('/signin')
+	// Client-side goto, NOT window.location — /signin isn't in Kavach's public route
+	// rules, so a full-page load would be server-redirected to /auth (404). SPA nav
+	// renders /signin directly (it has no +page.server.ts, so no server hook runs).
+	await goto('/signin')
+	redirecting = false // re-arm: a future session can hit 401 and redirect again
 }
 
 async function gwGet<T>(path: string): Promise<T> {

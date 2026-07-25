@@ -3,14 +3,21 @@
 	import { AppShell, PageHeader, Card, CardHead, Chip } from '@torii/ui'
 	import { api } from '$lib/api'
 
+	/** @type {import('$lib/api').RequestRow[]} */
 	let requests = $state([])
+	/** @type {import('$lib/api').AuditEvent[]} */
 	let events = $state([])
 	let error = $state('')
 	let loading = $state(true)
 
+	// Client-side filters over the fetched page — the ledger is a bounded window (200 rows),
+	// so searching is instant and needs no re-fetch. `plane` narrows requests only.
+	let q = $state('')
+	let plane = $state('all') // all | cloud | local
+
 	onMount(async () => {
 		try {
-			const [r, a] = await Promise.all([api.requests(50), api.audit(50)])
+			const [r, a] = await Promise.all([api.requests(200), api.audit(200)])
 			requests = r.requests
 			events = a.events
 		} catch (e) {
@@ -20,11 +27,30 @@
 		}
 	})
 
+	const needle = $derived(q.trim().toLowerCase())
+	const filteredRequests = $derived(
+		requests.filter((r) => {
+			if (plane !== 'all' && (r.execution_location ?? '') !== plane) return false
+			if (!needle) return true
+			return `${r.model} ${r.chain_id ?? ''} ${r.status} ${r.execution_location ?? ''}`
+				.toLowerCase()
+				.includes(needle)
+		})
+	)
+	const filteredEvents = $derived(
+		events.filter((e) => {
+			if (!needle) return true
+			return `${e.action} ${e.target_type ?? ''} ${e.target_id ?? ''} ${e.actor_id ?? ''}`
+				.toLowerCase()
+				.includes(needle)
+		})
+	)
+
 	/** @param {string} s */
 	const fmtTime = (s) => new Date(s).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 	/** @param {number} c */
 	const fmtCost = (c) => '$' + Number(c).toFixed(4)
-	/** @param {string} p */
+	/** @param {string | null} p */
 	const planeTone = (p) => (p === 'local' ? 'success' : 'mute')
 </script>
 
@@ -47,8 +73,40 @@
 		</div>
 	{:else}
 		<div class="space-y-4 px-5 pb-6">
+			<!-- filter bar: a single search narrows both tables; plane narrows requests -->
+			<div class="relative">
+				<span
+					class="i-solar-magnifer-linear pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-mute"
+				></span>
+				<input
+					bind:value={q}
+					placeholder="Filter by model, status, action, actor…"
+					class="w-full rounded-md border border-paper-edge bg-paper py-2 pl-9 pr-3 text-sm text-ink placeholder:text-ink-mute focus:border-ink focus:outline-none"
+				/>
+			</div>
+
 			<Card flush>
-				<CardHead title="Requests" meta={`${requests.length}`} />
+				<CardHead title="Requests">
+					{#snippet right()}
+						<div class="flex items-center gap-3">
+							<div
+								class="inline-flex items-center gap-0.5 rounded-full border border-paper-edge p-0.5 text-[11px]"
+							>
+								{#each ['all', 'cloud', 'local'] as p (p)}
+									<button
+										onclick={() => (plane = p)}
+										class="rounded-full px-2 py-0.5 {plane === p
+											? 'bg-paper-mute font-medium text-accent'
+											: 'text-ink-mute'}">{p}</button
+									>
+								{/each}
+							</div>
+							<span class="font-mono text-[11px] text-ink-mute"
+								>{filteredRequests.length}/{requests.length}</span
+							>
+						</div>
+					{/snippet}
+				</CardHead>
 				<div class="overflow-auto">
 					<table class="w-full text-xs">
 						<thead
@@ -65,7 +123,7 @@
 							</tr>
 						</thead>
 						<tbody class="[&_td]:px-4 [&_td]:py-2">
-							{#each requests as r (r.id)}
+							{#each filteredRequests as r (r.id)}
 								<tr class="border-b border-paper-edge last:border-b-0 hover:bg-paper-mute/40">
 									<td class="font-mono text-ink-mute">{fmtTime(r.recorded_at)}</td>
 									<td class="text-ink">{r.model}</td>
@@ -82,8 +140,11 @@
 									<td class="text-ink-soft">{r.status}</td>
 								</tr>
 							{/each}
-							{#if requests.length === 0}
-								<tr><td colspan="7" class="py-3 text-center text-ink-mute">No requests yet.</td></tr
+							{#if filteredRequests.length === 0}
+								<tr
+									><td colspan="7" class="py-3 text-center text-ink-mute"
+										>{requests.length === 0 ? 'No requests yet.' : 'No requests match.'}</td
+									></tr
 								>
 							{/if}
 						</tbody>
@@ -92,7 +153,7 @@
 			</Card>
 
 			<Card flush>
-				<CardHead title="Audit ledger" meta={`${events.length}`} />
+				<CardHead title="Audit ledger" meta={`${filteredEvents.length}/${events.length}`} />
 				<div class="overflow-auto">
 					<table class="w-full text-xs">
 						<thead
@@ -106,7 +167,7 @@
 							</tr>
 						</thead>
 						<tbody class="[&_td]:px-4 [&_td]:py-2">
-							{#each events as e (e.id)}
+							{#each filteredEvents as e (e.id)}
 								<tr class="border-b border-paper-edge last:border-b-0 hover:bg-paper-mute/40">
 									<td class="font-mono text-ink-mute">{fmtTime(e.created_at)}</td>
 									<td class="text-ink">{e.action}</td>
@@ -116,9 +177,10 @@
 									>
 								</tr>
 							{/each}
-							{#if events.length === 0}
+							{#if filteredEvents.length === 0}
 								<tr
-									><td colspan="4" class="py-3 text-center text-ink-mute">No audit events yet.</td
+									><td colspan="4" class="py-3 text-center text-ink-mute"
+										>{events.length === 0 ? 'No audit events yet.' : 'No events match.'}</td
 									></tr
 								>
 							{/if}

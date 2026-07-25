@@ -31,21 +31,21 @@
 
 | # | Severity | Location | Dimension | Summary |
 |---|----------|----------|-----------|---------|
-| 1 | **Critical** | `database/ddl/function/public/budget_reserve.ddl:25` | budget-integrity | Idempotency-Key reuse shares one active hold across K concurrent requests; each runs a real inference but only one commit is charged → K-1 free (budget bypass). |
-| 2 | **High** | `services/gateway/src/budgets.rs:38` | budget-integrity | Worst-case reserve counts only output `max_tokens`, ignores input-token cost; `budget_commit` adds actual spend with no cap re-check → one large-input request overshoots a hard cap. |
-| 3 | **High** | `services/gateway/src/routes/rpc.rs:305` | rpc-privilege | `rbac_assign_role` gates only on `role.manage` with no role-hierarchy guard → an admin can assign themselves `owner` and gain `tenant.manage`. |
-| 4 | Medium _(filed high)_ | `services/gateway/src/redact.rs:45` | redaction-dlp | `secret_assignment` anchors keywords with `\b`, so underscore-compound keys (`client_secret=`, `db_password=`) never match → secret egresses to provider. |
-| 5 | Medium _(filed high)_ | `services/gateway/src/redact.rs:30` | redaction-dlp | No high-entropy scorer despite the module contract; prefix-less AWS secret keys and HTTP Basic-auth blobs pass through unredacted. |
-| 6 | Medium | `services/gateway/src/capabilities.rs:78` | auth | Claims-version (downgrade-revocation) gate fails **open** on missing profile row / DB error → a hard-deleted admin's unexpired JWT keeps full caps. |
-| 7 | Medium | `services/gateway/src/auth.rs:215` | auth | Unauthenticated bad-`kid` JWT forces a synchronous JWKS refetch and unconditionally overwrites the cache (incl. the empty set on upstream error) → cache-poisoning DoS + amplification. |
-| 8 | Medium | `services/gateway/src/routes/rpc.rs:305` | tenant-isolation | `rbac_assign_role` trusts client `profile_id`/`role_id` with no tenant-membership check → cross-tenant role-row insert + claims bump. |
-| 9 | Medium | `services/gateway/src/routes/rpc.rs:320` | rpc-privilege | `rbac_assign_role` bumps a client-supplied `profile_id`'s `claims_version` unconditionally → cross-tenant session-invalidation DoS. |
-| 10 | Low _(filed medium)_ | `services/gateway/src/redact.rs:48` | redaction-dlp | Card rule only tolerates space/dash separators with `\b` on both ends → dot-separated / newline-split / glued PANs defeat the Luhn gate. |
-| 11 | Low | `database/ddl/function/core/has_capability.ddl:21` | tenant-isolation | `has_capability` joins `role_permissions` on `role_id` only (no tenant predicate) → a foreign-tenant role row resolves that role's caps. Latent enabler for #3/#8. |
-| 12 | Low | `services/gateway/src/routes/rpc.rs:417` | rpc-privilege | Every privileged write records its `audit_events` row best-effort (`let _ = …`), not atomic with the mutation → a committed write can leave no audit record. |
-| 13 | Low | `services/gateway/src/crypto.rs:34` | vault-crypto | KEK, decrypted DEKs and decrypted provider secrets are never zeroized → plaintext key material lingers in process memory. |
-| 14 | Low | `services/gateway/src/routes/chat.rs:191` | secrets-logging | Upstream provider error (`GatewayError`) returned verbatim as the 502 body / SSE error event → discloses upstream error internals (no full key leaks). |
-| 15 | Low | `services/gateway/src/routes/chat.rs:134` | secrets-logging | Raw sqlx/Postgres error text from budget resolution/reservation returned verbatim to the client → internal-schema fingerprinting. |
+| 1 | **Critical** | `database/ddl/function/public/budget_reserve.ddl:25` | budget-integrity | ✅ FIXED — Idempotency-Key reuse shares one active hold across K concurrent requests; each runs a real inference but only one commit is charged → K-1 free (budget bypass). |
+| 2 | **High** | `services/gateway/src/budgets.rs:38` | budget-integrity | ✅ FIXED — Worst-case reserve counts only output `max_tokens`, ignores input-token cost; `budget_commit` adds actual spend with no cap re-check → one large-input request overshoots a hard cap. |
+| 3 | **High** | `services/gateway/src/routes/rpc.rs:305` | rpc-privilege | ✅ FIXED — `rbac_assign_role` gates only on `role.manage` with no role-hierarchy guard → an admin can assign themselves `owner` and gain `tenant.manage`. |
+| 4 | Medium _(filed high)_ | `services/gateway/src/redact.rs:45` | redaction-dlp | ✅ FIXED — `secret_assignment` anchors keywords with `\b`, so underscore-compound keys (`client_secret=`, `db_password=`) never match → secret egresses to provider. |
+| 5 | Medium _(filed high)_ | `services/gateway/src/redact.rs:30` | redaction-dlp | ✅ FIXED — No high-entropy scorer despite the module contract; prefix-less AWS secret keys and HTTP Basic-auth blobs pass through unredacted. |
+| 6 | Medium | `services/gateway/src/capabilities.rs:78` | auth | ✅ FIXED — Claims-version (downgrade-revocation) gate fails **open** on missing profile row / DB error → a hard-deleted admin's unexpired JWT keeps full caps. |
+| 7 | Medium | `services/gateway/src/auth.rs:215` | auth | ✅ FIXED — Unauthenticated bad-`kid` JWT forces a synchronous JWKS refetch and unconditionally overwrites the cache (incl. the empty set on upstream error) → cache-poisoning DoS + amplification. |
+| 8 | Medium | `services/gateway/src/routes/rpc.rs:305` | tenant-isolation | ✅ FIXED — `rbac_assign_role` trusts client `profile_id`/`role_id` with no tenant-membership check → cross-tenant role-row insert + claims bump. |
+| 9 | Medium | `services/gateway/src/routes/rpc.rs:320` | rpc-privilege | ✅ FIXED — `rbac_assign_role` bumps a client-supplied `profile_id`'s `claims_version` unconditionally → cross-tenant session-invalidation DoS. |
+| 10 | Low _(filed medium)_ | `services/gateway/src/redact.rs:48` | redaction-dlp | ✅ FIXED — Card rule only tolerates space/dash separators with `\b` on both ends → dot-separated / newline-split / glued PANs defeat the Luhn gate. |
+| 11 | Low | `database/ddl/function/core/has_capability.ddl:21` | tenant-isolation | ✅ FIXED — `has_capability` joins `role_permissions` on `role_id` only (no tenant predicate) → a foreign-tenant role row resolves that role's caps. Latent enabler for #3/#8. |
+| 12 | Low | `services/gateway/src/routes/rpc.rs:417` | rpc-privilege | ⏳ OPEN — Every privileged write records its `audit_events` row best-effort (`let _ = …`), not atomic with the mutation → a committed write can leave no audit record. |
+| 13 | Low | `services/gateway/src/crypto.rs:34` | vault-crypto | ✅ FIXED — KEK, decrypted DEKs and decrypted provider secrets are never zeroized → plaintext key material lingers in process memory. |
+| 14 | Low | `services/gateway/src/routes/chat.rs:191` | secrets-logging | ✅ FIXED — Upstream provider error (`GatewayError`) returned verbatim as the 502 body / SSE error event → discloses upstream error internals (no full key leaks). |
+| 15 | Low | `services/gateway/src/routes/chat.rs:134` | secrets-logging | ✅ FIXED — Raw sqlx/Postgres error text from budget resolution/reservation returned verbatim to the client → internal-schema fingerprinting. |
 
 ---
 

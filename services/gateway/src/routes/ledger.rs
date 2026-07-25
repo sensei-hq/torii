@@ -277,3 +277,33 @@ pub async fn get_org(
         }
     }
 }
+
+/// `GET /v1/models` — the platform model catalog (provider, context window, endpoints),
+/// grouped-friendly. Global config (not tenant-scoped). Capability `model.manage`.
+pub async fn get_models(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+) -> Response {
+    if let Err(resp) = require_read(&state, &claims, "model.manage").await {
+        return resp;
+    }
+    let rows: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.provider, t.display_name), '[]'::json) from ( \
+           select m.full_name, m.display_name, m.description, m.context_window, \
+                  m.max_output_tokens, m.released_on, m.deprecated_on, \
+                  coalesce(p.name, 'unknown') as provider, \
+                  exists(select 1 from config.model_endpoints e where e.model_id = m.id) as reachable \
+             from config.models m \
+             left join config.providers p on p.id = m.provider_id \
+            where m.deprecated_on is null) t",
+    )
+    .fetch_one(&state.pool)
+    .await;
+    match rows {
+        Ok(models) => (StatusCode::OK, Json(json!({ "models": models }))).into_response(),
+        Err(e) => {
+            tracing::error!("get_models: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}

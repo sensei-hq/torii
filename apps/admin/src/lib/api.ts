@@ -143,6 +143,18 @@ export interface Capability {
 	description: string
 }
 
+export interface ModelRow {
+	full_name: string
+	display_name: string | null
+	description: string | null
+	context_window: number | null
+	max_output_tokens: number | null
+	released_on: string | null
+	deprecated_on: string | null
+	provider: string
+	reachable: boolean
+}
+
 export const api = {
 	// auth — Supabase password sign-in; the session persists to localStorage and every
 	// gateway call reads its JWT via authHeader().
@@ -159,6 +171,7 @@ export const api = {
 	connections: () => gwGet<{ providers: Provider[] }>('/v1/connections'),
 	apikeys: () => gwGet<{ keys: ApiKey[] }>('/v1/apikeys'),
 	org: () => gwGet<{ members: Member[]; roles: Role[]; capabilities: Capability[] }>('/v1/org'),
+	models: () => gwGet<{ models: ModelRow[] }>('/v1/models'),
 	// writes — /rpc/* only:
 	approveBudgetRequest: (id: string) => gwPost('/rpc/budgets/approve-request', { id }),
 	denyBudgetRequest: (id: string) => gwPost('/rpc/budgets/deny-request', { id }),

@@ -220,6 +220,9 @@ export const api = {
 	// enable/disable a model for the tenant (absent state = enabled).
 	setModelEnabled: (model_full_name: string, enabled: boolean) =>
 		gwPost('/rpc/models/set-enabled', { model_full_name, enabled }),
+	// assign a role to a member (bumps the target's claims_version — self-assign signs you out).
+	assignRole: (profile_id: string, role_id: string) =>
+		gwPost('/rpc/rbac/assign-role', { profile_id, role_id }),
 	// workspace-default policy toggles.
 	settings: () => gwGet<{ settings: { setting_key: string; enabled: boolean }[] }>('/v1/settings'),
 	setSetting: (setting_key: string, enabled: boolean) =>

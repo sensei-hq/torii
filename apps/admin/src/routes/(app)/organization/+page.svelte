@@ -11,8 +11,9 @@
 	let capabilities = $state([])
 	let error = $state('')
 	let loading = $state(true)
+	let busy = $state('')
 
-	onMount(async () => {
+	async function load() {
 		try {
 			const o = await api.org()
 			members = o.members
@@ -23,7 +24,31 @@
 		} finally {
 			loading = false
 		}
-	})
+	}
+	onMount(load)
+
+	/**
+	 * Assign a role to a member via the committed /rpc/rbac/assign-role. NOTE: this bumps the
+	 * target's claims_version — if you assign to yourself you'll be signed out (re-auth).
+	 * @param {string} profileId @param {string} roleId
+	 */
+	async function assign(profileId, roleId) {
+		if (!roleId || busy) return
+		busy = profileId
+		error = ''
+		try {
+			await api.assignRole(profileId, roleId)
+			await load()
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e)
+		} finally {
+			busy = ''
+		}
+	}
+
+	/** roles a member does NOT already hold (candidates to assign) */
+	/** @param {import('$lib/api').Member} m */
+	const assignable = (m) => roles.filter((r) => !m.roles.includes(r.key))
 
 	// a Set of granted capabilities per role, for O(1) matrix cell lookups.
 	const grantedByRole = $derived(new Map(roles.map((r) => [r.id, new Set(r.capabilities)])))
@@ -72,10 +97,28 @@
 								<div class="truncate text-sm text-ink">{m.display_name ?? 'Unnamed'}</div>
 								<div class="font-mono text-[11px] text-ink-mute">{m.id.slice(0, 8)}</div>
 							</div>
-							<div class="flex flex-wrap justify-end gap-1.5">
+							<div class="flex flex-wrap items-center justify-end gap-1.5">
 								{#each m.roles as r (r)}
 									<Chip tone={r === 'owner' || r === 'admin' ? 'accent' : 'mute'}>{r}</Chip>
 								{/each}
+								{#if assignable(m).length > 0}
+									<!-- assign a role the member doesn't hold (value resets after each pick) -->
+									<select
+										disabled={busy === m.id}
+										value=""
+										onchange={(e) => {
+											assign(m.id, e.currentTarget.value)
+											e.currentTarget.value = ''
+										}}
+										aria-label={`Add a role to ${m.display_name ?? m.id}`}
+										class="rounded-md border border-paper-edge bg-paper px-2 py-1 text-[11px] text-ink-soft disabled:opacity-40"
+									>
+										<option value="" disabled>+ role</option>
+										{#each assignable(m) as r (r.id)}
+											<option value={r.id}>{r.name}</option>
+										{/each}
+									</select>
+								{/if}
 							</div>
 						</div>
 					{/each}

@@ -45,6 +45,14 @@ impl CapabilitySet {
         self.0.contains(capability)
     }
 
+    /// The resolved capability keys, sorted — for client UX gating via `/v1/whoami`
+    /// (advisory only; every mutation is independently capability-checked server-side).
+    pub fn list(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.0.iter().cloned().collect();
+        v.sort();
+        v
+    }
+
     /// Ok(()) if the capability is held, else a 403-mapped error.
     pub fn require(&self, capability: &str) -> Result<(), CapabilityError> {
         if self.has(capability) {

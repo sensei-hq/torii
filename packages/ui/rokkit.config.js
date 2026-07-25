@@ -1,58 +1,73 @@
-// Zen-Sumi skin for Strategos UI
-// Palette: washi paper (stone), sumi ink, 朱 vermillion accent.
+// Zen-Sumi design system for torii + seiki — washi paper, sumi ink, 朱 vermillion.
 // Restraint over ornament. Hairlines over shadows. Air over density.
 //
-// Approach: named-palette approximation (stone/orange/sky) because `vermillion`
-// is not a built-in Tailwind palette. The `overrides` block carries the exact
-// OKLCH values from docs/mockups/app/zs.css for semantic tokens.
-// TODO: define a full `vermillion` palette in `palettes:` + `colorSpace:'oklch'`
-// for pixel-perfect shu-500 → oklch(0.580 0.150 35) once the full ramp is needed.
+// Follows the Rokkit skin system (skin-system-rokkit skill) + the sensei reference
+// (~/Developer/sensei-hq/sensei/app/rokkit.config.js): a full custom OKLCH palette
+// (sumi-palette.js) + reserved-name `overrides` that map paper/ink/accent to exact
+// palette stops. Dual-surface skin auto-flips in [data-mode="dark"] — no manual
+// inversion. Anchors match docs/mockups/app/zs.css.
+
+import { sumiPalette } from './sumi-palette.js'
 
 export default {
-	skins: {
-		default: {
-			surface: 'stone',
-			ink: 'stone',
-			// Closest named Tailwind palette to Zen-Sumi's 朱 vermillion (shu-500)
-			primary: 'orange',
-			accent: 'orange',
-			success: 'green',
-			warning: 'yellow',
-			danger: 'red',
-			error: 'red',
-			info: 'sky'
-		},
-		'zen-sumi': {
-			surface: 'stone',
-			ink: 'stone',
-			primary: 'orange',
-			accent: 'orange',
-			success: 'green',
-			warning: 'yellow',
-			danger: 'red',
-			error: 'red',
-			info: 'sky'
-		}
+	palettes: sumiPalette,
+	colorSpace: 'oklch',
+
+	// Dual-surface skin: surface + ink both pull kami (light) / sumi (dark).
+	skin: {
+		surface: { light: 'kami', dark: 'sumi' },
+		ink: { light: 'kami', dark: 'sumi' },
+		primary: 'shu', // vermillion (朱) z-scale accent
+		secondary: 'murasaki',
+		accent: 'shu',
+		success: 'hisui', // jade (翡翠)
+		warning: 'kohaku', // amber (琥珀)
+		danger: 'beni', // crimson (紅)
+		error: 'beni',
+		info: 'ai' // indigo (藍)
 	},
 
-	// Exact Zen-Sumi color values from docs/mockups/app/zs.css
-	// These override the palette-derived tokens with the precise OKLCH hues.
+	// Reserved-name overrides — the preset emits these per mode so [data-mode="dark"]
+	// swaps automatically. Maps the semantic tokens my components use to exact stops.
 	overrides: {
-		// 朱 vermillion accent — shu-500
-		accent: 'oklch(0.580 0.150 35)',
-		'accent-soft': 'oklch(0.580 0.150 35 / 0.12)',
-		// Classification hues
-		success: 'oklch(0.620 0.080 160)',
-		'success-soft': 'oklch(0.620 0.080 160 / 0.14)',
-		warning: 'oklch(0.720 0.120 75)',
-		'warning-soft': 'oklch(0.720 0.120 75 / 0.15)',
-		danger: 'oklch(0.55 0.18 28)',
-		'danger-soft': 'oklch(0.55 0.18 28 / 0.12)',
-		// Focus ring matches the vermillion accent
-		'focus-ring': 'oklch(0.580 0.150 35)'
+		// Surface (paper) — washi ramp
+		paper: { light: 'kami.100', dark: 'sumi.50' },
+		'paper-soft': { light: 'kami.200', dark: 'sumi.100' },
+		'paper-mute': { light: 'kami.300', dark: 'sumi.200' },
+		'paper-edge': { light: 'kami.400', dark: 'sumi.400' },
+
+		// Ink (text)
+		ink: { light: 'kami.900', dark: 'sumi.900' },
+		'ink-soft': { light: 'kami.700', dark: 'sumi.800' },
+		'ink-mute': { light: 'kami.600', dark: 'sumi.700' },
+		'ink-faint': { light: 'kami.500', dark: 'sumi.600' },
+
+		// Accent — vermillion (rationed). --accent = shu-500 light / shu-400 dark.
+		accent: { light: 'shu.500', dark: 'shu.400' },
+
+		// Primary named token = ink-colored CTA (design system: --primary = --ink).
+		// bg-primary / text-primary render ink; the vermillion is `accent`.
+		primary: { light: 'kami.900', dark: 'sumi.900' },
+		'on-primary': { light: 'kami.100', dark: 'sumi.50' },
+
+		// Status — lighten one stop in dark mode for legibility.
+		success: { light: 'hisui.500', dark: 'hisui.400' },
+		warning: { light: 'kohaku.500', dark: 'kohaku.400' },
+		danger: { light: 'beni.500', dark: 'beni.400' },
+		info: { light: 'ai.500', dark: 'ai.400' }
 	},
 
-	icons: {
-		lucide: '@iconify-json/lucide/icons.json'
-	}
+	typography: {
+		sans: "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif",
+		mono: "'JetBrains Mono', 'SF Mono', Menlo, monospace",
+		display: "'Fraunces', 'Iowan Old Style', Georgia, serif",
+		kanji: "'Shippori Mincho', 'Yu Mincho', 'Hiragino Mincho ProN', 'Songti SC', serif"
+	},
+
+	// Zen-Sumi radii: --radius 6px / --radius-lg 10px / pill.
+	shape: { radius: 'soft' },
+
+	icons: { lucide: '@iconify-json/lucide/icons.json' },
+	switcher: 'manual',
+	storageKey: 'torii-theme'
 }

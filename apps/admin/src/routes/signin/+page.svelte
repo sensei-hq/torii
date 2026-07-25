@@ -38,22 +38,22 @@
 				type="email"
 				placeholder="Email"
 				autocomplete="username"
-				class="w-full rounded border border-paper-edge bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-primary-500"
+				class="w-full rounded border border-paper-edge bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent"
 			/>
 			<input
 				bind:value={password}
 				type="password"
 				placeholder="Password"
 				autocomplete="current-password"
-				class="w-full rounded border border-paper-edge bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-primary-500"
+				class="w-full rounded border border-paper-edge bg-paper px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-accent"
 			/>
 			{#if error}
-				<p class="text-xs text-amber-600">{error}</p>
+				<p class="text-xs text-warning">{error}</p>
 			{/if}
 			<button
 				type="submit"
 				disabled={loading || !email || !password}
-				class="w-full rounded bg-primary-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+				class="w-full rounded bg-primary px-4 py-2 text-sm font-medium text-on-primary disabled:opacity-40"
 			>
 				{loading ? 'Signing in…' : 'Sign in'}
 			</button>

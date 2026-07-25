@@ -5,7 +5,7 @@
 	let { label = '', value = 0, max = 100, display = '', tone = 'ink', hint = '' } = $props()
 	const pct = $derived(max ? Math.min(100, Math.max(0, (value / max) * 100)) : 0)
 	const fill = $derived(
-		tone === 'accent' ? 'bg-primary-500' : tone === 'danger' ? 'bg-red-500' : 'bg-ink'
+		tone === 'accent' ? 'bg-accent' : tone === 'danger' ? 'bg-danger' : 'bg-ink'
 	)
 </script>
 

@@ -4,11 +4,11 @@
 	let { tone = 'mute', class: cls = '', children } = $props()
 	const toneCls = $derived(
 		tone === 'accent'
-			? 'bg-primary-500/12 text-primary-500'
+			? 'bg-accent-soft text-accent'
 			: tone === 'success'
-				? 'bg-emerald-500/12 text-emerald-600'
+				? 'bg-success-soft text-success'
 				: tone === 'warning'
-					? 'bg-amber-500/15 text-amber-600'
+					? 'bg-warning-soft text-warning'
 					: 'bg-paper-mute text-ink-mute'
 	)
 </script>

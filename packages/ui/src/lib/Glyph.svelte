@@ -2,7 +2,7 @@
 	// Zen-Sumi glyph: a small square icon badge (sunken paper-mute + hairline).
 	let { icon = '', size = 32, tone = 'mute' } = $props()
 	const toneCls = $derived(
-		tone === 'accent' ? 'text-primary-500' : tone === 'soft' ? 'text-ink-soft' : 'text-ink-mute'
+		tone === 'accent' ? 'text-accent' : tone === 'soft' ? 'text-ink-soft' : 'text-ink-mute'
 	)
 </script>
 

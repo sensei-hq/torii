@@ -11,7 +11,7 @@
 				{eyebrow}
 			</div>
 		{/if}
-		<h1 class="font-display text-xl font-semibold tracking-tight text-ink">{title}</h1>
+		<h1 class="font-heading text-xl font-semibold tracking-tight text-ink">{title}</h1>
 		{#if sub}
 			<p class="mt-1 max-w-xl text-sm text-ink-soft">{sub}</p>
 		{/if}

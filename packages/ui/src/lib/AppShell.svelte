@@ -22,7 +22,7 @@
 		aria-label="Primary"
 		class="flex flex-col gap-1 border-r border-paper-edge bg-paper-soft p-3"
 	>
-		<div class="mb-3 text-sm font-semibold text-primary-500">Strategos</div>
+		<div class="mb-3 text-sm font-semibold text-accent">Strategos</div>
 		{#each items as item (item)}
 			<a
 				href={item === 'Overview' ? '/' : `/${item.toLowerCase()}`}

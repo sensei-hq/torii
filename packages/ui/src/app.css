@@ -1,3 +1,5 @@
+/* Zen-Sumi typefaces — Fraunces (display), Inter (UI), JetBrains Mono, Shippori Mincho (kanji). */
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Shippori+Mincho:wght@400;500;600;700&display=swap');
 @import '@rokkit/themes/base.css';
 @import '@unocss/reset/tailwind.css';
 @import '@rokkit/themes/base';
@@ -6,13 +8,15 @@
 @layer base {
   :root {
     --scroll-width: 0.5rem;
-    @apply skin-zen-sumi;
   }
   html {
     height: 100%;
   }
   body {
     @apply flex h-full w-full flex-col;
+    /* named-token `@apply bg-paper` can't match body when data-mode is on it — use the var */
+    background: var(--paper);
+    color: var(--ink);
   }
   app {
     @apply h-full w-full;

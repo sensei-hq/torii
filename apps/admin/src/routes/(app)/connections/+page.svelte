@@ -85,7 +85,7 @@
 	{:else}
 		<div class="space-y-4 px-5 pb-6">
 			{#if error}
-				<Card pad><p class="text-sm text-primary-500">{error}</p></Card>
+				<Card pad><p class="text-sm text-accent">{error}</p></Card>
 			{/if}
 
 			<!-- Provider routers — the platform's credentialed upstreams (read-only; vault-managed). -->
@@ -128,7 +128,7 @@
 					{/if}
 				</div>
 				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
-					<span class="i-lucide-shield-check mt-0.5 h-3.5 w-3.5 text-emerald-600"></span>
+					<span class="i-lucide-shield-check mt-0.5 h-3.5 w-3.5 text-success"></span>
 					<span class="text-[11px] leading-relaxed text-ink-mute">
 						Credentials live in the org vault — the gateway proxies every call. Connect, rotate, and
 						per-router custody are managed server-side.
@@ -138,9 +138,9 @@
 
 			<!-- Reveal-once banner: the raw secret, shown exactly once, then unrecoverable. -->
 			{#if revealed}
-				<Card pad class="border-primary-500/40 bg-primary-500/[0.04]">
+				<Card pad class="border-accent bg-accent-soft">
 					<div class="flex items-start gap-3">
-						<span class="i-lucide-key-round mt-0.5 h-4 w-4 text-primary-500"></span>
+						<span class="i-lucide-key-round mt-0.5 h-4 w-4 text-accent"></span>
 						<div class="min-w-0 flex-1">
 							<p class="text-sm font-medium text-ink">
 								Copy this key now — it will not be shown again.
@@ -190,7 +190,7 @@
 							<button
 								onclick={issue}
 								disabled={issuing}
-								class="rounded-md bg-primary-500 px-3 py-1 text-xs font-medium text-white disabled:opacity-40"
+								class="rounded-md bg-primary px-3 py-1 text-xs font-medium text-on-primary disabled:opacity-40"
 								>{issuing ? 'Issuing…' : 'Issue key'}</button
 							>
 						</div>

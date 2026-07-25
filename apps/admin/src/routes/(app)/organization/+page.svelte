@@ -52,7 +52,7 @@
 	{:else if error}
 		<div class="px-5">
 			<Card pad
-				><p class="text-sm text-primary-500">
+				><p class="text-sm text-accent">
 					{error}{error.includes('403') ? ' — needs the role.manage capability (owner/admin).' : ''}
 				</p></Card
 			>
@@ -142,7 +142,7 @@
 										{#each roles as r (r.id)}
 											<td class="px-2 py-1.5 text-center">
 												{#if has(r.id, c.key)}
-													<span class="i-lucide-check inline-block h-3.5 w-3.5 text-primary-500"
+													<span class="i-lucide-check inline-block h-3.5 w-3.5 text-accent"
 													></span>
 												{:else}
 													<span class="text-ink-faint">·</span>

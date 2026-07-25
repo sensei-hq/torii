@@ -81,7 +81,7 @@
 	{#if loading}
 		<p class="px-5 text-sm text-ink-mute">Loading…</p>
 	{:else if error}
-		<div class="px-5"><Card pad><p class="text-sm text-primary-500">{error}</p></Card></div>
+		<div class="px-5"><Card pad><p class="text-sm text-accent">{error}</p></Card></div>
 	{:else}
 		<div class="space-y-4 px-5 pb-6">
 			<!-- headline stats, all from the live ledger -->

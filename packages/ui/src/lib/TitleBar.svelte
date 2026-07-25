@@ -18,7 +18,7 @@
 
 <div data-title-bar class="flex items-center gap-2 border-b border-paper-edge px-3 py-1.5">
 	<!-- Brand mark -->
-	<span class="text-sm font-semibold text-primary-500">Strategos</span>
+	<span class="text-sm font-semibold text-accent">Strategos</span>
 
 	<EnvChip />
 

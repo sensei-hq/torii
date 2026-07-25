@@ -9,7 +9,7 @@
 >
 	<!-- Brand + version -->
 	<div class="flex items-center gap-2 px-3 py-3">
-		<span class="text-sm font-semibold text-primary-500">{appName}</span>
+		<span class="text-sm font-semibold text-accent">{appName}</span>
 		<span class="text-xs text-ink-mute">v{version}</span>
 	</div>
 
@@ -21,7 +21,7 @@
 				onclick={() => onnavigate?.(item)}
 				aria-current={item === active ? 'page' : undefined}
 				class="rounded px-2 py-1.5 text-left text-sm {item === active
-					? 'bg-paper-soft text-primary-500'
+					? 'bg-paper-soft text-accent'
 					: 'text-ink-soft hover:bg-paper-mute'}"
 			>
 				{item}

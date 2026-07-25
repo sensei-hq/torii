@@ -4,14 +4,14 @@
 	// ('ink' default, 'accent' = vermillion, 'danger').
 	let { label = '', value = '', unit = '', hint = '', tone = 'ink', class: cls = '' } = $props()
 	const numTone = $derived(
-		tone === 'accent' ? 'text-primary-500' : tone === 'danger' ? 'text-red-600' : 'text-ink'
+		tone === 'accent' ? 'text-accent' : tone === 'danger' ? 'text-danger' : 'text-ink'
 	)
 </script>
 
 <div class="rounded-lg border border-paper-edge bg-paper-soft p-4 {cls}">
 	<div class="mb-2.5 text-[11px] font-semibold uppercase tracking-wider text-ink-mute">{label}</div>
 	<div class="flex items-baseline gap-1">
-		<span class="font-display text-3xl font-light leading-none {numTone}">{value}</span>
+		<span class="font-heading text-3xl font-light leading-none {numTone}">{value}</span>
 		{#if unit}<span class="text-sm text-ink-mute">{unit}</span>{/if}
 	</div>
 	{#if hint}<div class="mt-2 font-mono text-[11px] text-ink-mute">{hint}</div>{/if}

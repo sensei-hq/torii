@@ -12,6 +12,7 @@
 
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use crate::crypto::{unseal_credential, unseal_dek, Kek};
 
@@ -32,8 +33,9 @@ impl Vault {
         })
     }
 
-    /// Resolve + decrypt a tenant's data-encryption key.
-    async fn tenant_dek(&self, pool: &PgPool, tenant_id: Uuid) -> anyhow::Result<[u8; 32]> {
+    /// Resolve + decrypt a tenant's data-encryption key. Held in `Zeroizing` so the
+    /// key material is wiped from memory when the caller drops it.
+    async fn tenant_dek(&self, pool: &PgPool, tenant_id: Uuid) -> anyhow::Result<Zeroizing<[u8; 32]>> {
         let row = sqlx::query("select encrypted_dek from core.tenant_keys where tenant_id = $1")
             .bind(tenant_id)
             .fetch_optional(pool)
@@ -50,7 +52,7 @@ impl Vault {
         pool: &PgPool,
         tenant_id: Uuid,
         router_id: Uuid,
-    ) -> anyhow::Result<Option<String>> {
+    ) -> anyhow::Result<Option<Zeroizing<String>>> {
         let row = sqlx::query(
             "select encrypted_api_key from public.router_keys \
              where tenant_id = $1 and router_id = $2 and is_active = true \

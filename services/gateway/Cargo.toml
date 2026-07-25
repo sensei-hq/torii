@@ -24,6 +24,8 @@ async-trait = "0.1"
 # F3 credential vault — vetted AEAD (RustCrypto AES-256-GCM), not hand-rolled.
 aes-gcm = "0.10"
 base64 = "0.22"
+# F3 key hygiene — best-effort zeroization of KEK/DEK/decrypted secrets on drop.
+zeroize = "1"
 # H2 API-key identity — argon2id hash/verify of high-entropy key secrets (RustCrypto).
 argon2 = { version = "0.5", features = ["std"] }
 # C4 redaction/DLP (§2 W5) — pattern + entropy secret/PII detection.

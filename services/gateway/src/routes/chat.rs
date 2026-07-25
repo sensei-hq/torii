@@ -145,7 +145,11 @@ async fn reserve_budget(
                 StatusCode::PAYMENT_REQUIRED,
                 "no budget node for caller — access denied".to_string(),
             ),
-            crate::budgets::BudgetError::Db(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+            // Don't leak raw sqlx/Postgres text (table/constraint names) to the client.
+            crate::budgets::BudgetError::Db(err) => {
+                tracing::error!(?err, "chat: budget node resolution db error");
+                (StatusCode::INTERNAL_SERVER_ERROR, "budget service error".to_string())
+            }
             crate::budgets::BudgetError::Exceeded => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "budget error".to_string())
             }
@@ -167,7 +171,11 @@ async fn reserve_budget(
                 })
                 .to_string(),
             ),
-            crate::budgets::BudgetError::Db(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+            // Don't leak raw sqlx/Postgres text (table/constraint names) to the client.
+            crate::budgets::BudgetError::Db(err) => {
+                tracing::error!(?err, "chat: budget reserve db error");
+                (StatusCode::INTERNAL_SERVER_ERROR, "budget service error".to_string())
+            }
             crate::budgets::BudgetError::NoNode => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "budget error".to_string())
             }
@@ -203,7 +211,9 @@ pub async fn post_chat(
         Err(e) => {
             // inference failed — release the hold so no headroom is consumed.
             let _ = crate::budgets::release(&state.pool, tenant, hold).await;
-            return Err((StatusCode::BAD_GATEWAY, e.to_string()));
+            // Don't disclose upstream/provider internals to the client — log server-side.
+            tracing::error!("chat: gateway execute error: {}", e);
+            return Err((StatusCode::BAD_GATEWAY, "upstream provider error".to_string()));
         }
     };
 
@@ -398,8 +408,9 @@ pub async fn post_chat_stream(
             Err(e) => {
                 // inference failed — release the hold (no spend).
                 let _ = crate::budgets::release(&state.pool, tenant, hold).await;
+                // Don't disclose upstream/provider internals to the client — log server-side.
                 tracing::error!("chat/stream: gateway execute error: {}", e);
-                let _ = tx.send(Ok(sse_error(&e.to_string()))).await;
+                let _ = tx.send(Ok(sse_error("upstream provider error"))).await;
             }
         }
     });

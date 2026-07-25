@@ -713,3 +713,40 @@ async fn audit(
         );
     }
 }
+
+#[derive(Deserialize)]
+pub struct SetSetting {
+    pub setting_key: String,
+    pub enabled: bool,
+}
+
+/// `POST /rpc/settings/set` — set a workspace-default policy toggle. Capability
+/// `tenant.manage`. pk is (tenant, setting_key) so ON CONFLICT is exact.
+pub async fn settings_set(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<SetSetting>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "tenant.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let write = sqlx::query(
+        "insert into public.tenant_settings (tenant_id, setting_key, enabled, modified_by) \
+         values ($1,$2,$3,$4) \
+         on conflict (tenant_id, setting_key) \
+         do update set enabled = excluded.enabled, modified_by = excluded.modified_by, modified_at = now()",
+    )
+    .bind(tenant)
+    .bind(&body.setting_key)
+    .bind(body.enabled)
+    .bind(actor.to_string())
+    .execute(&state.pool)
+    .await;
+    if let Err(e) = write {
+        tracing::error!("settings_set: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+    audit(&state, tenant, actor, "settings.set", "tenant_settings", None).await;
+    (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}

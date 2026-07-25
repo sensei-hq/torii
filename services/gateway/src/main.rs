@@ -215,6 +215,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/models", get(routes::ledger::get_models))
         .route("/routing", get(routes::ledger::get_routing))
         .route("/governance", get(routes::ledger::get_governance))
+        .route("/settings", get(routes::ledger::get_settings))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::require_auth,
@@ -248,6 +249,7 @@ async fn main() -> anyhow::Result<()> {
             post(routes::rpc::routing_set_step),
         )
         .route("/models/set-enabled", post(routes::rpc::models_set_enabled))
+        .route("/settings/set", post(routes::rpc::settings_set))
         .route("/spaces/create", post(routes::rpc::spaces_create))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),

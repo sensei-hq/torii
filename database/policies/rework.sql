@@ -12,6 +12,7 @@ begin
     ('public', 'api_keys'),
     ('public', 'feature_policies'),
     ('public', 'tenant_model_state'),
+    ('public', 'tenant_settings'),
     ('public', 'notification_channels'),
     ('public', 'alert_rules'),
     ('public', 'alert_events'),

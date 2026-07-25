@@ -219,5 +219,9 @@ export const api = {
 		gwPost('/rpc/routing/set-step-active', { id, is_active }),
 	// enable/disable a model for the tenant (absent state = enabled).
 	setModelEnabled: (model_full_name: string, enabled: boolean) =>
-		gwPost('/rpc/models/set-enabled', { model_full_name, enabled })
+		gwPost('/rpc/models/set-enabled', { model_full_name, enabled }),
+	// workspace-default policy toggles.
+	settings: () => gwGet<{ settings: { setting_key: string; enabled: boolean }[] }>('/v1/settings'),
+	setSetting: (setting_key: string, enabled: boolean) =>
+		gwPost('/rpc/settings/set', { setting_key, enabled })
 }

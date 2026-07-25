@@ -383,3 +383,29 @@ pub async fn get_governance(
         }
     }
 }
+
+/// `GET /v1/settings` — the tenant's workspace-default policy toggles (absent = app
+/// default). Capability `tenant.manage`.
+pub async fn get_settings(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+) -> Response {
+    let tenant = match require_read(&state, &claims, "tenant.manage").await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let rows: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.setting_key), '[]'::json) from ( \
+           select setting_key, enabled from public.tenant_settings where tenant_id = $1) t",
+    )
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await;
+    match rows {
+        Ok(settings) => (StatusCode::OK, Json(json!({ "settings": settings }))).into_response(),
+        Err(e) => {
+            tracing::error!("get_settings: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}

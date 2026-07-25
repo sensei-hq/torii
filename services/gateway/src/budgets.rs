@@ -32,10 +32,13 @@ impl From<sqlx::Error> for BudgetError {
     }
 }
 
-/// Worst-case reserve amount from the requested `max_tokens` (PR-4). The reserve
-/// only needs to be an upper bound — the surplus is released at commit.
-pub fn estimate(max_tokens: u32) -> f64 {
-    (max_tokens as f64) * WORST_CASE_USD_PER_TOKEN
+/// Worst-case reserve amount (PR-4). A true upper bound on the call's cost: charges
+/// BOTH the estimated INPUT tokens and the requested `max_output` tokens at the
+/// worst-case rate. Billing input at the same conservative output rate over-reserves
+/// (safe for a `hard` cap — a tiny `max_output` with a huge prompt can no longer slip
+/// past the headroom check); the surplus is released at commit.
+pub fn estimate(input_est: u32, max_output: u32) -> f64 {
+    ((input_est as u64 + max_output as u64) as f64) * WORST_CASE_USD_PER_TOKEN
 }
 
 /// Resolve the caller's budget node: their identity leaf (`ref_id = subject`) first,

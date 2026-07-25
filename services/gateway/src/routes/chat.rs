@@ -3,7 +3,7 @@ use std::time::Instant;
 use axum::{
     body::Body,
     extract::State,
-    http::{header, HeaderMap, StatusCode},
+    http::{header, StatusCode},
     response::Response,
     Extension, Json,
 };
@@ -68,6 +68,20 @@ fn map_role(role: &str) -> MessageRole {
     }
 }
 
+/// Rough INPUT-token estimate for the worst-case pre-call reserve (~4 chars/token, a
+/// standard heuristic) over every message plus the system prompt. Only needs to be a
+/// sane upper-bound input to `budgets::estimate` so a large prompt paired with a tiny
+/// `max_tokens` still reserves proportionally — over-reserve is released at commit.
+fn estimate_input_tokens(req: &ChatRequest) -> u32 {
+    let chars: usize = req
+        .messages
+        .iter()
+        .map(|m| m.content.chars().count())
+        .sum::<usize>()
+        + req.system.as_deref().map(|s| s.chars().count()).unwrap_or(0);
+    (chars / 4).min(u32::MAX as usize) as u32
+}
+
 fn build_inference_request(req: &ChatRequest) -> InferenceRequest {
     // C4 §2 W5 — redact-in-flight: strip secrets/PII from every message and the
     // system prompt BEFORE they egress to any model (cloud especially). One-way
@@ -114,8 +128,8 @@ fn build_inference_request(req: &ChatRequest) -> InferenceRequest {
 async fn reserve_budget(
     state: &SharedState,
     claims: &Claims,
+    input_est: u32,
     max_tokens: u32,
-    idem: Option<&str>,
 ) -> Result<(Uuid, Uuid, Uuid), (StatusCode, String)> {
     let tenant = claims.tenant_id.ok_or((
         StatusCode::PAYMENT_REQUIRED,
@@ -137,8 +151,10 @@ async fn reserve_budget(
             }
         })?;
 
-    let est = crate::budgets::estimate(max_tokens);
-    let hold = crate::budgets::reserve(&state.pool, tenant, node, est, idem)
+    let est = crate::budgets::estimate(input_est, max_tokens);
+    // request-level idempotency (response caching) is deferred; per-request reserve
+    // guarantees no shared-hold bypass (each /v1/chat gets its own cap-gated hold).
+    let hold = crate::budgets::reserve(&state.pool, tenant, node, est, None)
         .await
         .map_err(|e| match e {
             crate::budgets::BudgetError::Exceeded => (
@@ -167,17 +183,16 @@ async fn reserve_budget(
 pub async fn post_chat(
     Extension(claims): Extension<Claims>,
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, String)> {
     let ireq = build_inference_request(&req);
     let max_tokens = req.max_tokens.unwrap_or(1024);
-    // Optional client idempotency: same key ⇒ budget_reserve returns the same hold
-    // (no double-reserve on a retry).
-    let idem = headers.get("idempotency-key").and_then(|v| v.to_str().ok());
+    let input_est = estimate_input_tokens(&req);
 
     // C3: resolve the caller's budget node + hard reserve BEFORE inference (fail-closed).
-    let (tenant, node, hold) = reserve_budget(&state, &claims, max_tokens, idem).await?;
+    // request-level idempotency (response caching) is deferred; every request performs
+    // its own independent cap-gated reserve → no shared-hold budget bypass.
+    let (tenant, node, hold) = reserve_budget(&state, &claims, input_est, max_tokens).await?;
 
     let start = Instant::now();
     let exec = state.gateway.execute(&ireq).await;
@@ -281,16 +296,17 @@ fn sse_error(msg: &str) -> Vec<u8> {
 pub async fn post_chat_stream(
     Extension(claims): Extension<Claims>,
     State(state): State<SharedState>,
-    headers: HeaderMap,
     Json(req): Json<ChatRequest>,
 ) -> Response {
     let ireq = build_inference_request(&req);
     let max_tokens = req.max_tokens.unwrap_or(1024);
-    let idem = headers.get("idempotency-key").and_then(|v| v.to_str().ok());
+    let input_est = estimate_input_tokens(&req);
 
     // C3: resolve budget node + hard reserve BEFORE streaming (fail-closed). A denied
     // caller gets a synchronous JSON error — the stream is never opened (no bypass).
-    let (tenant, node, hold) = match reserve_budget(&state, &claims, max_tokens, idem).await {
+    // request-level idempotency (response caching) is deferred; every request performs
+    // its own independent cap-gated reserve → no shared-hold budget bypass.
+    let (tenant, node, hold) = match reserve_budget(&state, &claims, input_est, max_tokens).await {
         Ok(v) => v,
         Err((code, msg)) => {
             return Response::builder()

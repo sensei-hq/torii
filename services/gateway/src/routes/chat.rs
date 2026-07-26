@@ -78,7 +78,11 @@ fn estimate_input_tokens(req: &ChatRequest) -> u32 {
         .iter()
         .map(|m| m.content.chars().count())
         .sum::<usize>()
-        + req.system.as_deref().map(|s| s.chars().count()).unwrap_or(0);
+        + req
+            .system
+            .as_deref()
+            .map(|s| s.chars().count())
+            .unwrap_or(0);
     (chars / 4).min(u32::MAX as usize) as u32
 }
 
@@ -141,8 +145,12 @@ async fn reserve_budget(
         StatusCode::PAYMENT_REQUIRED,
         "budgeted access required: token carries no tenant".to_string(),
     ))?;
-    let subject = Uuid::parse_str(&claims.sub)
-        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid subject in token".to_string()))?;
+    let subject = Uuid::parse_str(&claims.sub).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "invalid subject in token".to_string(),
+        )
+    })?;
 
     let node = crate::budgets::resolve_node(&state.pool, tenant, subject)
         .await
@@ -154,11 +162,15 @@ async fn reserve_budget(
             // Don't leak raw sqlx/Postgres text (table/constraint names) to the client.
             crate::budgets::BudgetError::Db(err) => {
                 tracing::error!(?err, "chat: budget node resolution db error");
-                (StatusCode::INTERNAL_SERVER_ERROR, "budget service error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "budget service error".to_string(),
+                )
             }
-            crate::budgets::BudgetError::Exceeded => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "budget error".to_string())
-            }
+            crate::budgets::BudgetError::Exceeded => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "budget error".to_string(),
+            ),
         })?;
 
     let est = crate::budgets::estimate(input_est, max_tokens);
@@ -180,11 +192,15 @@ async fn reserve_budget(
             // Don't leak raw sqlx/Postgres text (table/constraint names) to the client.
             crate::budgets::BudgetError::Db(err) => {
                 tracing::error!(?err, "chat: budget reserve db error");
-                (StatusCode::INTERNAL_SERVER_ERROR, "budget service error".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "budget service error".to_string(),
+                )
             }
-            crate::budgets::BudgetError::NoNode => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "budget error".to_string())
-            }
+            crate::budgets::BudgetError::NoNode => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "budget error".to_string(),
+            ),
         })?;
 
     Ok((tenant, node, hold))
@@ -219,7 +235,10 @@ pub async fn post_chat(
             let _ = crate::budgets::release(&state.pool, tenant, hold).await;
             // Don't disclose upstream/provider internals to the client — log server-side.
             tracing::error!("chat: gateway execute error: {}", e);
-            return Err((StatusCode::BAD_GATEWAY, "upstream provider error".to_string()));
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                "upstream provider error".to_string(),
+            ));
         }
     };
 
@@ -227,7 +246,8 @@ pub async fn post_chat(
     // C4 governance: redact the model's OUTPUT before it reaches the client (a model
     // must not echo a secret back out) and count redactions for the governance signal.
     let (content, output_redactions) = {
-        let (clean, hits) = crate::redact::Redactor.redact(&resp.content.clone().unwrap_or_default());
+        let (clean, hits) =
+            crate::redact::Redactor.redact(&resp.content.clone().unwrap_or_default());
         (clean, hits.len() as u32)
     };
     let model = resp.model.clone();
@@ -242,7 +262,10 @@ pub async fn post_chat(
 
     // C3: commit the actual spend against the reserved hold (releases the surplus).
     if let Err(e) = crate::budgets::commit(&state.pool, tenant, hold, cost_usd).await {
-        tracing::warn!("chat: budget commit failed (spend not recorded on node): {}", e);
+        tracing::warn!(
+            "chat: budget commit failed (spend not recorded on node): {}",
+            e
+        );
     }
 
     let chat_response = ChatResponse {
@@ -492,7 +515,10 @@ pub async fn post_chat_stream(
                         recorded_at: Utc::now(),
                     };
 
-                    let store = PgGatewayStore { pool: state.pool.clone(), tenant_id: tenant };
+                    let store = PgGatewayStore {
+                        pool: state.pool.clone(),
+                        tenant_id: tenant,
+                    };
                     if let Err(e) = store.insert_inference_call(&call).await {
                         tracing::warn!("chat/stream: persist failed (best-effort): {}", e);
                     } else {

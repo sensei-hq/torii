@@ -35,7 +35,11 @@ impl Vault {
 
     /// Resolve + decrypt a tenant's data-encryption key. Held in `Zeroizing` so the
     /// key material is wiped from memory when the caller drops it.
-    async fn tenant_dek(&self, pool: &PgPool, tenant_id: Uuid) -> anyhow::Result<Zeroizing<[u8; 32]>> {
+    async fn tenant_dek(
+        &self,
+        pool: &PgPool,
+        tenant_id: Uuid,
+    ) -> anyhow::Result<Zeroizing<[u8; 32]>> {
         let row = sqlx::query("select encrypted_dek from core.tenant_keys where tenant_id = $1")
             .bind(tenant_id)
             .fetch_optional(pool)

@@ -28,29 +28,47 @@ struct Rule {
 }
 
 static RULES: Lazy<Vec<Rule>> = Lazy::new(|| {
-    let r = |kind, pat: &str| Rule { kind, re: Regex::new(pat).unwrap() };
+    let r = |kind, pat: &str| Rule {
+        kind,
+        re: Regex::new(pat).unwrap(),
+    };
     vec![
         // Private key blocks (PEM).
-        r("private_key", r"(?s)-----BEGIN[A-Z ]*PRIVATE KEY-----.*?-----END[A-Z ]*PRIVATE KEY-----"),
+        r(
+            "private_key",
+            r"(?s)-----BEGIN[A-Z ]*PRIVATE KEY-----.*?-----END[A-Z ]*PRIVATE KEY-----",
+        ),
         // Cloud / provider credential formats.
         r("aws_key", r"\bAKIA[0-9A-Z]{16}\b"),
         r("github_token", r"\bgh[pousr]_[A-Za-z0-9]{36,}\b"),
         r("slack_token", r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
-        r("provider_key", r"\bsk-[A-Za-z0-9_-]{20,}\b"),           // OpenAI / Anthropic style
+        r("provider_key", r"\bsk-[A-Za-z0-9_-]{20,}\b"), // OpenAI / Anthropic style
         r("google_key", r"\bAIza[0-9A-Za-z_-]{35}\b"),
         // Bearer / Basic auth headers + JWTs.
-        r("jwt", r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
+        r(
+            "jwt",
+            r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b",
+        ),
         r("bearer", r"(?i)\bbearer\s+[A-Za-z0-9._-]{20,}\b"),
         // HTTP Basic auth: `Authorization: Basic <base64(user:pass)>` (finding #5).
-        r("basic_auth", r"(?i)\bauthorization\s*:\s*basic\s+[A-Za-z0-9+/=]{8,}"),
+        r(
+            "basic_auth",
+            r"(?i)\bauthorization\s*:\s*basic\s+[A-Za-z0-9+/=]{8,}",
+        ),
         // Generic secret assignment: (api_key|token|secret|password|…) = <highish value>.
         // The keyword is matched WITHOUT a leading word boundary and allows a
         // compound key suffix (`[A-Za-z0-9_]*`), so underscore-glued keys
         // (client_secret=, db_password=, aws_secret_access_key=, PRIVATE_KEY=) are
         // caught, not just bare keys (finding #4).
-        r("secret_assignment", r#"(?i)(?:client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|api[_-]?key|secret|token|password|passwd|pwd)[A-Za-z0-9_]*\s*[:=]\s*['"]?[A-Za-z0-9/+_=-]{12,}"#),
+        r(
+            "secret_assignment",
+            r#"(?i)(?:client[_-]?secret|secret[_-]?access[_-]?key|private[_-]?key|api[_-]?key|secret|token|password|passwd|pwd)[A-Za-z0-9_]*\s*[:=]\s*['"]?[A-Za-z0-9/+_=-]{12,}"#,
+        ),
         // PII.
-        r("email", r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
+        r(
+            "email",
+            r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
+        ),
         // Card / PAN: 13-19 digits with optional space/dot/dash/whitespace
         // separators; trailing boundary relaxed so glued/newline PANs are caught.
         // Luhn-gated below after stripping non-digits (finding #10).
@@ -113,7 +131,10 @@ impl Redactor {
             });
             if count > 0 {
                 text = replaced.into_owned();
-                summary.push(Redaction { kind: rule.kind, count });
+                summary.push(Redaction {
+                    kind: rule.kind,
+                    count,
+                });
             }
         }
 
@@ -133,7 +154,10 @@ impl Redactor {
         });
         if ent_count > 0 {
             text = replaced.into_owned();
-            summary.push(Redaction { kind: "high_entropy", count: ent_count });
+            summary.push(Redaction {
+                kind: "high_entropy",
+                count: ent_count,
+            });
         }
 
         (text, summary)
@@ -153,7 +177,11 @@ fn luhn_ok(s: &str) -> bool {
         .map(|(i, &d)| {
             if i % 2 == 1 {
                 let x = d * 2;
-                if x > 9 { x - 9 } else { x }
+                if x > 9 {
+                    x - 9
+                } else {
+                    x
+                }
             } else {
                 d
             }
@@ -172,7 +200,8 @@ mod tests {
 
     #[test]
     fn redacts_provider_key_and_email() {
-        let (out, sum) = Redactor.redact("email me at bob@acme.co with key sk-abcdEFGH1234567890xyz");
+        let (out, sum) =
+            Redactor.redact("email me at bob@acme.co with key sk-abcdEFGH1234567890xyz");
         assert!(!out.contains("bob@acme.co"));
         assert!(!out.contains("sk-abcdEFGH1234567890xyz"));
         assert!(out.contains("[REDACTED:email]"));
@@ -220,11 +249,17 @@ mod tests {
             "PRIVATE_KEY=abcdefghijklmnop1234567890",
         ] {
             let (out, sum) = Redactor.redact(s);
-            assert!(out.contains("[REDACTED:"), "expected redaction for {s:?}, got {out:?}");
+            assert!(
+                out.contains("[REDACTED:"),
+                "expected redaction for {s:?}, got {out:?}"
+            );
             assert!(!sum.is_empty(), "expected a summary entry for {s:?}");
             // The literal secret value must not survive.
             let value = s.split('=').nth(1).unwrap();
-            assert!(!out.contains(value), "secret value leaked for {s:?}: {out:?}");
+            assert!(
+                !out.contains(value),
+                "secret value leaked for {s:?}: {out:?}"
+            );
         }
     }
 
@@ -242,7 +277,10 @@ mod tests {
     fn redacts_basic_auth_header() {
         // Finding #5: HTTP Basic auth base64 blob (base64("user:pass")).
         let (out, sum) = Redactor.redact("Authorization: Basic dXNlcjpwYXNz");
-        assert!(!out.contains("dXNlcjpwYXNz"), "basic-auth blob leaked: {out:?}");
+        assert!(
+            !out.contains("dXNlcjpwYXNz"),
+            "basic-auth blob leaked: {out:?}"
+        );
         assert!(kinds(&sum).contains(&"basic_auth"));
     }
 
@@ -250,7 +288,10 @@ mod tests {
     fn redacts_dotted_card() {
         // Finding #10: Luhn-valid PAN with dot separators.
         let (out, _) = Redactor.redact("pay to 4111.1111.1111.1111 now");
-        assert!(!out.contains("4111.1111.1111.1111"), "dotted PAN leaked: {out:?}");
+        assert!(
+            !out.contains("4111.1111.1111.1111"),
+            "dotted PAN leaked: {out:?}"
+        );
         assert!(out.contains("[REDACTED:card]"));
     }
 

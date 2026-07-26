@@ -452,7 +452,10 @@ mod tests {
     #[test]
     fn parse_headers_keeps_string_values_only() {
         let h = parse_headers(r#"{"Content-Type":"application/json","n":5}"#);
-        assert_eq!(h.get("Content-Type").map(String::as_str), Some("application/json"));
+        assert_eq!(
+            h.get("Content-Type").map(String::as_str),
+            Some("application/json")
+        );
         assert!(!h.contains_key("n")); // non-string skipped
     }
 
@@ -484,7 +487,10 @@ mod tests {
         assert!(r.api_key.is_none());
         assert!(r.enabled);
         assert!(r.timeout_ms.is_none());
-        assert_eq!(r.headers.get("anthropic-version").map(String::as_str), Some("2023-06-01"));
+        assert_eq!(
+            r.headers.get("anthropic-version").map(String::as_str),
+            Some("2023-06-01")
+        );
     }
 
     #[test]
@@ -523,7 +529,10 @@ mod tests {
         let m = &models["claude-sonnet-4-5"];
         assert_eq!(m.id, "claude-sonnet-4-5");
         assert_eq!(m.provider, "anthropic");
-        assert_eq!(m.api_model_id.as_deref(), Some("claude-sonnet-4-5-20251022"));
+        assert_eq!(
+            m.api_model_id.as_deref(),
+            Some("claude-sonnet-4-5-20251022")
+        );
         assert_eq!(m.context_window, 200_000);
         assert_eq!(m.max_output_tokens, 8192);
         assert!(m.capabilities.contains(&Capability::TextChat));
@@ -559,7 +568,10 @@ mod tests {
             ..claude_row()
         };
         let models = build_models(&[row]);
-        assert!(models.is_empty(), "model with no mappable capability is skipped");
+        assert!(
+            models.is_empty(),
+            "model with no mappable capability is skipped"
+        );
     }
 
     #[test]
@@ -617,7 +629,10 @@ mod tests {
         // sequence 1 (anthropic) should come first after sort
         assert_eq!(c.models[0].model, "claude-sonnet-4-5");
         assert_eq!(c.models[0].router.as_deref(), Some("anthropic"));
-        assert_eq!(c.models[0].api_model_id.as_deref(), Some("claude-sonnet-4-5-20251022"));
+        assert_eq!(
+            c.models[0].api_model_id.as_deref(),
+            Some("claude-sonnet-4-5-20251022")
+        );
         assert_eq!(c.models[0].priority, 1);
         assert_eq!(c.models[1].model, "gpt-4o");
         assert_eq!(c.models[1].priority, 2);
@@ -631,7 +646,10 @@ mod tests {
             capability_name: "nonsense".to_string(),
         };
         let chains = build_chains(&[bad_chain], &sample_chain_models());
-        assert!(chains.is_empty(), "chain with unmappable capability is skipped");
+        assert!(
+            chains.is_empty(),
+            "chain with unmappable capability is skipped"
+        );
     }
 
     #[test]

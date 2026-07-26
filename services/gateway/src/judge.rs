@@ -159,12 +159,19 @@ pub async fn judge_response(
         output_tokens: resp.usage.as_ref().map(|u| u.output_tokens),
         cost_usd: cost,
         duration_ms,
-        status: if resp.success { CallStatus::Success } else { CallStatus::Failed },
+        status: if resp.success {
+            CallStatus::Success
+        } else {
+            CallStatus::Failed
+        },
         error_type: None,
         fallback_sequence: resp.attempts.len() as u8,
         recorded_at: chrono::Utc::now(),
     };
-    let store = PgGatewayStore { pool: state.pool.clone(), tenant_id: tenant };
+    let store = PgGatewayStore {
+        pool: state.pool.clone(),
+        tenant_id: tenant,
+    };
     let _ = store.insert_inference_call(&judge_call).await;
 
     // 4. Record the judge_score signal on the JUDGED call.

@@ -33,9 +33,7 @@ fn db_err(e: sqlx::Error) -> GatewayError {
 /// Serialize a `Capability` to its serde snake_case string (e.g. "text_chat").
 fn capability_to_str(cap: &Capability) -> Result<String, GatewayError> {
     let v = serde_json::to_value(cap)?;
-    Ok(v.as_str()
-        .unwrap_or("unknown")
-        .to_owned())
+    Ok(v.as_str().unwrap_or("unknown").to_owned())
 }
 
 /// Deserialize a `Capability` from its serde snake_case string.

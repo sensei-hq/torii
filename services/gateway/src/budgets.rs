@@ -79,13 +79,14 @@ pub async fn reserve(
     amount: f64,
     idem: Option<&str>,
 ) -> Result<Uuid, BudgetError> {
-    let res = sqlx::query_scalar::<_, Uuid>("select public.budget_reserve($1, $2, $3::numeric, $4)")
-        .bind(tenant)
-        .bind(node)
-        .bind(amount)
-        .bind(idem)
-        .fetch_one(pool)
-        .await;
+    let res =
+        sqlx::query_scalar::<_, Uuid>("select public.budget_reserve($1, $2, $3::numeric, $4)")
+            .bind(tenant)
+            .bind(node)
+            .bind(amount)
+            .bind(idem)
+            .fetch_one(pool)
+            .await;
     match res {
         Ok(hold) => Ok(hold),
         Err(e) => {
@@ -100,7 +101,12 @@ pub async fn reserve(
 }
 
 /// Commit a hold and record the actual spend on the node path (releases the surplus).
-pub async fn commit(pool: &PgPool, tenant: Uuid, hold: Uuid, actual: f64) -> Result<(), sqlx::Error> {
+pub async fn commit(
+    pool: &PgPool,
+    tenant: Uuid,
+    hold: Uuid,
+    actual: f64,
+) -> Result<(), sqlx::Error> {
     sqlx::query("select public.budget_commit($1, $2, $3::numeric)")
         .bind(tenant)
         .bind(hold)

@@ -142,7 +142,9 @@ mod tests {
                 .await
         {
             let sub = id.to_string();
-            assert!(check_claims_version(&pool, &claims_for(&sub, ver)).await.is_ok());
+            assert!(check_claims_version(&pool, &claims_for(&sub, ver))
+                .await
+                .is_ok());
             assert!(matches!(
                 check_claims_version(&pool, &claims_for(&sub, ver - 1)).await,
                 Err(CapabilityError::StaleToken)

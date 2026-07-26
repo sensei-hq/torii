@@ -206,6 +206,60 @@ async fn reserve_budget(
     Ok((tenant, node, hold))
 }
 
+/// Governance enforcement: a workspace can disable a catalog model
+/// (`tenant_model_state.enabled = false`, surfaced on the admin Models screen).
+/// When a caller names a model explicitly, a disabled one is refused (403) BEFORE
+/// reserving budget or hitting a provider — otherwise the admin's toggle would be
+/// cosmetic. Absent row = enabled (the catalog is global; workspaces opt OUT).
+/// Chain-routed calls (no explicit model) are governed instead by per-step
+/// activation on the Routing screen, resolved inside the engine. Fail-closed on a
+/// DB error (honest 500, not a misleading "disabled").
+async fn ensure_model_enabled(
+    state: &SharedState,
+    claims: &Claims,
+    model: Option<&str>,
+) -> Result<(), (StatusCode, String)> {
+    let (Some(tenant), Some(model)) = (claims.tenant_id, model) else {
+        return Ok(()); // no explicit model, or no tenant (reserve_budget will 402)
+    };
+    let enabled: bool = sqlx::query_scalar(
+        "select coalesce((select enabled from public.tenant_model_state \
+           where tenant_id = $1 and model_full_name = $2), true)",
+    )
+    .bind(tenant)
+    .bind(model)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!(?e, "chat: model-enablement check db error");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "governance service error".to_string(),
+        )
+    })?;
+    if !enabled {
+        return Err((
+            StatusCode::FORBIDDEN,
+            format!("model '{model}' is disabled for this workspace"),
+        ));
+    }
+    Ok(())
+}
+
+/// A JSON error `Response` (used by the streaming handler, which can't `?`-return a tuple).
+fn error_response(code: StatusCode, msg: &str) -> Response {
+    Response::builder()
+        .status(code)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::json!({ "error": msg }).to_string()))
+        .unwrap_or_else(|_| {
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::empty())
+                .unwrap()
+        })
+}
+
 // ---------------------------------------------------------------------------
 // POST /v1/chat
 // ---------------------------------------------------------------------------
@@ -218,6 +272,9 @@ pub async fn post_chat(
     let (ireq, redactions) = build_inference_request(&req);
     let max_tokens = req.max_tokens.unwrap_or(1024);
     let input_est = estimate_input_tokens(&req);
+
+    // Governance: refuse a workspace-disabled named model before spending anything.
+    ensure_model_enabled(&state, &claims, req.model.as_deref()).await?;
 
     // C3: resolve the caller's budget node + hard reserve BEFORE inference (fail-closed).
     // request-level idempotency (response caching) is deferred; every request performs
@@ -428,24 +485,18 @@ pub async fn post_chat_stream(
     let max_tokens = req.max_tokens.unwrap_or(1024);
     let input_est = estimate_input_tokens(&req);
 
+    // Governance: refuse a workspace-disabled named model before opening the stream.
+    if let Err((code, msg)) = ensure_model_enabled(&state, &claims, req.model.as_deref()).await {
+        return error_response(code, &msg);
+    }
+
     // C3: resolve budget node + hard reserve BEFORE streaming (fail-closed). A denied
     // caller gets a synchronous JSON error — the stream is never opened (no bypass).
     // request-level idempotency (response caching) is deferred; every request performs
     // its own independent cap-gated reserve → no shared-hold budget bypass.
     let (tenant, node, hold) = match reserve_budget(&state, &claims, input_est, max_tokens).await {
         Ok(v) => v,
-        Err((code, msg)) => {
-            return Response::builder()
-                .status(code)
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(serde_json::json!({ "error": msg }).to_string()))
-                .unwrap_or_else(|_| {
-                    Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(Body::empty())
-                        .unwrap()
-                });
-        }
+        Err((code, msg)) => return error_response(code, &msg),
     };
 
     // Channel that carries SSE-formatted lines as raw bytes.

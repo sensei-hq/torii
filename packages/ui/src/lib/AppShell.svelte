@@ -40,7 +40,10 @@
 		},
 		{
 			label: 'Tenant',
-			items: [{ href: '/organization', label: 'Members & roles', icon: 'i-solar-buildings-3-bold-duotone' }]
+			items: [
+				{ href: '/organization', label: 'Members & roles', icon: 'i-solar-buildings-3-bold-duotone' },
+				{ href: '/devices', label: 'Devices', icon: 'i-solar-laptop-bold-duotone' }
+			]
 		},
 		{
 			label: 'Gateway',

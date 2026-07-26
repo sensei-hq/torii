@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::http::{
-    header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
+    header::{HeaderName, ACCEPT, AUTHORIZATION, CONTENT_TYPE},
     Method,
 };
 use axum::{
@@ -201,7 +201,12 @@ async fn main() -> anyhow::Result<()> {
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers([CONTENT_TYPE, ACCEPT, AUTHORIZATION]);
+        .allow_headers([
+            CONTENT_TYPE,
+            ACCEPT,
+            AUTHORIZATION,
+            HeaderName::from_static("x-torii-device"),
+        ]);
 
     // `/v1` routes — all require a valid Supabase JWT.
     // Routes added BEFORE route_layer inherit the auth middleware.
@@ -218,6 +223,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/org", get(routes::ledger::get_org))
         .route("/models", get(routes::ledger::get_models))
         .route("/tools", get(routes::ledger::get_tools))
+        .route("/devices", get(routes::ledger::get_devices))
         .route("/routing", get(routes::ledger::get_routing))
         .route("/governance", get(routes::ledger::get_governance))
         .route("/settings", get(routes::ledger::get_settings))
@@ -245,6 +251,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/apikeys/issue", post(routes::rpc::apikeys_issue))
         .route("/apikeys/revoke", post(routes::rpc::apikeys_revoke))
+        .route("/devices/revoke", post(routes::rpc::devices_revoke))
         .route("/rbac/assign-role", post(routes::rpc::rbac_assign_role))
         .route("/rbac/unassign-role", post(routes::rpc::rbac_unassign_role))
         .route(

@@ -1,6 +1,6 @@
 <script>
 	// Zen-Sumi chip: a small rounded label. `tone` = 'mute' (default), 'accent'
-	// (vermillion), 'success', or 'warning'.
+	// (vermillion), 'success', 'warning', or 'danger'.
 	let { tone = 'mute', class: cls = '', children } = $props()
 	const toneCls = $derived(
 		tone === 'accent'
@@ -9,7 +9,9 @@
 				? 'bg-success-soft text-success'
 				: tone === 'warning'
 					? 'bg-warning-soft text-warning'
-					: 'bg-paper-mute text-ink-mute'
+					: tone === 'danger'
+						? 'bg-danger-soft text-danger'
+						: 'bg-paper-mute text-ink-mute'
 	)
 </script>
 

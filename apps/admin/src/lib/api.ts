@@ -236,6 +236,18 @@ export interface ToolsData {
 	grants: ToolGrant[]
 }
 
+export interface Device {
+	id: string
+	name: string
+	platform: string | null
+	app_version: string | null
+	config_version: number | null
+	status: string // active | revoked
+	owner: string | null
+	enrolled_at: string | null
+	last_seen_at: string | null
+}
+
 export const api = {
 	// auth — Supabase password sign-in; the session persists to localStorage and every
 	// gateway call reads its JWT via authHeader().
@@ -314,5 +326,9 @@ export const api = {
 		gwPost('/rpc/mcp/set-enabled', { mcp_server_id, enabled }),
 	// grant/revoke a role-default tool grant (default-deny: absent = blocked).
 	setToolGrant: (role_id: string, mcp_server_id: string, tool_name: string, allowed: boolean) =>
-		gwPost('/rpc/mcp/set-tool-grant', { role_id, mcp_server_id, tool_name, allowed })
+		gwPost('/rpc/mcp/set-tool-grant', { role_id, mcp_server_id, tool_name, allowed }),
+	// O3 devices — enrolled desktop fleet. Revoke cuts the device on the auth hot path:
+	// a revoked device with a still-live JWT is denied per-request (can't keep spending).
+	devices: () => gwGet<{ devices: Device[] }>('/v1/devices'),
+	revokeDevice: (id: string) => gwPost('/rpc/devices/revoke', { id })
 }

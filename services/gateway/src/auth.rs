@@ -169,11 +169,7 @@ fn validate_hs256(token: &str) -> Option<Result<Claims, AuthError>> {
 /// 4. If `SUPABASE_JWT_SECRET` is set and JWKS still fails: try HS256 (legacy).
 /// 5. On success: insert [`Claims`] into request extensions and call `next`.
 /// 6. On any failure: 401 Unauthorized.
-pub async fn require_auth(
-    State(state): State<SharedState>,
-    mut req: Request,
-    next: Next,
-) -> Response {
+pub async fn require_auth(State(state): State<SharedState>, req: Request, next: Next) -> Response {
     let token = match extract_bearer(req.headers()) {
         Ok(t) => t,
         Err(e) => return e.into_response(),
@@ -185,10 +181,7 @@ pub async fn require_auth(
     // binds, never the key (see `authenticate_api_key`).
     if token.starts_with("sk_tor_") || token.starts_with("sk_str_") {
         return match authenticate_api_key(&state.pool, &token).await {
-            Ok(claims) => {
-                req.extensions_mut().insert(claims);
-                next.run(req).await
-            }
+            Ok(claims) => finish_authed(&state, req, claims, next).await,
             Err(e) => e.into_response(),
         };
     }
@@ -240,6 +233,45 @@ pub async fn require_auth(
         },
     };
 
+    finish_authed(&state, req, claims, next).await
+}
+
+/// O3 per-request **device-status hot-path check**, then insert claims + continue.
+/// If the request carries `X-Torii-Device: <uuid>`, that device must exist, be
+/// `active`, and belong to the authenticated tenant (+ profile, when the device is
+/// person-bound) — else **403**. This is what makes a device REVOKE effective: a
+/// revoked device with a still-live JWT/API-key cannot keep spending. Requests without
+/// the header (web / session-only clients) are unaffected. Best-effort `last_seen_at`.
+async fn finish_authed(state: &SharedState, mut req: Request, claims: Claims, next: Next) -> Response {
+    if let Some(raw) = req
+        .headers()
+        .get("x-torii-device")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let did = match Uuid::parse_str(raw) {
+            Ok(d) => d,
+            Err(_) => return (StatusCode::FORBIDDEN, "invalid device id").into_response(),
+        };
+        let active: bool = sqlx::query_scalar(
+            "select exists(select 1 from public.devices \
+               where id = $1 and status = 'active' and tenant_id = $2 and profile_id::text = $3)",
+        )
+        .bind(did)
+        .bind(claims.tenant_id)
+        .bind(&claims.sub)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap_or(false);
+        if !active {
+            return (StatusCode::FORBIDDEN, "device revoked or not recognized").into_response();
+        }
+        let _ = sqlx::query("update public.devices set last_seen_at = now() where id = $1")
+            .bind(did)
+            .execute(&state.pool)
+            .await;
+    }
     req.extensions_mut().insert(claims);
     next.run(req).await
 }

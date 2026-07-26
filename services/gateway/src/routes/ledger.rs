@@ -380,6 +380,37 @@ pub async fn get_tools(
     }
 }
 
+/// `GET /v1/devices` — O3 device fleet. Capability `device.manage`. The tenant's
+/// enrolled devices with owner + version/liveness. `status='revoked'` cuts a device's
+/// access on the auth hot path (see auth::finish_authed) even with a still-live token.
+pub async fn get_devices(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+) -> Response {
+    let tenant = match require_read(&state, &claims, "device.manage").await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let rows: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.last_seen_at desc nulls last), '[]'::json) from ( \
+           select d.id, d.name, d.platform, d.app_version, d.config_version, d.status, \
+                  d.enrolled_at, d.last_seen_at, p.display_name as owner \
+             from public.devices d \
+             left join core.profiles p on p.id = d.profile_id \
+            where d.tenant_id = $1) t",
+    )
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await;
+    match rows {
+        Ok(devices) => (StatusCode::OK, Json(json!({ "devices": devices }))).into_response(),
+        Err(e) => {
+            tracing::error!("get_devices: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}
+
 /// `GET /v1/routing` — the tenant's fallback chains as ordered steps
 /// (router → model, sequence, plane). Capability `chain.read`. Frontend groups by chain.
 pub async fn get_routing(

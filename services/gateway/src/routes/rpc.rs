@@ -1063,3 +1063,47 @@ pub async fn mcp_set_tool_grant(
     )
         .into_response()
 }
+
+#[derive(Deserialize)]
+pub struct RevokeDevice {
+    pub id: Uuid,
+}
+
+/// `POST /rpc/devices/revoke` — capability `device.manage`. Sets a device's status to
+/// `revoked`; its requests are denied on the auth hot path immediately (auth::finish_authed),
+/// so a revoked device cannot keep spending even with a still-live JWT. Tenant-scoped
+/// (404 if the device isn't in the caller's tenant), idempotent, audited.
+pub async fn devices_revoke(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<RevokeDevice>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "device.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let exists: bool = sqlx::query_scalar(
+        "select exists(select 1 from public.devices where id = $1 and tenant_id = $2)",
+    )
+    .bind(body.id)
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(false);
+    if !exists {
+        return (StatusCode::NOT_FOUND, "device not found in tenant").into_response();
+    }
+    let write = sqlx::query(
+        "update public.devices set status = 'revoked' where id = $1 and tenant_id = $2",
+    )
+    .bind(body.id)
+    .bind(tenant)
+    .execute(&state.pool)
+    .await;
+    if let Err(e) = write {
+        tracing::error!("devices_revoke: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+    audit(&state, tenant, actor, "device.revoked", "device", Some(body.id)).await;
+    (StatusCode::OK, Json(json!({ "revoked": body.id }))).into_response()
+}

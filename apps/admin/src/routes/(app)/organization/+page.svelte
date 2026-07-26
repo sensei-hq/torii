@@ -1,6 +1,6 @@
 <script>
 	import { onMount } from 'svelte'
-	import { AppShell, PageHeader, Card, CardHead, Glyph, Chip, Async } from '@torii/ui'
+	import { AppShell, PageHeader, Card, CardHead, Glyph, Chip, Async, Empty } from '@torii/ui'
 	import { api } from '$lib/api'
 
 	/** @type {import('$lib/api').Member[]} */
@@ -123,7 +123,11 @@
 						</div>
 					{/each}
 					{#if members.length === 0}
-						<p class="px-4 py-3 text-sm text-ink-mute">No members assigned to this tenant.</p>
+						<Empty
+							icon="i-solar-users-group-rounded-bold-duotone"
+							message="No members assigned to this tenant"
+							pad="py-8"
+						/>
 					{/if}
 				</div>
 			</Card>

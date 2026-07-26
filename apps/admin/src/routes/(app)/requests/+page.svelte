@@ -1,6 +1,6 @@
 <script>
 	import { onMount } from 'svelte'
-	import { AppShell, PageHeader, Card, CardHead, Chip, Async } from '@torii/ui'
+	import { AppShell, PageHeader, Card, CardHead, Chip, Async, Empty } from '@torii/ui'
 	import { api } from '$lib/api'
 	import { matchesRequest, matchesEvent } from '$lib/filters'
 
@@ -129,8 +129,12 @@
 							{/each}
 							{#if filteredRequests.length === 0}
 								<tr
-									><td colspan="7" class="py-3 text-center text-ink-mute"
-										>{requests.length === 0 ? 'No requests yet.' : 'No requests match.'}</td
+									><td colspan="7"
+										><Empty
+											icon="i-solar-clipboard-list-bold-duotone"
+											message={requests.length === 0 ? 'No requests yet' : 'No requests match'}
+											pad="py-8"
+										/></td
 									></tr
 								>
 							{/if}
@@ -166,8 +170,12 @@
 							{/each}
 							{#if filteredEvents.length === 0}
 								<tr
-									><td colspan="4" class="py-3 text-center text-ink-mute"
-										>{events.length === 0 ? 'No audit events yet.' : 'No events match.'}</td
+									><td colspan="4"
+										><Empty
+											icon="i-solar-history-bold-duotone"
+											message={events.length === 0 ? 'No audit events yet' : 'No events match'}
+											pad="py-8"
+										/></td
 									></tr
 								>
 							{/if}

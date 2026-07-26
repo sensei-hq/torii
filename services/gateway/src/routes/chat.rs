@@ -87,27 +87,29 @@ fn estimate_input_tokens(req: &ChatRequest) -> u32 {
 }
 
 /// Builds the engine request and returns the total number of redactions applied
-/// across the messages + system prompt (a C6 governance signal).
-fn build_inference_request(req: &ChatRequest) -> (InferenceRequest, u32) {
+/// across the messages + system prompt (a C6 governance signal). `mask` is the
+/// workspace's DLP posture (Settings → "PII & tenant masking"); when off, content
+/// passes through unredacted and the redaction count is 0.
+fn build_inference_request(req: &ChatRequest, mask: bool) -> (InferenceRequest, u32) {
     // C4 §2 W5 — redact-in-flight: strip secrets/PII from every message and the
     // system prompt BEFORE they egress to any model (cloud especially). One-way
     // placeholders (v1). Redaction counts flow into the governance/quality signal.
     let redactor = crate::redact::Redactor;
     let mut redactions: u32 = 0;
-    let messages: Vec<Message> = req
-        .messages
-        .iter()
-        .map(|m| {
-            let (clean, hits) = redactor.redact(&m.content);
-            redactions += hits.len() as u32;
-            Message::text(map_role(&m.role), &clean)
-        })
-        .collect();
-    let system = req.system.as_ref().map(|s| {
+    let mut clean_of = |s: &str| -> String {
+        if !mask {
+            return s.to_string();
+        }
         let (clean, hits) = redactor.redact(s);
         redactions += hits.len() as u32;
         clean
-    });
+    };
+    let messages: Vec<Message> = req
+        .messages
+        .iter()
+        .map(|m| Message::text(map_role(&m.role), &clean_of(&m.content)))
+        .collect();
+    let system = req.system.as_ref().map(|s| clean_of(s));
 
     let ireq = InferenceRequest {
         capability: Capability::TextChat,
@@ -246,6 +248,21 @@ async fn ensure_model_enabled(
     Ok(())
 }
 
+/// The workspace's DLP masking posture (Settings → "PII & tenant masking"). Default ON
+/// (absent setting = masked); an admin can disable it as a capability-gated, audited
+/// workspace policy. Fail-safe: a DB read error keeps masking ON.
+async fn masking_enabled(state: &SharedState, tenant: Option<Uuid>) -> bool {
+    let Some(tenant) = tenant else { return true };
+    sqlx::query_scalar::<_, bool>(
+        "select coalesce((select enabled from public.tenant_settings \
+           where tenant_id = $1 and setting_key = 'masking'), true)",
+    )
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(true)
+}
+
 /// A JSON error `Response` (used by the streaming handler, which can't `?`-return a tuple).
 fn error_response(code: StatusCode, msg: &str) -> Response {
     Response::builder()
@@ -269,7 +286,8 @@ pub async fn post_chat(
     State(state): State<SharedState>,
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, String)> {
-    let (ireq, redactions) = build_inference_request(&req);
+    let mask = masking_enabled(&state, claims.tenant_id).await;
+    let (ireq, redactions) = build_inference_request(&req, mask);
     let max_tokens = req.max_tokens.unwrap_or(1024);
     let input_est = estimate_input_tokens(&req);
 
@@ -302,10 +320,15 @@ pub async fn post_chat(
     // --- Map response ---
     // C4 governance: redact the model's OUTPUT before it reaches the client (a model
     // must not echo a secret back out) and count redactions for the governance signal.
+    // Honors the same workspace masking posture as the input side.
     let (content, output_redactions) = {
-        let (clean, hits) =
-            crate::redact::Redactor.redact(&resp.content.clone().unwrap_or_default());
-        (clean, hits.len() as u32)
+        let raw = resp.content.clone().unwrap_or_default();
+        if mask {
+            let (clean, hits) = crate::redact::Redactor.redact(&raw);
+            (clean, hits.len() as u32)
+        } else {
+            (raw, 0)
+        }
     };
     let model = resp.model.clone();
     let cost_usd = resp
@@ -481,7 +504,8 @@ pub async fn post_chat_stream(
     State(state): State<SharedState>,
     Json(req): Json<ChatRequest>,
 ) -> Response {
-    let (ireq, redactions) = build_inference_request(&req);
+    let mask = masking_enabled(&state, claims.tenant_id).await;
+    let (ireq, redactions) = build_inference_request(&req, mask);
     let max_tokens = req.max_tokens.unwrap_or(1024);
     let input_est = estimate_input_tokens(&req);
 
@@ -506,9 +530,16 @@ pub async fn post_chat_stream(
         let start = Instant::now();
         match state.gateway.execute(&ireq).await {
             Ok(resp) => {
-                // Emit the content chunk
+                // C4 governance: redact the model's OUTPUT before it streams to the client
+                // (parity with post_chat), honoring the workspace masking posture.
+                let raw = resp.content.clone().unwrap_or_default();
+                let out = if mask {
+                    crate::redact::Redactor.redact(&raw).0
+                } else {
+                    raw
+                };
                 let chunk = serde_json::json!({
-                    "content": resp.content.clone().unwrap_or_default(),
+                    "content": out,
                     "model": resp.model.clone(),
                     "done": false,
                 });
@@ -625,4 +656,33 @@ pub async fn post_chat_stream(
                 .body(Body::empty())
                 .unwrap()
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req_with(content: &str) -> ChatRequest {
+        ChatRequest {
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: content.into(),
+            }],
+            model: None,
+            chain: None,
+            system: None,
+            max_tokens: Some(16),
+        }
+    }
+
+    // The masking toggle must actually gate C4 redaction: on → secrets stripped from
+    // input (redaction count > 0); off → content egresses verbatim (count == 0).
+    #[test]
+    fn masking_gates_input_redaction() {
+        let secret = "my key is AKIAIOSFODNN7EXAMPLE"; // canonical AWS example key
+        let (_, on) = build_inference_request(&req_with(secret), true);
+        assert!(on > 0, "masking on must redact the AWS key");
+        let (_, off) = build_inference_request(&req_with(secret), false);
+        assert_eq!(off, 0, "masking off must not redact");
+    }
 }

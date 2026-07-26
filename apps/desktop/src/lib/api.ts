@@ -60,7 +60,17 @@ export interface BudgetNode {
 	period: string
 }
 
+export interface WhoAmI {
+	sub: string
+	tenant_id: string | null
+	/** the tenant's display name (from core.tenants); null if the gateway predates it */
+	tenant_name?: string | null
+	role: string | null
+	capabilities: string[]
+}
+
 export const api = {
 	requests: (limit = 50) => gwGet<{ requests: RequestRow[] }>(`/v1/requests?limit=${limit}`),
-	budgets: () => gwGet<{ nodes: BudgetNode[]; requests: unknown[] }>('/v1/budgets')
+	budgets: () => gwGet<{ nodes: BudgetNode[]; requests: unknown[] }>('/v1/budgets'),
+	whoami: () => gwGet<WhoAmI>('/v1/whoami')
 }

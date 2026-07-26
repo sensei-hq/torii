@@ -14,17 +14,18 @@
 		app = 'admin',
 		title = 'admin portal',
 		brand = 'Seiki',
-		org = { mark: 'N', name: 'Northwind Estates', sub: 'org · 142 seats' },
+		org: orgProp,
 		user: userProp,
 		onSignout: onSignoutProp,
 		children
 	} = $props()
 
-	// Real identity + sign-out come from the (app) layout via the `adminShell` context
-	// (see apps/admin/.../(app)/+layout.svelte). Props remain a fallback for standalone
-	// use; the fallback is a neutral label — never a fabricated person.
+	// Real identity + org + sign-out come from the (app) layout via the `adminShell`
+	// context (see apps/admin/.../(app)/+layout.svelte). Props remain a fallback for
+	// standalone use; the fallbacks are neutral labels — never fabricated data.
 	const shell = getContext('adminShell')
 	const user = $derived(shell?.user ?? userProp ?? { name: 'Account', initial: '·', role: '' })
+	const org = $derived(shell?.org ?? orgProp ?? { mark: '·', name: 'Workspace', sub: 'organization' })
 	const onSignout = $derived(shell?.onSignout ?? onSignoutProp)
 
 	// Grouped nav — mirrors the mockup's Overview / Tenant / Gateway / Govern sections,

@@ -14,7 +14,7 @@
 	let {
 		user,
 		brand = 'Torii',
-		workspace = { mark: 'L', name: 'Leasing Ops', sub: 'teams workspace' },
+		workspace = { mark: 'W', name: 'Workspace', sub: 'workspace' },
 		version = 0,
 		localModels = 0,
 		onnavigate,

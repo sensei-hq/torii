@@ -16,6 +16,8 @@
 	const shell = $state({
 		/** @type {{ name: string; initial: string; role: string } | null} */
 		user: null,
+		/** @type {{ mark: string; name: string; sub: string } | null} */
+		org: null,
 		onSignout: async () => {
 			await api.signOut()
 			// Hard nav (not goto): signOut fires Supabase onAuthStateChange → the kavach
@@ -36,9 +38,10 @@
 		ready = true
 		// Best-effort real identity — the shell renders regardless of this resolving.
 		try {
-			const { email, role } = await api.identity()
+			const { email, role, org } = await api.identity()
 			if (email)
 				shell.user = { name: email, initial: email[0].toUpperCase(), role: role ?? '' }
+			if (org) shell.org = { mark: org[0].toUpperCase(), name: org, sub: 'organization' }
 		} catch {
 			/* shell falls back to a neutral label */
 		}

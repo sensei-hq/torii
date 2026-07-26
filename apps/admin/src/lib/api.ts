@@ -78,6 +78,8 @@ async function gwPost<T>(path: string, body: unknown): Promise<T> {
 export interface WhoAmI {
 	sub: string
 	tenant_id: string | null
+	/** the tenant's display name (from core.tenants); null if the gateway predates it */
+	tenant_name?: string | null
 	role: string | null
 	capabilities: string[]
 }
@@ -222,16 +224,23 @@ export const api = {
 	hasSession: async () => !!(await sb().auth.getSession()).data.session,
 	// the signed-in user's shell identity — real email (from the session) + server-resolved
 	// role (whoami). Replaces the mock "Aiko · Administrator" default in AppShell.
-	identity: async (): Promise<{ email: string | null; role: string | null }> => {
+	identity: async (): Promise<{
+		email: string | null
+		role: string | null
+		org: string | null
+	}> => {
 		const { data } = await sb().auth.getSession()
 		const email = data.session?.user?.email ?? null
 		let role: string | null = null
+		let org: string | null = null
 		try {
-			role = meaningfulRole((await gwGet<WhoAmI>('/v1/whoami')).role)
+			const w = await gwGet<WhoAmI>('/v1/whoami')
+			role = meaningfulRole(w.role)
+			org = w.tenant_name ?? null
 		} catch {
-			/* role is advisory for the shell; email alone renders a real identity */
+			/* advisory for the shell; email alone renders a real identity */
 		}
-		return { email, role }
+		return { email, role, org }
 	},
 	whoami: () => gwGet<WhoAmI>('/v1/whoami'),
 	audit: (limit = 100) => gwGet<{ events: AuditEvent[] }>(`/v1/audit?limit=${limit}`),

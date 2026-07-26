@@ -15,9 +15,22 @@ pub async fn whoami(
         .await
         .map(|c| c.list())
         .unwrap_or_default();
+    // The tenant's display name for the client shell. Filtered by the VALIDATED token
+    // tenant_id (a token can only ever read its own tenant's name — no cross-tenant
+    // leak); best-effort (None → the client falls back to a neutral label).
+    let tenant_name: Option<String> = match claims.tenant_id {
+        Some(tid) => sqlx::query_scalar::<_, String>("select name from core.tenants where id = $1")
+            .bind(tid)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
     Json(json!({
         "sub": claims.sub,
         "tenant_id": claims.tenant_id,
+        "tenant_name": tenant_name,
         "role": claims.role,
         "capabilities": capabilities,
     }))

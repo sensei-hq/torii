@@ -217,6 +217,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/connections", get(routes::ledger::get_connections))
         .route("/org", get(routes::ledger::get_org))
         .route("/models", get(routes::ledger::get_models))
+        .route("/tools", get(routes::ledger::get_tools))
         .route("/routing", get(routes::ledger::get_routing))
         .route("/governance", get(routes::ledger::get_governance))
         .route("/settings", get(routes::ledger::get_settings))
@@ -256,6 +257,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/models/set-enabled", post(routes::rpc::models_set_enabled))
         .route("/settings/set", post(routes::rpc::settings_set))
+        .route("/mcp/set-enabled", post(routes::rpc::mcp_set_enabled))
+        .route("/mcp/set-tool-grant", post(routes::rpc::mcp_set_tool_grant))
         .route("/spaces/create", post(routes::rpc::spaces_create))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),

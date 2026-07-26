@@ -315,6 +315,71 @@ pub async fn get_models(
     }
 }
 
+/// `GET /v1/tools` — X1 Tools & MCP. Capability `mcp.manage`. Returns the MCP servers
+/// visible to the tenant (platform-scoped + own), their effective enablement, the
+/// discovered tools, the tenant's roles, and the ROLE-DEFAULT allow-list grants
+/// (`space_id is null`) — the frontend renders the servers list + a tools×roles matrix.
+pub async fn get_tools(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+) -> Response {
+    let tenant = match require_read(&state, &claims, "mcp.manage").await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let build = async {
+        // servers visible to the tenant; effective enabled = tenant override else default.
+        let servers: Value = sqlx::query_scalar(
+            "select coalesce(json_agg(t order by t.scope, t.name), '[]'::json) from ( \
+               select s.id, s.name, s.label, s.transport, s.scope, \
+                      coalesce(tms.enabled, s.enabled) as enabled \
+                 from public.mcp_servers s \
+                 left join public.tenant_mcp_servers tms \
+                   on tms.mcp_server_id = s.id and tms.tenant_id = $1 \
+                where s.scope = 'platform' or s.tenant_id = $1) t",
+        )
+        .bind(tenant)
+        .fetch_one(&state.pool)
+        .await?;
+        let tools: Value = sqlx::query_scalar(
+            "select coalesce(json_agg(t order by t.tool_name), '[]'::json) from ( \
+               select mt.id, mt.mcp_server_id, mt.tool_name \
+                 from public.mcp_server_tools mt \
+                 join public.mcp_servers s on s.id = mt.mcp_server_id \
+                where mt.is_active and (s.scope = 'platform' or s.tenant_id = $1)) t",
+        )
+        .bind(tenant)
+        .fetch_one(&state.pool)
+        .await?;
+        let roles: Value = sqlx::query_scalar(
+            "select coalesce(json_agg(t order by t.name), '[]'::json) from ( \
+               select id, key, name from core.roles where tenant_id = $1) t",
+        )
+        .bind(tenant)
+        .fetch_one(&state.pool)
+        .await?;
+        // role-default grants (space_id null); a space can only tighten these (v2 UI).
+        let grants: Value = sqlx::query_scalar(
+            "select coalesce(json_agg(t), '[]'::json) from ( \
+               select role_id, mcp_server_id, tool_name \
+                 from public.tool_allow_lists where tenant_id = $1 and space_id is null) t",
+        )
+        .bind(tenant)
+        .fetch_one(&state.pool)
+        .await?;
+        Ok::<Value, sqlx::Error>(
+            json!({ "servers": servers, "tools": tools, "roles": roles, "grants": grants }),
+        )
+    };
+    match build.await {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => {
+            tracing::error!("get_tools: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}
+
 /// `GET /v1/routing` — the tenant's fallback chains as ordered steps
 /// (router → model, sequence, plane). Capability `chain.read`. Frontend groups by chain.
 pub async fn get_routing(

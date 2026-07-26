@@ -935,3 +935,131 @@ pub async fn settings_set(
     audit(&state, tenant, actor, "settings.set", "tenant_settings", None).await;
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
+
+#[derive(Deserialize)]
+pub struct SetMcpEnabled {
+    pub mcp_server_id: Uuid,
+    pub enabled: bool,
+}
+
+/// `POST /rpc/mcp/set-enabled` — capability `mcp.manage`. Enables/disables an MCP
+/// server for the tenant (upserts tenant_mcp_servers). The server must be visible to
+/// the caller's tenant (platform-scoped or own) else 404.
+pub async fn mcp_set_enabled(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<SetMcpEnabled>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "mcp.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let visible: bool = sqlx::query_scalar(
+        "select exists(select 1 from public.mcp_servers \
+           where id = $1 and (scope = 'platform' or tenant_id = $2))",
+    )
+    .bind(body.mcp_server_id)
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(false);
+    if !visible {
+        return (StatusCode::NOT_FOUND, "mcp server not found").into_response();
+    }
+    let write = sqlx::query(
+        "insert into public.tenant_mcp_servers (tenant_id, mcp_server_id, enabled) \
+         values ($1,$2,$3) \
+         on conflict (tenant_id, mcp_server_id) do update set enabled = excluded.enabled",
+    )
+    .bind(tenant)
+    .bind(body.mcp_server_id)
+    .bind(body.enabled)
+    .execute(&state.pool)
+    .await;
+    if let Err(e) = write {
+        tracing::error!("mcp_set_enabled: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+    audit(&state, tenant, actor, "mcp.server.set", "mcp_server", Some(body.mcp_server_id)).await;
+    (StatusCode::OK, Json(json!({ "enabled": body.enabled }))).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct SetToolGrant {
+    pub role_id: Uuid,
+    pub mcp_server_id: Uuid,
+    pub tool_name: String,
+    pub allowed: bool,
+}
+
+/// `POST /rpc/mcp/set-tool-grant` — capability `mcp.manage`. Sets the ROLE-DEFAULT
+/// (space_id null) allow-list grant for (role, server, tool). Default-deny: `allowed`
+/// adds the grant (idempotent, no dup), else it's removed. Guards: role in-tenant, and
+/// the tool must exist on a server visible to the tenant.
+pub async fn mcp_set_tool_grant(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<SetToolGrant>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "mcp.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let role_ok: bool =
+        sqlx::query_scalar("select exists(select 1 from core.roles where id = $1 and tenant_id = $2)")
+            .bind(body.role_id)
+            .bind(tenant)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or(false);
+    if !role_ok {
+        return (StatusCode::NOT_FOUND, "role not found in tenant").into_response();
+    }
+    let tool_ok: bool = sqlx::query_scalar(
+        "select exists(select 1 from public.mcp_server_tools mt \
+           join public.mcp_servers s on s.id = mt.mcp_server_id \
+          where mt.mcp_server_id = $1 and mt.tool_name = $2 \
+            and (s.scope = 'platform' or s.tenant_id = $3))",
+    )
+    .bind(body.mcp_server_id)
+    .bind(&body.tool_name)
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(false);
+    if !tool_ok {
+        return (StatusCode::NOT_FOUND, "tool not found on a visible server").into_response();
+    }
+    // No natural-key unique constraint on tool_allow_lists → conditional insert / delete.
+    let write = if body.allowed {
+        sqlx::query(
+            "insert into public.tool_allow_lists (tenant_id, role_id, space_id, mcp_server_id, tool_name) \
+             select $1,$2,null,$3,$4 where not exists ( \
+               select 1 from public.tool_allow_lists \
+                where tenant_id=$1 and role_id=$2 and space_id is null \
+                  and mcp_server_id=$3 and tool_name=$4)",
+        )
+    } else {
+        sqlx::query(
+            "delete from public.tool_allow_lists \
+              where tenant_id=$1 and role_id=$2 and space_id is null \
+                and mcp_server_id=$3 and tool_name=$4",
+        )
+    }
+    .bind(tenant)
+    .bind(body.role_id)
+    .bind(body.mcp_server_id)
+    .bind(&body.tool_name)
+    .execute(&state.pool)
+    .await;
+    if let Err(e) = write {
+        tracing::error!("mcp_set_tool_grant: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+    audit(&state, tenant, actor, "mcp.tool.grant.set", "tool_allow_list", Some(body.role_id)).await;
+    (
+        StatusCode::OK,
+        Json(json!({ "role_id": body.role_id, "tool_name": body.tool_name, "allowed": body.allowed })),
+    )
+        .into_response()
+}

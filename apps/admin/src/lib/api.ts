@@ -211,6 +211,31 @@ export interface ModelRow {
 	enabled: boolean
 }
 
+export interface McpServer {
+	id: string
+	name: string
+	label: string | null
+	transport: string // stdio | http | sse
+	scope: string // platform | tenant
+	enabled: boolean
+}
+export interface McpTool {
+	id: string
+	mcp_server_id: string
+	tool_name: string
+}
+export interface ToolGrant {
+	role_id: string
+	mcp_server_id: string
+	tool_name: string
+}
+export interface ToolsData {
+	servers: McpServer[]
+	tools: McpTool[]
+	roles: { id: string; key: string; name: string }[]
+	grants: ToolGrant[]
+}
+
 export const api = {
 	// auth — Supabase password sign-in; the session persists to localStorage and every
 	// gateway call reads its JWT via authHeader().
@@ -282,5 +307,12 @@ export const api = {
 	// workspace-default policy toggles.
 	settings: () => gwGet<{ settings: { setting_key: string; enabled: boolean }[] }>('/v1/settings'),
 	setSetting: (setting_key: string, enabled: boolean) =>
-		gwPost('/rpc/settings/set', { setting_key, enabled })
+		gwPost('/rpc/settings/set', { setting_key, enabled }),
+	// X1 Tools & MCP — servers + tools + roles + role-default allow-list grants.
+	tools: () => gwGet<ToolsData>('/v1/tools'),
+	setMcpEnabled: (mcp_server_id: string, enabled: boolean) =>
+		gwPost('/rpc/mcp/set-enabled', { mcp_server_id, enabled }),
+	// grant/revoke a role-default tool grant (default-deny: absent = blocked).
+	setToolGrant: (role_id: string, mcp_server_id: string, tool_name: string, allowed: boolean) =>
+		gwPost('/rpc/mcp/set-tool-grant', { role_id, mcp_server_id, tool_name, allowed })
 }

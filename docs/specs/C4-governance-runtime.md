@@ -6,7 +6,7 @@
 
 ---
 
-> ⚠️ **Framing correction (2026-07-23).** Earlier module notes described C4 as *"inline guardrails"* inside the request. That is wrong. The `sensei-*` engine (`v0.4.6`) exposes **no in-request governance hook** (confirmed — GH-6). C4 is a **consumer-side wrapper** that runs the guardrail pipeline **around** `execute`/`execute_stream`: transform the request **before** the engine call, transform the response **after** it, and for streams apply a token-buffered windowed transform over the SSE output. Governance is orchestration code owned by Strategos, not an engine plug-in.
+> ⚠️ **Framing correction (2026-07-23).** Earlier module notes described C4 as *"inline guardrails"* inside the request. That is wrong. The `sensei-*` engine (`v0.4.6`) exposes **no in-request governance hook** (confirmed — GH-6). C4 is a **consumer-side wrapper** that runs the guardrail pipeline **around** `execute`/`execute_stream`: transform the request **before** the engine call, transform the response **after** it, and for streams apply a token-buffered windowed transform over the SSE output. Governance is orchestration code owned by Torii, not an engine plug-in.
 
 ---
 
@@ -236,9 +236,9 @@ C4 consumes the `sensei-*` engine at **`v0.4.6`** strictly as a **consumer** —
   - **GH-1 — Per-step `plane` + execution-location on the trace** (*Blocking*). `ChainEntry`/`Attempt`/`ExecutionTrace` carry **no** `plane`/execution-location field in `v0.4.6`. The `WhyThisModelTrace.TraceStep.plane` (`local|cloud`) and O1's `execution_location` depend on it. Until it lands, C4 renders `plane = unknown` and the trace omits the split-plane badge. Sequenced before the C2/D3 phase, which C4's trace consumes.
   - **GH-6 — Streaming-safe governance/redaction hook** (*Investigate*). The engine exposes no in-request hook, so streamed output must be intercepted consumer-side. C4's **token-buffered sliding window** (flow 2) is the v1 approach and works without a crate change; the GH-6 investigation asks whether the crate can expose a **stream-transform / interception point** so redaction is cleaner (vs. buffering that risks defeating streaming). **Decision:** ship the consumer-side windowed transform for v1; file GH-6 to evaluate a first-class crate stream hook as an enhancement — do not block C4 on it.
   - **GH-7 — MCP / tool-calling support** (*Investigate, X1-owned*). C4 only redacts tool I/O; whether tool invocation is engine-exposed or built consumer-side is X1's question. Noted for coordination; not a C4 blocker.
-- **No new gateway trait is required for C4 itself** — governance is deliberately consumer-side (§3). The detector libraries below are **Strategos-side dependencies**, not engine crates.
+- **No new gateway trait is required for C4 itself** — governance is deliberately consumer-side (§3). The detector libraries below are **Torii-side dependencies**, not engine crates.
 
-**Detector stack (Strategos-side, vetted — §2 W5):**
+**Detector stack (Torii-side, vetted — §2 W5):**
 - **Secret scanner:** a published, versioned ruleset (gitleaks/detect-secrets-class signatures for AWS/GCP/Anthropic `sk-ant-`/OpenAI `sk-`/GitHub `ghp_`/PEM private keys/JWTs) **plus a Shannon-entropy** high-entropy-token detector. Delivered behind the `Detector` trait as `SecretScanner`.
 - **PII classifier:** a **GLiNER-class NER** model served in-process via ONNX Runtime (reusing the `OrtAdapter` infra) as `PiiClassifier`, with an optional **Presidio** HTTP sidecar as a higher-recall fallback (behind the same trait, feature-flagged). These are the "vetted libraries" — the regex ruleset is a published set, not hand-rolled.
 
@@ -248,7 +248,7 @@ C4 consumes the `sensei-*` engine at **`v0.4.6`** strictly as a **consumer** —
 
 Applying the ratified architecture defaults + settling C4's residual questions:
 
-1. **Governance is a consumer-side wrapper, not an in-engine hook.** *Rationale:* the `v0.4.6` engine has no in-request governance/stream hook (confirmed, GH-6); wrapping `execute`/`execute_stream` keeps governance in Strategos-owned code, testable independently of the crate, and reusable in both C1 (central) and D2 (local). Corrects the prior "inline guardrails" framing.
+1. **Governance is a consumer-side wrapper, not an in-engine hook.** *Rationale:* the `v0.4.6` engine has no in-request governance/stream hook (confirmed, GH-6); wrapping `execute`/`execute_stream` keeps governance in Torii-owned code, testable independently of the crate, and reusable in both C1 (central) and D2 (local). Corrects the prior "inline guardrails" framing.
 2. **Redaction = one-way placeholders in v1; no reversible mapping store.** *Rationale:* DECISIONS §2 W5 — reversible un-redaction for authorized roles is post-v1. C4 uses a per-call, per-distinct-value placeholder counter for referential coherence within a request, with **no** cross-call persistence.
 3. **Detectors = vetted libraries, not hand-rolled regex.** *Rationale:* §2 W5. Secret scanning = published ruleset + entropy; PII = GLiNER-class ONNX NER in-process (+ optional Presidio sidecar). Behind a `Detector` trait so recall can be tuned per space via policy.
 4. **Streaming redaction = token-buffered sliding window (consumer-side); GH-6 filed but non-blocking.** *Rationale:* preserves streaming UX while guaranteeing spans crossing chunk boundaries are caught; a first-class crate stream hook is a nice-to-have enhancement, not a v1 blocker.

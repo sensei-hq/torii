@@ -7,7 +7,7 @@
 ---
 
 > **What this module is.** `@torii/ui` (`packages/ui`) — the single component library and visual
-> language every Strategos surface consumes. It is a **pure client-side package**: no gateway-crate
+> language every Torii surface consumes. It is a **pure client-side package**: no gateway-crate
 > dependency, no HTTP/IPC of its own, no F1 table ownership. Its "contracts" are Svelte component
 > props/events, the exported module surface, the UnoCSS/Rokkit token pipeline, and the command
 > registry. This spec pins the three residuals the module seed left open (DECISIONS §6, mockup-review
@@ -132,7 +132,7 @@ Cross-cutting primitives (props are the contract; events are `on<verb>` callback
 | `Meter` | `{ label, value, max?, kind?: 'grounding'\|'quality'\|'cost'\|'latency' }` | — | live quality meters (§3b), used by Ask/Playground. |
 
 Foundational Rokkit atoms re-exported/wrapped data-first: `List`, `Tree`, `Select`, `MultiSelect`,
-`Table`, `Tabs`, `Toggle`, `Menu`, `CommandPalette` (from `@rokkit/ui`), plus Strategos atoms
+`Table`, `Tabs`, `Toggle`, `Menu`, `CommandPalette` (from `@rokkit/ui`), plus Torii atoms
 (`Pill`, `Tag`, `Card`, `CardHead`, `PageHeader`, `Switch`, `ProviderDot`, `ModelPicker`, `CtrlRow`) —
 full inventory in §8.4.
 

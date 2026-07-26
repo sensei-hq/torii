@@ -6,15 +6,15 @@
 
 ---
 
-> **Reading order.** This spec is authoritative for how a Strategos request resolves to a model and degrades gracefully. It sits **on top of** the `sensei-gateway` engine (which owns model selection, fallback execution, and the circuit breaker) and **behind** C1 (the only writer for privileged chain config, per DECISIONS §2 W1). It does **not** own budget accounting (C3), credential decryption (C1/F3), governance/redaction (C4), or the local execution plane (D2/D3) — it composes with them.
+> **Reading order.** This spec is authoritative for how a Torii request resolves to a model and degrades gracefully. It sits **on top of** the `sensei-gateway` engine (which owns model selection, fallback execution, and the circuit breaker) and **behind** C1 (the only writer for privileged chain config, per DECISIONS §2 W1). It does **not** own budget accounting (C3), credential decryption (C1/F3), governance/redaction (C4), or the local execution plane (D2/D3) — it composes with them.
 
 ---
 
 ## 1. Purpose & scope
 
-Define how Strategos turns an inference request for a **capability** (chat/reasoning, embedding, later rerank) into an ordered set of model attempts, degrades gracefully when a provider fails or budget runs low, and exposes all of it as **editable, per-space/role config** with a **read-only simulator** that becomes an editable chain editor (W1).
+Define how Torii turns an inference request for a **capability** (chat/reasoning, embedding, later rerank) into an ordered set of model attempts, degrades gracefully when a provider fails or budget runs low, and exposes all of it as **editable, per-space/role config** with a **read-only simulator** that becomes an editable chain editor (W1).
 
-The engine (`sensei-gateway`) already implements the mechanics — 3-tier model selection, fallback execution, a per-endpoint circuit breaker, and a soft budget-affordability filter. C2 is the **Strategos-side skin** over those mechanics: it maps F1 DB config → the engine's `GatewayConfig`, adds Strategos concepts the engine lacks (**per-step plane**, **per-space/role chain binding**, **feature-governed chain selection**, **provider health surface**), and enforces that all chain mutations go through C1's capability-checked domain RPC.
+The engine (`sensei-gateway`) already implements the mechanics — 3-tier model selection, fallback execution, a per-endpoint circuit breaker, and a soft budget-affordability filter. C2 is the **Torii-side skin** over those mechanics: it maps F1 DB config → the engine's `GatewayConfig`, adds Torii concepts the engine lacks (**per-step plane**, **per-space/role chain binding**, **feature-governed chain selection**, **provider health surface**), and enforces that all chain mutations go through C1's capability-checked domain RPC.
 
 **In scope**
 - Capability-managed **fallback chains** — chat/reasoning and embedding are each a chain; rerank is a chain shape reserved for the C5 rerank service (§8).
@@ -71,11 +71,11 @@ C2 is a schema-light module: the engine holds the runtime state (circuit breaker
 - `router_credentials` — **never read by C2**; C1 injects decrypted credentials at call time (F3 vault). C2's config carries the router *reference* only.
 - `feature_states` / `user_preferences` — 4-state feature governance gates chain selection + which triggers/planes a role may set (DECISIONS §4).
 
-### 3.3 Strategos capability → engine `Capability` mapping
+### 3.3 Torii capability → engine `Capability` mapping
 
 The engine `Capability` enum (`kernel::types::capability`) has 11 variants. C2's chain "purpose" maps onto it:
 
-| Strategos chain purpose | Engine `Capability` | v1? |
+| Torii chain purpose | Engine `Capability` | v1? |
 |---|---|---|
 | chat / reasoning | `TextChat` | ✅ ("reasoning" is a chat chain whose bound model has a reasoning-grade `model_capabilities` entry — **not** a distinct engine variant) |
 | embedding | `TextEmbed` | ✅ (1024-dim model per F1 §9b) |
@@ -221,7 +221,7 @@ impl RoutingService {
 **Flow 1 — Chain resolution (per request, in C1's hot path).**
 1. C1 authenticates the caller (RS256/JWKS) → `tenant_id` + capabilities + `space_id` (F2).
 2. `RoutingService::resolve_chain` picks the chain by precedence: **explicit request `chain` override** (only if the caller has `chain.read` and the chain is bound-visible) → **(space × role)** binding → **(space)** binding → **(role)** binding → **tenant default** (`fallback_chains.is_default` for that capability). Feature governance may force/forbid a chain.
-3. Resolver returns the `FallbackChainConfig` (engine) plus the per-step `plane[]` (Strategos side-channel until GH-1 folds `plane` into `ChainEntry`).
+3. Resolver returns the `FallbackChainConfig` (engine) plus the per-step `plane[]` (Torii side-channel until GH-1 folds `plane` into `ChainEntry`).
 
 **Flow 2 — Budget-filtered selection + graceful step-down (central).**
 1. C3 supplies the caller's **remaining headroom** (min across the org→dept→team→user path); C2 sets it as `SelectionCriteria.budget`.

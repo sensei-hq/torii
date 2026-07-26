@@ -12,7 +12,7 @@
 
 ## 1. Purpose & scope
 
-Multi-step automation for Strategos: **ReAct agents** (reason → tool → observe loops) and **DAG task plans** (dependency-ordered, parallel-grouped tasks) with **human-in-the-loop (HITL) approval** for sensitive steps. A first-class capability in the old system (`strategos_old` `agents` package: coordinator, plan/task tracking, HITL).
+Multi-step automation for Torii: **ReAct agents** (reason → tool → observe loops) and **DAG task plans** (dependency-ordered, parallel-grouped tasks) with **human-in-the-loop (HITL) approval** for sensitive steps. A first-class capability in the old system (`strategos_old` `agents` package: coordinator, plan/task tracking, HITL).
 
 **v1 (this spec's build scope) is design-only:**
 

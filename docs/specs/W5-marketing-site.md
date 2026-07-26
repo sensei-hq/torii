@@ -9,7 +9,7 @@
 
 ## 1. Purpose & scope
 
-Ship the public-facing site that explains Strategos, shows the controls, and converts visitors into sign-ups or sales conversations. Anonymous, unauthenticated, cache-first, SEO-optimized, released on a cadence **independent** of the product apps.
+Ship the public-facing site that explains Torii, shows the controls, and converts visitors into sign-ups or sales conversations. Anonymous, unauthenticated, cache-first, SEO-optimized, released on a cadence **independent** of the product apps.
 
 **In scope (v1):**
 - Marketing pages: hero, value props (route / spend / govern), Playground showcase, Governance showcase, Requests & audit (observability) showcase, Enterprise (security/deployment/whitelabel), **pricing**, closing CTA, footer.

@@ -12,7 +12,7 @@
 
 ## 1. Purpose & scope
 
-Define the **single quality-signal contract** for Strategos: the canonical set of signals captured on every interaction (call / message), how they are captured (from the C4 governance wrapper, the engine trace, and C5 retrieval/eval), where they are persisted (`quality_signals` in F1), and how they flow to audit (O1), analytics (O2), and the live meters (W2/W3). C6 is the **one place** that owns *what a quality signal is* so that capture points, meters, dashboards, and (v2) the optimizer all agree on one schema.
+Define the **single quality-signal contract** for Torii: the canonical set of signals captured on every interaction (call / message), how they are captured (from the C4 governance wrapper, the engine trace, and C5 retrieval/eval), where they are persisted (`quality_signals` in F1), and how they flow to audit (O1), analytics (O2), and the live meters (W2/W3). C6 is the **one place** that owns *what a quality signal is* so that capture points, meters, dashboards, and (v2) the optimizer all agree on one schema.
 
 Two tiers, per DECISIONS §3b:
 
@@ -119,7 +119,7 @@ C6 has no public UI of its own; it exposes (a) a Rust signal-contract crate/modu
 
 ### 4.1 Rust — the signal contract (shared library)
 
-Published in the Strategos gateway service (`services/gateway`) and consumed by C1/C4/C5 capture points.
+Published in the Torii gateway service (`services/gateway`) and consumed by C1/C4/C5 capture points.
 
 ```rust
 /// Canonical namespaced signal key (schema_version 1). Adding a variant bumps the version.

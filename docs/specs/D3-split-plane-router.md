@@ -260,7 +260,7 @@ Consumes `sensei-gateway` + `sensei-kernel` + `sensei-local-*` @ pinned **`v0.4.
 | **GH-1** | Per-step `plane` on `ChainEntry` + an **`execution_location` field on `Attempt`/`ExecutionTrace`** ([`../plans/gateway-issues.md`](../plans/gateway-issues.md)). Confirmed absent in `v0.4.6`. Without it D3 cannot (a) let the engine route a step to the local-vs-remote adapter by plane, nor (b) record per-step execution-location in the one unified trace. | **Yes — sequenced before the C2/D3 phase.** |
 | (GH-6) | Streaming-safe redaction hook — informs whether a `local`-step stream that egresses to cloud, or a cloud stream needing on-device redaction, buffers or uses a crate transform point. | Investigate with C4 streaming. |
 
-D3 files **no new** gateway issue; it depends on **GH-1** (owned by the C2/D3 phase) and references GH-6. The `RemoteGatewayAdapter` is **Strategos-side code**, not a crate change — it implements the public `ChatModel`/`EmbedModel` traits and registers via the existing `AdapterRegistry`/`RegisterInto` surface (same mechanism C1 uses for cloud adapters, MIG-2). No provider-credential/OAuth crate work (GH-2) touches the device — cloud custody is central.
+D3 files **no new** gateway issue; it depends on **GH-1** (owned by the C2/D3 phase) and references GH-6. The `RemoteGatewayAdapter` is **Torii-side code**, not a crate change — it implements the public `ChatModel`/`EmbedModel` traits and registers via the existing `AdapterRegistry`/`RegisterInto` surface (same mechanism C1 uses for cloud adapters, MIG-2). No provider-credential/OAuth crate work (GH-2) touches the device — cloud custody is central.
 
 ---
 

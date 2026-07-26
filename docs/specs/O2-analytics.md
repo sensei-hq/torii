@@ -13,7 +13,7 @@
 
 ## 1. Purpose & scope
 
-Define the **analytics read model** for Strategos: the aggregations, the rollup strategy (precomputed vs on-the-fly), the cloud-equivalent-savings baseline, and the read contracts that back the Overview dashboard (W1), the member spend chips + Activity (W2), and the plane-split fleet views (O3). O2 answers "what did we spend, on what, where did it run, how much did local save us, how good were the answers, and where are we trending" — all from the single ledger + quality signals, tenant/RLS-scoped.
+Define the **analytics read model** for Torii: the aggregations, the rollup strategy (precomputed vs on-the-fly), the cloud-equivalent-savings baseline, and the read contracts that back the Overview dashboard (W1), the member spend chips + Activity (W2), and the plane-split fleet views (O3). O2 answers "what did we spend, on what, where did it run, how much did local save us, how good were the answers, and where are we trending" — all from the single ledger + quality signals, tenant/RLS-scoped.
 
 **In scope:** the aggregation catalog (cost trend, model mix, plane split / local-vs-cloud savings, fallback counts, latency percentiles, quality/grounding/judge/guardrail-hit rates, spend rollups per org→dept→team→user scope); the **precomputed rollup tables + materialized views** and their refresh strategy; the **savings baseline definition**; the read-only HTTP contracts on C1 that serve the dashboards; the RLS/capability posture for analytics reads.
 

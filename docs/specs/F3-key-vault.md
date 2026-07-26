@@ -11,7 +11,7 @@
 
 ## 1. Purpose & scope
 
-Define the **provider credential vault**: how Strategos stores, protects, refreshes, rotates, and dispenses the provider credentials that fulfil cloud (BYOK) inference — **two credential types per router**: an **API key** (BYOK static secret) and an **OAuth account** (Anthropic-style access + refresh tokens). Credentials are encrypted at rest under a per-tenant DEK wrapped by a master KEK, are readable **only** by the central gateway (`service_role`), and are **never** exposed over any API, RLS view, or to any device or web client.
+Define the **provider credential vault**: how Torii stores, protects, refreshes, rotates, and dispenses the provider credentials that fulfil cloud (BYOK) inference — **two credential types per router**: an **API key** (BYOK static secret) and an **OAuth account** (Anthropic-style access + refresh tokens). Credentials are encrypted at rest under a per-tenant DEK wrapped by a master KEK, are readable **only** by the central gateway (`service_role`), and are **never** exposed over any API, RLS view, or to any device or web client.
 
 F3 owns the **crypto envelope**, the **credential lifecycle** (create/connect, rotate, revoke), the **OAuth token auto-refresh worker**, and **DEK/KEK rotation**. It is the "K" in "sure, budgeted access for all via BYOK": once F3 lands, no phase deploys with plaintext keys.
 
@@ -114,7 +114,7 @@ Holds superseded wrapped DEKs so ciphertext encrypted under an older `dek_versio
 
 ## 4. Contracts
 
-### 4.1 Rust traits (crate `strategos-vault`, consumed by C1's `services/gateway`)
+### 4.1 Rust traits (crate `torii-vault`, consumed by C1's `services/gateway`)
 
 ```rust
 /// Master-key custody. Prod = cloud KMS/HSM; local-dev = STRATEGOS_KEK env var.
@@ -228,7 +228,7 @@ F3 exposes **no public HTTP** and **no Tauri IPC** (desktop never holds provider
 ## 7. Gateway-crate dependencies
 
 - **GH-2 — OAuth/bearer provider-credential support in `sensei-cloud-providers` (BLOCKING).** Today `RouterConfig` carries only `api_key`/`api_key_env` and `base.rs::resolve_api_key` does a static `bearer_auth(key)`; there is no OAuth access/refresh/expiry or 401-triggered refresh ([`../plans/gateway-issues.md`](../plans/gateway-issues.md) GH-2). The adapter must accept a **first-class bearer/OAuth credential** (the `ResolvedCredential::Bearer` from §4.1) that cooperates with F3's refresher, and surface a 401 signal C1 can turn into a reactive refresh (flow 5). **Sequenced before** the F3/C1 phase that handles a real OAuth account; filed as a gateway-repo issue (create → implement → close, released via the lockstep tag bump). BYOK `api_key` credentials work on the crate as-is.
-- **No other crate enhancement is required** for F3's crypto/storage/refresh — the envelope, worker, and rotation are Strategos-side. `GatewayStore`/`inference_calls` (GH-5) and the reserve→commit (GH-4) are C3/O1 concerns; F3 credentials deliberately do **not** interact with them.
+- **No other crate enhancement is required** for F3's crypto/storage/refresh — the envelope, worker, and rotation are Torii-side. `GatewayStore`/`inference_calls` (GH-5) and the reserve→commit (GH-4) are C3/O1 concerns; F3 credentials deliberately do **not** interact with them.
 
 ---
 

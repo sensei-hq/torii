@@ -11,7 +11,7 @@
 
 ## 1. Purpose & scope
 
-Establish **who a caller is** (authentication) and **what they may do** (authorization) for every plane of Strategos. F2 is the source of truth for:
+Establish **who a caller is** (authentication) and **what they may do** (authorization) for every plane of Torii. F2 is the source of truth for:
 
 - **Authentication** via Supabase Auth — **magic link (passwordless email) is the primary v1 sign-in** (simplest, Supabase-native), with OAuth (Google, GitHub) optional; the region + IdP shown in mockups are **operator-config, not baked**. SAML SSO + SCIM directory provisioning as a **fast-follow (v1.x)**, with the onboarding step **designed and stubbed** in v1 (DECISIONS §3).
 - **JWT verification model** — the central gateway (C1) and Postgres both trust Supabase-issued JWTs verified **RS256 against the JWKS endpoint** (verify-only asymmetric public key), never a shared HS256 secret (§2 W3).

@@ -7,13 +7,13 @@
 
 ---
 
-> ⚠️ **Framing (2026-07-23).** X1 is **not** a network service. Like C4, it is a **consumer-side Rust library** (`crates/tools`) that runs *inside* C1's inference loop (central plane) and inside the desktop `src-tauri` process (device plane, for `stdio` servers launched via D1). The `sensei-*` engine (`v0.4.6`) has **no MCP crate** and no tool-invocation orchestrator (GH-7). Tool **invocation, allow-list enforcement, SSRF filtering, sandboxing, and C4 redaction are all Strategos-owned security controls** and live in X1 — never in the crate. The crate is (at most) enhanced only to carry tool/function *definitions* on the request and to surface provider `tool_use` blocks on the response (§7, GH-7). Where any other doc disagrees, [`../DECISIONS.md`](../DECISIONS.md) (§1.1, §2 W5) wins.
+> ⚠️ **Framing (2026-07-23).** X1 is **not** a network service. Like C4, it is a **consumer-side Rust library** (`crates/tools`) that runs *inside* C1's inference loop (central plane) and inside the desktop `src-tauri` process (device plane, for `stdio` servers launched via D1). The `sensei-*` engine (`v0.4.6`) has **no MCP crate** and no tool-invocation orchestrator (GH-7). Tool **invocation, allow-list enforcement, SSRF filtering, sandboxing, and C4 redaction are all Torii-owned security controls** and live in X1 — never in the crate. The crate is (at most) enhanced only to carry tool/function *definitions* on the request and to surface provider `tool_use` blocks on the response (§7, GH-7). Where any other doc disagrees, [`../DECISIONS.md`](../DECISIONS.md) (§1.1, §2 W5) wins.
 
 ---
 
 ## 1. Purpose & scope
 
-X1 gives Strategos models the ability to **invoke tools** and connect to **Model Context Protocol (MCP) servers** — a registry of servers (platform-managed + tenant-registered), a **per-(role × space) tool allow-list**, and a **server-side enforcement + invocation runtime** that the gateway runs at tool-call time. It is the substrate under Ask/Playground tool use, agentic retrieval (C5), and the v2 agent runtime (X2).
+X1 gives Torii models the ability to **invoke tools** and connect to **Model Context Protocol (MCP) servers** — a registry of servers (platform-managed + tenant-registered), a **per-(role × space) tool allow-list**, and a **server-side enforcement + invocation runtime** that the gateway runs at tool-call time. It is the substrate under Ask/Playground tool use, agentic retrieval (C5), and the v2 agent runtime (X2).
 
 **In scope:**
 - The **tool / MCP-server registry** (`mcp_servers`, `tenant_mcp_servers`) + **discovered-tool cache** (`mcp_server_tools`) and the **per-(role × space) allow-list** (`tool_allow_lists`).
@@ -216,7 +216,7 @@ X1 is a **security control**; its posture is a build gate.
 
 ## 7. Gateway-crate dependencies
 
-X1 consumes `sensei-*` @ **`v0.4.6`** as a consumer; the tool runtime is Strategos-owned. The one enhancement is the request/response tool-schema plumbing.
+X1 consumes `sensei-*` @ **`v0.4.6`** as a consumer; the tool runtime is Torii-owned. The one enhancement is the request/response tool-schema plumbing.
 
 | Issue | What X1 needs | Blocking? |
 |---|---|---|
@@ -224,9 +224,9 @@ X1 consumes `sensei-*` @ **`v0.4.6`** as a consumer; the tool runtime is Strateg
 | **GH-6** | Streaming redaction hook — informs whether tool-call deltas arriving mid-stream are buffered for C4's windowed redaction before the tool fires (C4 owns; X1 waits for a full tool_use block before invoking, so non-blocking for X1). | Investigate (C4-owned). |
 | **GH-1** | Per-step `plane` on the trace — so `governance.tools[].plane` (`local|cloud`) is populated; else `unknown`. | Non-blocking (degrades to `unknown`). |
 
-Each is a gateway-repo issue (create → implement → close), released via the lockstep tag bump, sequenced before its dependent Strategos phase. See [`../plans/gateway-issues.md`](../plans/gateway-issues.md).
+Each is a gateway-repo issue (create → implement → close), released via the lockstep tag bump, sequenced before its dependent Torii phase. See [`../plans/gateway-issues.md`](../plans/gateway-issues.md).
 
-**Strategos-side (non-crate) dependencies:** an MCP client implementation (official `rmcp` Rust SDK or equivalent) for `stdio`/`http`/`sse` transports; an SSRF-safe HTTP client (IP-pinning). The C4 `governance` crate for `redact_text`.
+**Torii-side (non-crate) dependencies:** an MCP client implementation (official `rmcp` Rust SDK or equivalent) for `stdio`/`http`/`sse` transports; an SSRF-safe HTTP client (IP-pinning). The C4 `governance` crate for `redact_text`.
 
 ---
 
@@ -234,7 +234,7 @@ Each is a gateway-repo issue (create → implement → close), released via the 
 
 Applying the ratified defaults + settling X1's residuals:
 
-1. **D1 — Tool invocation is consumer-side in X1/C1; GH-7 enhances only request/response tool-schema plumbing.** *Rationale:* mirrors C4 — the `v0.4.6` engine has no MCP crate or invocation orchestrator, and the security controls that matter (allow-list, SSRF, sandbox, W5 redaction) **must** be Strategos-owned and testable outside the crate. Pushing invocation into the engine would bury the security boundary. The crate is enhanced (GH-7) only to carry tool definitions and surface normalized `tool_use` blocks, so X1 doesn't hand-write per-provider tool-calling wire formats.
+1. **D1 — Tool invocation is consumer-side in X1/C1; GH-7 enhances only request/response tool-schema plumbing.** *Rationale:* mirrors C4 — the `v0.4.6` engine has no MCP crate or invocation orchestrator, and the security controls that matter (allow-list, SSRF, sandbox, W5 redaction) **must** be Torii-owned and testable outside the crate. Pushing invocation into the engine would bury the security boundary. The crate is enhanced (GH-7) only to carry tool definitions and surface normalized `tool_use` blocks, so X1 doesn't hand-write per-provider tool-calling wire formats.
 2. **D2 — `stdio` transport is device-plane only; the central gateway never spawns subprocesses.** *Rationale:* running arbitrary local processes on the shared central service is an unacceptable RCE/lateral-movement surface. `stdio` tools run sandboxed on the user's device via D1; web callers get `http`/`sse` + platform tools only. `http`/`sse` may run centrally or on-device.
 3. **D3 — Allow-list is default-deny, grant-only, keyed `(role × space)` → `(server, tool)` with a per-server wildcard.** *Rationale:* DECISIONS §1.1 (per-(role×space) allow-list); default-deny is the safe posture; wildcard keeps admin ergonomics for trusted servers without enumerating every tool. No `deny` rows in v1 (grants under default-deny suffice).
 4. **D4 — `http`/`sse` auth and `stdio` env secrets live in the F3 vault; never in `mcp_servers` plaintext.** *Rationale:* DECISIONS §2 W4 — no plaintext secrets at rest; `service_role`-only, decrypted at invoke time inside the trusted boundary.

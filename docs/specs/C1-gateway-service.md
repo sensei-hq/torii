@@ -263,7 +263,7 @@ Pin `sensei-gateway`/`sensei-kernel`/`sensei-cloud-providers` (+ `sensei-local-*
 | (GH-6) | Streaming-safe redaction hook — informs whether C1 buffers streamed output for C4 redaction or uses a crate stream-transform point. | Investigate before C4 streaming. |
 | (GH-7) | MCP/tool-calling interface — determines whether tool invocation is consumer-side in C1/C4 or crate-exposed. | Investigate before X1. |
 
-Each enhancement is a gateway-repo issue (create → implement → close), released via the lockstep tag bump, sequenced before its dependent Strategos phase.
+Each enhancement is a gateway-repo issue (create → implement → close), released via the lockstep tag bump, sequenced before its dependent Torii phase.
 
 ---
 
@@ -285,7 +285,7 @@ Each enhancement is a gateway-repo issue (create → implement → close), relea
 
 ## 9. Acceptance criteria (observable, testable)
 
-1. **Crate migration:** `cargo build -p strategos-gateway` compiles against `sensei-gateway@v0.4.6` with the capability-trait `AdapterRegistry` (no `InferenceAdapter` reference); root `[patch]` resolves without `gateway-embedded`.
+1. **Crate migration:** `cargo build -p torii-gateway` compiles against `sensei-gateway@v0.4.6` with the capability-trait `AdapterRegistry` (no `InferenceAdapter` reference); root `[patch]` resolves without `gateway-embedded`.
 2. **JWT (RS256):** a request with a valid RS256 Supabase JWT is admitted; an HS256 token, an expired token, a wrong-`aud` token, and a token signed by an unknown key each return `401`. No HS256 secret is read from env.
 3. **API key → identity:** a valid `sk_str_…` key is admitted and resolves to its identity; a revoked key returns `401`; SELECT on `api_keys` by any client returns hash/prefix only (no usable secret, no budget column).
 4. **Tenant isolation:** a caller for tenant A cannot read or write tenant B's ledger/config; cross-tenant read returns 0 rows (RW12 harness green).

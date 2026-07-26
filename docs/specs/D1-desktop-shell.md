@@ -13,7 +13,7 @@
 
 ## 1. Purpose & scope
 
-Strategos ships the Member Console as a **Tauri 2 + SvelteKit (Svelte 5)** desktop app so that inference can run **on-device** (offline, private, $0) while cloud steps proxy to the central gateway (C1). D1 is the shell that makes that possible and the sole owner of everything persisted on the device.
+Torii ships the Member Console as a **Tauri 2 + SvelteKit (Svelte 5)** desktop app so that inference can run **on-device** (offline, private, $0) while cloud steps proxy to the central gateway (C1). D1 is the shell that makes that possible and the sole owner of everything persisted on the device.
 
 D1 is responsible for:
 
@@ -191,7 +191,7 @@ Events (host → frontend):
 ### 4.6 Tray, menus, window
 
 - **System tray**: status glyph reflecting `ShellState.network`/`device`; menu = Open, Ask (deep-link to `/ask`), Sync now (→ D4), Offline pending: N (opens Activity), Sign out, Quit.
-- **Native menu bar**: standard app/file/edit/view/window + a **Strategos** menu (Local models `[D]`, Device & sync, Preferences) routing via deep-link; menu items disabled per `ShellState` (e.g. "Sync now" disabled offline).
+- **Native menu bar**: standard app/file/edit/view/window + a **Torii** menu (Local models `[D]`, Device & sync, Preferences) routing via deep-link; menu items disabled per `ShellState` (e.g. "Sync now" disabled offline).
 - **Window**: single-instance (second launch focuses the existing window + forwards the deep-link); restore last route + size; on quit, drain in-flight commands and attempt a final buffer flush (best-effort, bounded).
 - **Auto-update**: Tauri updater surface (check/apply); the "gateway v2.4" version label from the mockups is **dropped** (mockup-review item 44) — the engine version (`sensei-*` v0.4.6) is not user-facing.
 

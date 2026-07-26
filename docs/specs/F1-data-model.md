@@ -20,7 +20,7 @@
 
 ## 1. Purpose & scope
 
-Define the single multi-tenant Postgres schema that every Strategos service reads and writes, the **tenant-isolation model**, and the **v1 table cut**. This spec adapts the existing [`database/`](../../database/) design (built for the old hosted product) to the split-plane SaaS: web clients hit **Supabase PostgREST under RLS**; the **central gateway uses the service role** and scopes by JWT; the desktop app pulls a config snapshot (no secrets).
+Define the single multi-tenant Postgres schema that every Torii service reads and writes, the **tenant-isolation model**, and the **v1 table cut**. This spec adapts the existing [`database/`](../../database/) design (built for the old hosted product) to the split-plane SaaS: web clients hit **Supabase PostgREST under RLS**; the **central gateway uses the service role** and scopes by JWT; the desktop app pulls a config snapshot (no secrets).
 
 Out of scope here: per-table column-by-column DDL (that's the implementation plan), and the engine config mapping (C1/C2).
 

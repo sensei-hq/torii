@@ -1,4 +1,4 @@
-# Strategos — build progress
+# Torii — build progress
 
 > Live status of the autonomous build against [`plans/roadmap.md`](plans/roadmap.md).
 > Branch: `develop`. Authoritative decisions: [`DECISIONS.md`](DECISIONS.md).
@@ -18,7 +18,7 @@
 | **C5 · §3c** | Sensitive-data `dataset_safe_schema` (structure not values) + `k_anon_ok` | `tests/dataset.sql` |
 | **X1 · MCP** | Default-deny `tool_allowed` allow-list resolver | `tests/tools.sql` |
 | **Gateway issues** | GH-1 #37 (trace plane), GH-2 #36 (OAuth adapter) filed on `sensei-hq/gateway` | — |
-| **Infra isolation** | Strategos on its **own** Supabase stack (project `strategos`, API 55321 / DB 55322); sensei-dojo untouched + cleaned | both stacks coexist; suite green on isolated DB |
+| **Infra isolation** | Torii on its **own** Supabase stack (project `strategos`, API 55321 / DB 55322); sensei-dojo untouched + cleaned | both stacks coexist; suite green on isolated DB |
 | **🔓 Live auth E2E** | Real GoTrue signup → hook injects `tenant_id`+`role_ids`+`claims_version` → sign-in → **ES256 token → JWKS verify → capability gate** → `POST /rpc/budgets/upsert-node` **200** + actor-bound audit; viewer → 403 | verified against the real stack |
 | **fix: signup-500** | RW2 broke `assign_tenant_by_domain` (old profile_tenants shape) → repaired (creates profiles anchor, SECURITY DEFINER, default role) | signup works |
 | **☁️ Live cloud inference (C1)** | Real tenant-bound ES256 token → JWKS → auth → chain routing (`chat`) → **C4 redact-in-flight** → **authenticated Anthropic call** → real answer; `inference_calls` ledger row written (adapter/model/api_model_id/tokens/cost/status) | `POST /v1/chat` **200** `"Strategos live."`, $0.000168, ledger `after=1` |

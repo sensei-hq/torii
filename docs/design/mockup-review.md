@@ -1,4 +1,4 @@
-# Strategos — Mockup Review & Designer Handoff
+# Torii — Mockup Review & Designer Handoff
 
 > **Living doc.** Design changes so the mockups (`docs/mockups/app/*.jsx`) match the ratified
 > [`../DECISIONS.md`](../DECISIONS.md). **Cycle-7 — essentially complete.** Verified 2026-07-23
@@ -39,8 +39,8 @@ Earlier cycles covered the 9 new screens, all editable admin editors, the §3c "
 
 | Date | By | Change |
 |------|----|--------|
-| 2026-07-23 | Strategos | Cycles 1–4: seeded to 57 items. |
-| 2026-07-23 | Strategos | Cycle 5: cross-verified; ~14 resolved, 9 corrections + confirmations. |
-| 2026-07-23 | Strategos | Cycle 6: C1/C2/C3/C6/C7/C9 + ~20 items resolved; focused ~12 remained. |
-| 2026-07-23 | Strategos | **Cycle 7:** remaining backlog resolved (#30/#11/#37/#41/#48/#54/#22/Q2/Q3/C4/C5 + minors). Mockups match DECISIONS. Q1 (v1/v2 gating) removed — implementation-managed, not a mock concern. Only optional polish + out-of-scope W4/W5 remain. |
-| 2026-07-23 | Strategos | **Cycle 8:** polish resolved (C8 step planes, #55 hierarchical onboarding budget tree, device enroll/undo). **Mockups converged — no open design gaps.** Only out-of-scope W4 token-map/dark-palette + W5 marketing pricing remain (owned by specs, not the mock). |
+| 2026-07-23 | Torii | Cycles 1–4: seeded to 57 items. |
+| 2026-07-23 | Torii | Cycle 5: cross-verified; ~14 resolved, 9 corrections + confirmations. |
+| 2026-07-23 | Torii | Cycle 6: C1/C2/C3/C6/C7/C9 + ~20 items resolved; focused ~12 remained. |
+| 2026-07-23 | Torii | **Cycle 7:** remaining backlog resolved (#30/#11/#37/#41/#48/#54/#22/Q2/Q3/C4/C5 + minors). Mockups match DECISIONS. Q1 (v1/v2 gating) removed — implementation-managed, not a mock concern. Only optional polish + out-of-scope W4/W5 remain. |
+| 2026-07-23 | Torii | **Cycle 8:** polish resolved (C8 step planes, #55 hierarchical onboarding budget tree, device enroll/undo). **Mockups converged — no open design gaps.** Only out-of-scope W4 token-map/dark-palette + W5 marketing pricing remain (owned by specs, not the mock). |

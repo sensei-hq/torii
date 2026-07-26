@@ -1,4 +1,4 @@
-# Strategos — Client + Admin Build-Out (blueprint)
+# Torii — Client + Admin Build-Out (blueprint)
 
 > Superseded by [../DECISIONS.md](../DECISIONS.md) (2026-07-23) — crate/auth/ACL wording below is pre-ratification; DECISIONS wins.
 
@@ -145,13 +145,13 @@ Auth for both apps uses **Kavach** (`~/Developer/kavach`, v1.0.0-next.37) + `@ka
 - **`packages/core`** builds typed, zod-validated data access on the adapter's `getActions()` and audit logging on `getLogWriter()`, keeping the mock adapter swappable behind one interface.
 - **Claims:** `tenant_id` / `role` / `groups` already land in the JWT via the existing `custom_access_token_hook` and are read from `app_metadata`; kavach consumes them for the session + route rules.
 
-**Enhancements Strategos contributes back to Kavach ("two birds"):**
+**Enhancements Torii contributes back to Kavach ("two birds"):**
 
 1. **Client-only session mode** — SPA / Tauri / offline session without a SvelteKit server _(Phase 1, client-critical)_.
 2. **Multi-tenant + role hierarchy** — tenant/org context in the session and a hierarchical / multi-role model (kavach is flat-`role` today) to match the generic org→dept→team→user tree, with route rules that understand it _(claims consumed from Phase 1; hierarchy-aware rules land with Phase 4 admin RBAC)_.
 3. **Device enrollment + device-scoped tokens** — register a device, issue/rotate a device-scoped token _(F2; feeds D4 sync + O3 fleet; Phase 2)_.
 
-These are tracked as upstream kavach work alongside the Strategos screens they unblock (F2).
+These are tracked as upstream kavach work alongside the Torii screens they unblock (F2).
 
 ---
 
@@ -217,7 +217,7 @@ Each phase is independently demoable and ends lint+test clean (zero-errors polic
 
 - **Auth:** via **Kavach** + Supabase adapter (see §6b). JWT custom claims (`tenant_id`, `role`, `groups`) come from the existing `custom_access_token_hook`, read from `app_metadata`; device enrollment issues a device-scoped token (F2). Admin uses kavach SSR route protection; desktop uses the client-only session mode.
 - **Execution-location awareness:** `ExecBadge` everywhere a call runs (Ask, Playground, Activity, Models, Routing); driven by the split-plane router's per-step plane flag.
-- **Desktop-vs-web / offline:** `StrategosEnv`-style capability flag (desktop/offline/web) gates local-only features; `OfflineBanner`, `DesktopOnlyNote`, offline buffer surfaced in `DeviceFooter`.
+- **Desktop-vs-web / offline:** `ToriiEnv`-style capability flag (desktop/offline/web) gates local-only features; `OfflineBanner`, `DesktopOnlyNote`, offline buffer surfaced in `DeviceFooter`.
 - **Feature governance (3-level model):** workspace default (admin) → space override (space owner) → user preference (member, where allowed); backed by `modules`/`features`/`feature_states`; member toggles render locked where policy dictates.
 - **Security:** keys custody is central-only; RLS on every tenant table; JWT-scoped C1; encrypted BYOK vault (F3). Web apps get standard security headers; validate all inputs at the C1 boundary.
 
@@ -237,7 +237,7 @@ Each phase is independently demoable and ends lint+test clean (zero-errors polic
 
 - On-device retrieval (local RAG): if/when we add it, choose the vector store (`sqlite-vec` vs embedded `pgvector`). Not in v1 — retrieval is central (C5).
 - Exact lightweight offline store (Phase 2): `tauri-plugin-sql` (SQLite) vs the Tauri store plugin — pick at D4 implementation.
-- Kavach client-only session: build as a Strategos-side adapter first then upstream to kavach core, or land directly in kavach — decide at Phase 1.
+- Kavach client-only session: build as a Torii-side adapter first then upstream to kavach core, or land directly in kavach — decide at Phase 1.
 - Kavach link mechanism (bun link vs path dep vs vendored workspace member) — Phase 0.
 - Whether to add streaming to `gateway-embedded` upstream (engine repo) or keep local non-streaming.
 - Which advanced RAG modes (RAPTOR/GraphRAG/ColBERT/SQL-RAG) are exposed in Playground v1 — tie to C5.

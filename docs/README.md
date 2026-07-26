@@ -1,4 +1,4 @@
-# Strategos — what we're building
+# Torii — what we're building
 
 This is the builder-facing overview. For the product pitch see the [root README](../README.md); for the per-module breakdown see [`modules/`](modules/); for design notes and the mockup gap analysis see [`design/`](design/).
 
@@ -6,7 +6,7 @@ This is the builder-facing overview. For the product pitch see the [root README]
 
 ## In one paragraph
 
-Strategos is a multi-tenant **AI gateway for organizations**. An organization connects its provider keys once (BYOK) into an encrypted vault; every member then gets **governed, key-less access** to every model through fallback chains, with budgets, guardrails, and a full audit trail enforced on each call. It ships as a **web Admin Portal**, a **web + desktop Member Console**, and a **marketing site**, backed by a **central gateway service** and **Supabase**.
+Torii is a multi-tenant **AI gateway for organizations**. An organization connects its provider keys once (BYOK) into an encrypted vault; every member then gets **governed, key-less access** to every model through fallback chains, with budgets, guardrails, and a full audit trail enforced on each call. It ships as a **web Admin Portal**, a **web + desktop Member Console**, and a **marketing site**, backed by a **central gateway service** and **Supabase**.
 
 ## Architecture — split-plane
 

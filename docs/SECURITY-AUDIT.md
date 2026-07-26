@@ -1,6 +1,6 @@
-# Strategos Central Gateway — Security Audit
+# Torii Central Gateway — Security Audit
 
-> **Context:** unattended (autonomous) security run against the Strategos central gateway
+> **Context:** unattended (autonomous) security run against the Torii central gateway
 > on branch `develop`. Findings below were produced by adversarial review and then
 > independently **verified against the actual code/DDL** (each carries a `CONFIRMED`
 > verdict). Severities shown are the **post-verification (corrected)** ratings; where a
@@ -353,7 +353,7 @@ and **pushed** to `origin/develop` in this run.
   bound identity, **never** from the key. Every parse/DB/verify failure returns `InvalidApiKey` → 401
   (**fail-closed**); the error carries no secret.
 - **Verification (local stack, DB 55322 / Supabase 55321, `chain:"local"`, $0):** `cargo build -q -p
-  strategos-gateway` exit 0, no warnings; 10/10 adversarial assertions PASS (valid key → `/v1/whoami`
+  torii-gateway` exit 0, no warnings; 10/10 adversarial assertions PASS (valid key → `/v1/whoami`
   200 with `sub`=bound identity, `role="apikey"`; valid key → `/v1/chat` 200 budget-resolved;
   same-prefix wrong secret, malformed, revoked, SQL-injection prefix all 401; valid JWT control 200 —
   JWT path intact). Positive round-trip: minted a fresh key → 200, then `status='revoked'` → same key

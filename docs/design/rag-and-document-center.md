@@ -1,4 +1,4 @@
-# Strategos — RAG & Document-Intelligence Design (C5 · W2 Library · W3 Playground)
+# Torii — RAG & Document-Intelligence Design (C5 · W2 Library · W3 Playground)
 
 > **Status:** DESIGN (research-backed). Authored per [`DECISIONS.md`](../DECISIONS.md) §3a
 > (document center + RAG), §3b (quality signals), §3c (sensitive structured data), and §2 W5
@@ -9,7 +9,7 @@
 > This design assimilates 2025–2026 published RAG best practice (contextual retrieval, hybrid
 > fusion, semantic/structural chunking, cross-encoder + late-interaction reranking, GraphRAG /
 > LazyGraphRAG / RAPTOR, privacy-preserving text-to-SQL, and RAG evaluation). Every choice is
-> grounded in a Strategos decision and, where useful, an external source (cited inline).
+> grounded in a Torii decision and, where useful, an external source (cited inline).
 
 ---
 

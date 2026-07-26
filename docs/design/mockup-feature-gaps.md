@@ -1,4 +1,4 @@
-# Strategos — Mockup Feature-Gap Analysis
+# Torii — Mockup Feature-Gap Analysis
 
 > Purpose: a screen-by-screen list of **UI-impacting features** to add or refine in the mockups,
 > derived from (a) the agreed architecture, (b) the richer feature set in the old `Old/` system,

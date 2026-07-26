@@ -1,6 +1,6 @@
 <script>
 	import { onMount } from 'svelte'
-	import { AppShell, PageHeader, Card, CardHead, Chip } from '@torii/ui'
+	import { AppShell, PageHeader, Card, CardHead, Chip, Async } from '@torii/ui'
 	import { api } from '$lib/api'
 
 	/** @type {import('$lib/api').ModelRow[]} */
@@ -58,7 +58,7 @@
 	/>
 
 	{#if loading}
-		<p class="px-5 text-sm text-ink-mute">Loading…</p>
+		<Async loading />
 	{:else if error}
 		<div class="px-5">
 			<Card pad

@@ -1,6 +1,6 @@
 <script>
 	import { onMount } from 'svelte'
-	import { AppShell, PageHeader, Card, CardHead, Glyph, Chip } from '@torii/ui'
+	import { AppShell, PageHeader, Card, CardHead, Glyph, Chip, Async } from '@torii/ui'
 	import { api } from '$lib/api'
 
 	/** @type {import('$lib/api').Provider[]} */
@@ -81,7 +81,7 @@
 	/>
 
 	{#if loading}
-		<p class="px-5 text-sm text-ink-mute">Loading…</p>
+		<Async loading />
 	{:else}
 		<div class="space-y-4 px-5 pb-6">
 			{#if error}

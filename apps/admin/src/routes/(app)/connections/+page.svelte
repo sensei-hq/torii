@@ -1,6 +1,6 @@
 <script>
 	import { onMount } from 'svelte'
-	import { AppShell, PageHeader, Card, CardHead, Glyph, Chip, Async } from '@torii/ui'
+	import { AppShell, PageHeader, Card, CardHead, Glyph, Chip, Async, Empty } from '@torii/ui'
 	import { api } from '$lib/api'
 
 	/** @type {import('$lib/api').Provider[]} */
@@ -222,7 +222,7 @@
 						</div>
 					{/each}
 					{#if keys.length === 0}
-						<p class="px-4 py-3 text-sm text-ink-mute">No API identities yet — issue one above.</p>
+						<Empty icon="i-solar-key-bold-duotone" message="No API identities yet" hint="Issue one above." pad="py-8" />
 					{/if}
 				</div>
 				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">

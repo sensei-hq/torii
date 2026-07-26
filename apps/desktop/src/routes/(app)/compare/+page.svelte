@@ -1,18 +1,18 @@
 <script>
 	// Ask one question across 2–4 models side by side (docs/mockups/app/view-compare.jsx).
 	// Real data only: each column runs the prompt for real — local models on-device via
-	// Tauri (gateway.infer), the cloud column through the C1 gateway (cloudInfer) — and
-	// shows the actual answer, cost and latency. Ranked by a real cost+speed heuristic.
-	// The LLM quality-judge (grounding/quality scores) is a fast-follow — it needs the C6
-	// judge surfaced to the desktop, so it is intentionally not faked here.
+	// Tauri (gateway.infer), named cloud models + the default gateway column through the C1
+	// gateway (cloudInfer) — showing the actual answer, cost and latency. The C6 quality
+	// judge (on by default) scores each answer and drives the ranking.
 	import { onMount } from 'svelte'
 	import { PageHeader, Card, Chip, ExecBadge, Meter, Async, Empty } from '@torii/ui'
 	import { cloudInfer, judgeAnswers } from '$lib/cloud'
 	import { gateway } from '$lib/gateway.js'
+	import { api } from '$lib/api'
 
-	// A synthetic column for the gateway/cloud plane — always available so there are ≥2
+	// A synthetic column for the gateway's DEFAULT chain — always available so there are ≥2
 	// options even with a single (or no) local model installed.
-	const CLOUD = { id: '__cloud__', name: 'Gateway (cloud)', local: false }
+	const CLOUD = { id: '__cloud__', name: 'Gateway (default)', local: false }
 
 	let prompt = $state('')
 	/** @type {(import('$lib/gateway').ModelInfo)[]} */
@@ -31,15 +31,38 @@
 	let scores = $state({})
 
 	onMount(async () => {
+		// Local models run on-device (Tauri); cloud models are called through the gateway.
+		// Both sources degrade independently — a failure of one still leaves the other.
 		/** @type {(import('$lib/gateway').ModelInfo)[]} */
 		let local = []
 		try {
 			local = await gateway.listModels()
 		} catch {
-			/* not running inside Tauri (or no local models) — the cloud column still works */
+			/* not running inside Tauri (or no local models) */
 		}
-		available = [...local, CLOUD]
-		selected = available.slice(0, 2).map((m) => m.id)
+		/** @type {(import('$lib/gateway').ModelInfo)[]} */
+		let cloud = []
+		try {
+			cloud = (await api.availableModels()).models.map((m) => ({
+				id: m.full_name,
+				name: m.display_name,
+				local: false
+			}))
+		} catch {
+			/* not signed in / gateway unreachable — local + the default column still work */
+		}
+		// Dedupe by id (a name could appear in both local + cloud); local wins. n is tiny.
+		/** @type {string[]} */
+		const seenIds = []
+		available = [...local, CLOUD, ...cloud].filter((m) => {
+			if (seenIds.includes(m.id)) return false
+			seenIds.push(m.id)
+			return true
+		})
+		// Default selection: prefer two distinct planes (a local + the gateway) when possible.
+		const first = available[0]
+		const second = available.find((m) => m.local !== first?.local) ?? available[1]
+		selected = [first, second].filter((m) => m != null).map((m) => m.id)
 		loadingModels = false
 	})
 
@@ -63,10 +86,14 @@
 	async function runOne(m, messages) {
 		const t0 = performance.now()
 		try {
+			// three planes: the gateway default chain, an on-device local model, or a named
+			// cloud model targeted through the gateway (which governs + routes it).
 			const r =
 				m.id === CLOUD.id
 					? await cloudInfer(messages)
-					: await gateway.infer(messages, { model: m.id })
+					: m.local
+						? await gateway.infer(messages, { model: m.id })
+						: await cloudInfer(messages, { model: m.id })
 			return {
 				status: /** @type {const} */ ('ok'),
 				content: r.content,

@@ -69,8 +69,17 @@ export interface WhoAmI {
 	capabilities: string[]
 }
 
+/** A chat model this member may call through the gateway (enabled + reachable). */
+export interface AvailableModel {
+	full_name: string
+	display_name: string
+	provider: string
+}
+
 export const api = {
 	requests: (limit = 50) => gwGet<{ requests: RequestRow[] }>(`/v1/requests?limit=${limit}`),
 	budgets: () => gwGet<{ nodes: BudgetNode[]; requests: unknown[] }>('/v1/budgets'),
-	whoami: () => gwGet<WhoAmI>('/v1/whoami')
+	whoami: () => gwGet<WhoAmI>('/v1/whoami'),
+	// the cloud chat models the member is allowed to call — powers Compare's cloud columns.
+	availableModels: () => gwGet<{ models: AvailableModel[] }>('/v1/models/available')
 }

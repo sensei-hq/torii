@@ -54,6 +54,19 @@ async fn require_read(
     Ok(tenant)
 }
 
+/// Member-accessible tenant resolution — the same freshness gate as `require_read` but no
+/// specific capability. For reads any authenticated member may perform (e.g. the list of
+/// models they are allowed to call), as opposed to the admin management views.
+async fn require_member(state: &SharedState, claims: &Claims) -> Result<Uuid, Response> {
+    let tenant = claims
+        .tenant_id
+        .ok_or_else(|| (StatusCode::FORBIDDEN, "no active tenant").into_response())?;
+    check_claims_version(&state.pool, claims)
+        .await
+        .map_err(|_| (StatusCode::UNAUTHORIZED, "stale token — re-authenticate").into_response())?;
+    Ok(tenant)
+}
+
 #[derive(Deserialize)]
 pub struct Paging {
     #[serde(default)]
@@ -310,6 +323,46 @@ pub async fn get_models(
         Ok(models) => (StatusCode::OK, Json(json!({ "models": models }))).into_response(),
         Err(e) => {
             tracing::error!("get_models: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}
+
+/// `GET /v1/models/available` — the models THIS member may actually call through the
+/// gateway: enabled for the tenant (workspace hasn't disabled them) AND with a configured
+/// endpoint. No `model.manage` (that's the admin management view) — any authenticated
+/// member sees what they can use. Powers the desktop Compare screen's cloud columns.
+pub async fn get_available_models(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+) -> Response {
+    let tenant = match require_member(&state, &claims).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let rows: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.provider, t.display_name), '[]'::json) from ( \
+           select m.full_name, coalesce(m.display_name, m.full_name) as display_name, \
+                  coalesce(p.name, 'unknown') as provider \
+             from config.models m \
+             left join config.providers p on p.id = m.provider_id \
+             left join public.tenant_model_state tms \
+               on tms.model_full_name = m.full_name and tms.tenant_id = $1 \
+            where m.deprecated_on is null \
+              and coalesce(tms.enabled, true) = true \
+              and exists(select 1 from config.model_endpoints e where e.model_id = m.id) \
+              and exists(select 1 from config.model_capabilities mc \
+                           join config.capabilities c on c.id = mc.capability_id \
+                          where mc.model_id = m.id and c.name = 'chat' \
+                            and coalesce(mc.supported, true) = true)) t",
+    )
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await;
+    match rows {
+        Ok(models) => (StatusCode::OK, Json(json!({ "models": models }))).into_response(),
+        Err(e) => {
+            tracing::error!("get_available_models: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
         }
     }

@@ -14,13 +14,13 @@ interface C1ChatResponse {
 // Provider keys stay on C1 — the desktop only forwards the token, never a key.
 export async function cloudInfer(
 	messages: ChatMessage[],
-	opts: { chain?: string } = {}
+	opts: { chain?: string; model?: string } = {}
 ): Promise<InferResult> {
 	// Deterministic E2E stub — no network, no token required. Strictly env-gated.
 	if (import.meta.env.VITE_E2E === 'true') {
 		return {
 			content: 'Hello from the cloud gateway.',
-			model: 'gemma4',
+			model: opts.model ?? 'gemma4',
 			plane: 'cloud',
 			cost_usd: 0,
 			duration_ms: 0
@@ -30,11 +30,16 @@ export async function cloudInfer(
 	const token = session.accessToken
 	if (!token) throw new Error('not signed in — the cloud plane needs a session')
 
-	// chain defaults to 'local' so the demo routes C1 → Ollama at $0; production uses 'chat'.
+	// A named model targets that model directly (the gateway routes + governs it, e.g.
+	// the workspace model-disable check); otherwise fall back to a chain. chain defaults
+	// to 'local' so the demo routes C1 → Ollama at $0; production uses 'chat'.
+	const body = opts.model
+		? { messages, model: opts.model }
+		: { messages, chain: opts.chain ?? 'local' }
 	const res = await fetch(`${GATEWAY_URL}/v1/chat`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-		body: JSON.stringify({ messages, chain: opts.chain ?? 'local' })
+		body: JSON.stringify(body)
 	})
 	if (!res.ok) throw new Error(`gateway ${res.status}: ${await res.text().catch(() => '')}`)
 

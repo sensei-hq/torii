@@ -223,6 +223,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/connections", get(routes::ledger::get_connections))
         .route("/org", get(routes::ledger::get_org))
         .route("/models", get(routes::ledger::get_models))
+        .route(
+            "/models/available",
+            get(routes::ledger::get_available_models),
+        )
         .route("/tools", get(routes::ledger::get_tools))
         .route("/devices", get(routes::ledger::get_devices))
         .route("/routing", get(routes::ledger::get_routing))

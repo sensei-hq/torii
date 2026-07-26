@@ -271,6 +271,53 @@ pub async fn apikeys_issue(
 }
 
 #[derive(Deserialize)]
+pub struct RevokeApiKey {
+    pub id: Uuid,
+}
+
+/// `POST /rpc/apikeys/revoke` — capability `apikey.manage`. Sets the key's status to
+/// `revoked`; it stops authenticating **immediately** (auth.rs denies any non-active
+/// status at the boundary). Tenant-scoped — a token can only revoke its own tenant's
+/// keys (404 otherwise) — and idempotent (re-revoking is a no-op).
+pub async fn apikeys_revoke(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<RevokeApiKey>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "apikey.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    // The key must belong to the caller's tenant (else 404 — no cross-tenant revoke).
+    let exists: bool = sqlx::query_scalar(
+        "select exists(select 1 from public.api_keys where id = $1 and tenant_id = $2)",
+    )
+    .bind(body.id)
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(false);
+    if !exists {
+        return (StatusCode::NOT_FOUND, "api key not found in tenant").into_response();
+    }
+
+    let write = sqlx::query(
+        "update public.api_keys set status = 'revoked' where id = $1 and tenant_id = $2",
+    )
+    .bind(body.id)
+    .bind(tenant)
+    .execute(&state.pool)
+    .await;
+    if let Err(e) = write {
+        tracing::error!("apikeys_revoke: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+    audit(&state, tenant, actor, "apikey.revoked", "api_key", Some(body.id)).await;
+    (StatusCode::OK, Json(json!({ "revoked": body.id }))).into_response()
+}
+
+#[derive(Deserialize)]
 pub struct ApproveRequest {
     pub id: Uuid,
 }

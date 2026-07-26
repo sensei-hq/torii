@@ -256,6 +256,8 @@ export const api = {
 	upsertBudgetNode: (node: Record<string, unknown>) => gwPost('/rpc/budgets/upsert-node', node),
 	// mint an identity-bound API key — the raw secret is returned once, never re-fetchable.
 	issueApiKey: (name?: string) => gwPost<IssuedKey>('/rpc/apikeys/issue', { name }),
+	// revoke a key — it stops authenticating immediately (auth denies non-active status).
+	revokeApiKey: (id: string) => gwPost('/rpc/apikeys/revoke', { id }),
 	// set a feature's workspace-scope governance posture (4-state).
 	setFeature: (feature_key: string, state: FeatureState) =>
 		gwPost('/rpc/governance/set-feature', {

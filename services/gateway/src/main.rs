@@ -243,6 +243,7 @@ async fn main() -> anyhow::Result<()> {
             post(routes::rpc::budgets_deny_request),
         )
         .route("/apikeys/issue", post(routes::rpc::apikeys_issue))
+        .route("/apikeys/revoke", post(routes::rpc::apikeys_revoke))
         .route("/rbac/assign-role", post(routes::rpc::rbac_assign_role))
         .route("/rbac/unassign-role", post(routes::rpc::rbac_unassign_role))
         .route(

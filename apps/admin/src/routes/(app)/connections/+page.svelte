@@ -13,6 +13,7 @@
 	// reveal-once state — the raw secret is held only in memory, shown once, then cleared.
 	let name = $state('')
 	let issuing = $state(false)
+	let busy = $state('') // id of the key currently being revoked
 	/** @type {import('$lib/api').IssuedKey | null} */
 	let revealed = $state(null)
 	let copied = $state(false)
@@ -43,6 +44,22 @@
 			error = e instanceof Error ? e.message : String(e)
 		} finally {
 			issuing = false
+		}
+	}
+
+	/** Revoke a key — it stops authenticating immediately. Irreversible (re-issue a new one).
+	 * @param {string} id */
+	async function revoke(id) {
+		if (busy) return
+		busy = id
+		error = ''
+		try {
+			await api.revokeApiKey(id)
+			await load()
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e)
+		} finally {
+			busy = ''
 		}
 	}
 
@@ -218,7 +235,19 @@
 									{k.last_used_at ? fmtDate(k.last_used_at) : '—'}
 								</div>
 							</div>
-							<Chip tone={k.status === 'active' ? 'success' : 'warning'}>{k.status}</Chip>
+							<div class="flex flex-shrink-0 items-center gap-2">
+								<Chip tone={k.status === 'active' ? 'success' : 'warning'}>{k.status}</Chip>
+								{#if k.status === 'active'}
+									<button
+										onclick={() => revoke(k.id)}
+										disabled={busy === k.id}
+										aria-label={`Revoke API key ${k.prefix}`}
+										title="Revoke this key"
+										class="rounded-md border border-paper-edge px-2 py-1 text-[11px] text-ink-mute hover:border-danger hover:text-danger disabled:opacity-40"
+										>{busy === k.id ? 'Revoking…' : 'Revoke'}</button
+									>
+								{/if}
+							</div>
 						</div>
 					{/each}
 					{#if keys.length === 0}

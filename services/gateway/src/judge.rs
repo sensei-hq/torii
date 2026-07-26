@@ -45,6 +45,113 @@ fn parse_score(s: &str) -> Option<f64> {
     num.parse::<f64>().ok().map(|v| v.clamp(0.0, 1.0))
 }
 
+/// Build the single-line judge prompt. gemma4-via-ollama returns empty completions for
+/// multi-line evaluation prompts but answers the single-line form (verified empirically);
+/// inputs are truncated so a huge conversation can't blow the judge prompt.
+fn judge_prompt(question: &str, answer: &str) -> String {
+    format!(
+        "Rate the quality of the assistant's answer from 0.0 to 1.0. Reply with ONLY the number. User: {} Assistant: {} Score:",
+        question.chars().take(1200).collect::<String>().replace('\n', " "),
+        answer.chars().take(1200).collect::<String>().replace('\n', " "),
+    )
+}
+
+/// The outcome of one judge run — primitives only (no engine response type leaks out), so
+/// both the background auto-judge and the synchronous `/v1/judge` endpoint reuse it.
+pub struct JudgeRun {
+    pub score: Option<f64>,
+    pub cost: f64,
+    pub raw: String,
+    pub duration_ms: u64,
+    pub model: String,
+    pub adapter: String,
+    pub api_model_id: Option<String>,
+    pub input_tokens: Option<u32>,
+    pub output_tokens: Option<u32>,
+    pub success: bool,
+    pub attempts: u8,
+}
+
+/// Run the judge chain for one question/answer pair (single retry on an empty/unparseable
+/// score — small local models occasionally return an empty completion). Pure scoring: NO
+/// budget, NO persistence — the caller owns those. Returns `None` only if the answer was
+/// empty or the judge produced no response at all.
+pub async fn execute_judge(state: &SharedState, question: &str, answer: &str) -> Option<JudgeRun> {
+    if answer.trim().is_empty() {
+        return None;
+    }
+
+    // Judge inference on the `judge` chain (local, $0). gemma4 is a REASONING model — it
+    // needs enough output budget to finish its chain-of-thought and emit the final score,
+    // else `content` comes back empty (ollama puts the CoT in `reasoning`).
+    let ireq = InferenceRequest {
+        capability: Capability::TextChat,
+        model: None,
+        router: None,
+        chain: Some("judge".to_string()),
+        payload: Payload::Chat {
+            messages: vec![Message::text(
+                MessageRole::User,
+                &judge_prompt(question, answer),
+            )],
+            system: None,
+            max_tokens: Some(512),
+            temperature: None,
+            tools: Vec::new(),
+        },
+        budget: None,
+        auth: None,
+        panel: None,
+        consensus: None,
+    };
+
+    let start = std::time::Instant::now();
+    let mut cost = 0.0;
+    let mut raw = String::new();
+    let mut score = None;
+    let mut last = None;
+    for _ in 0..2 {
+        match state.gateway.execute(&ireq).await {
+            Ok(r) => {
+                cost += r
+                    .actual_cost
+                    .as_ref()
+                    .map(|c| c.total_cost)
+                    .or_else(|| r.estimated_cost.as_ref().map(|e| e.estimated))
+                    .unwrap_or(0.0);
+                raw = r.content.clone().unwrap_or_default();
+                score = parse_score(&raw);
+                last = Some(r);
+                if score.is_some() {
+                    break;
+                }
+            }
+            Err(e) => {
+                tracing::warn!("judge: execute failed: {e}");
+                break;
+            }
+        }
+    }
+    let r = last?;
+    Some(JudgeRun {
+        score,
+        cost,
+        raw,
+        duration_ms: start.elapsed().as_millis() as u64,
+        model: r.model.clone().unwrap_or_default(),
+        adapter: r
+            .attempts
+            .last()
+            .map(|a| a.adapter.clone())
+            .unwrap_or_else(|| "unknown".to_string()),
+        api_model_id: r.attempts.last().map(|a| a.api_model_id.clone()),
+        input_tokens: r.usage.as_ref().map(|u| u.input_tokens),
+        output_tokens: r.usage.as_ref().map(|u| u.output_tokens),
+        success: r.success,
+        attempts: r.attempts.len() as u8,
+    })
+}
+
 /// Run the judge for a completed call (spawned; best-effort). Reserves budget → runs
 /// the judge inference on the `judge` chain → commits → persists the judge's own
 /// `inference_calls` row → records the `judge_score` signal on the judged call.
@@ -72,74 +179,17 @@ pub async fn judge_response(
         Err(_) => return,
     };
 
-    // 2. Judge inference on the `judge` chain (local gemma4). Truncate inputs so a huge
-    //    conversation can't blow the judge prompt.
-    // Single-line prompt — gemma4-via-ollama returns empty completions for multi-line
-    // evaluation prompts but answers the single-line form (verified empirically).
-    let prompt = format!(
-        "Rate the quality of the assistant's answer from 0.0 to 1.0. Reply with ONLY the number. User: {} Assistant: {} Score:",
-        question.chars().take(1200).collect::<String>().replace('\n', " "),
-        answer.chars().take(1200).collect::<String>().replace('\n', " "),
-    );
-    let ireq = InferenceRequest {
-        capability: Capability::TextChat,
-        model: None,
-        router: None,
-        chain: Some("judge".to_string()),
-        payload: Payload::Chat {
-            messages: vec![Message::text(MessageRole::User, &prompt)],
-            system: None,
-            // enough for a reasoning model (gemma4) to think + emit the final score.
-            max_tokens: Some(512),
-            temperature: None,
-            tools: Vec::new(),
-        },
-        budget: None,
-        auth: None,
-        panel: None,
-        consensus: None,
-    };
-
-    let start = std::time::Instant::now();
-    // Small local models occasionally return an empty completion — retry once on an
-    // empty/unparseable score before giving up (cheap on the local plane).
-    let mut resp_opt = None;
-    let mut cost = 0.0;
-    let mut raw = String::new();
-    let mut score = None;
-    for _ in 0..2 {
-        match state.gateway.execute(&ireq).await {
-            Ok(r) => {
-                cost += r
-                    .actual_cost
-                    .as_ref()
-                    .map(|c| c.total_cost)
-                    .or_else(|| r.estimated_cost.as_ref().map(|e| e.estimated))
-                    .unwrap_or(0.0);
-                raw = r.content.clone().unwrap_or_default();
-                score = parse_score(&raw);
-                resp_opt = Some(r);
-                if score.is_some() {
-                    break;
-                }
-            }
-            Err(e) => {
-                tracing::warn!("judge: execute failed: {e}");
-                break;
-            }
-        }
-    }
-    let duration_ms = start.elapsed().as_millis() as u64;
-    let resp = match resp_opt {
+    // Judge inference (shared with the synchronous /v1/judge endpoint).
+    let run = match execute_judge(&state, &question, &answer).await {
         Some(r) => r,
         None => {
             let _ = crate::budgets::release(&state.pool, tenant, hold).await;
             return;
         }
     };
-    let _ = crate::budgets::commit(&state.pool, tenant, hold, cost).await;
+    let _ = crate::budgets::commit(&state.pool, tenant, hold, run.cost).await;
 
-    // 3. Persist the judge's own inference_calls row (the judge IS inference).
+    // Persist the judge's own inference_calls row (the judge IS inference).
     let judge_call = InferenceCall {
         id: Uuid::new_v4(),
         session_id: None,
@@ -148,24 +198,20 @@ pub async fn judge_response(
         tier: Some("judge".to_string()),
         capability: Capability::TextChat,
         chain_id: Some("judge".to_string()),
-        adapter: resp
-            .attempts
-            .last()
-            .map(|a| a.adapter.clone())
-            .unwrap_or_else(|| "unknown".to_string()),
-        model: resp.model.clone().unwrap_or_default(),
-        api_model_id: resp.attempts.last().map(|a| a.api_model_id.clone()),
-        input_tokens: resp.usage.as_ref().map(|u| u.input_tokens),
-        output_tokens: resp.usage.as_ref().map(|u| u.output_tokens),
-        cost_usd: cost,
-        duration_ms,
-        status: if resp.success {
+        adapter: run.adapter.clone(),
+        model: run.model.clone(),
+        api_model_id: run.api_model_id.clone(),
+        input_tokens: run.input_tokens,
+        output_tokens: run.output_tokens,
+        cost_usd: run.cost,
+        duration_ms: run.duration_ms,
+        status: if run.success {
             CallStatus::Success
         } else {
             CallStatus::Failed
         },
         error_type: None,
-        fallback_sequence: resp.attempts.len() as u8,
+        fallback_sequence: run.attempts,
         recorded_at: chrono::Utc::now(),
     };
     let store = PgGatewayStore {
@@ -174,13 +220,13 @@ pub async fn judge_response(
     };
     let _ = store.insert_inference_call(&judge_call).await;
 
-    // 4. Record the judge_score signal on the JUDGED call.
-    match score {
+    // Record the judge_score signal on the JUDGED call.
+    match run.score {
         Some(s) => {
             let meta = serde_json::json!({
                 "judge_model": judge_call.model,
                 "judge_call_id": judge_call.id,
-                "raw": raw.chars().take(120).collect::<String>(),
+                "raw": run.raw.chars().take(120).collect::<String>(),
             });
             let _ = sqlx::query(
                 "insert into public.quality_signals \
@@ -199,7 +245,7 @@ pub async fn judge_response(
         }
         None => tracing::warn!(
             "judge: unparseable score from {:?}",
-            raw.chars().take(60).collect::<String>()
+            run.raw.chars().take(60).collect::<String>()
         ),
     }
 }

@@ -47,3 +47,30 @@ export async function cloudInfer(
 		duration_ms: 0
 	}
 }
+
+// C6 quality judge: score candidate answers to a question 0..1 via the gateway's local
+// judge (POST /v1/judge). Used by Compare to rank answers on quality. Returns a map of the
+// caller's answer id → score (null when an answer couldn't be judged). The judge runs on
+// the central gateway regardless of where each answer was produced (it scores the text).
+export async function judgeAnswers(
+	question: string,
+	answers: { id: string; content: string }[]
+): Promise<Record<string, number | null>> {
+	// Deterministic E2E stub — descending scores, no network.
+	if (import.meta.env.VITE_E2E === 'true') {
+		return Object.fromEntries(answers.map((a, i) => [a.id, Math.max(0, 1 - i * 0.15)]))
+	}
+
+	const token = session.accessToken
+	if (!token) throw new Error('not signed in — the quality judge needs a session')
+
+	const res = await fetch(`${GATEWAY_URL}/v1/judge`, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+		body: JSON.stringify({ question, answers })
+	})
+	if (!res.ok) throw new Error(`judge ${res.status}: ${await res.text().catch(() => '')}`)
+
+	const r: { scores: { id: string; score: number | null }[] } = await res.json()
+	return Object.fromEntries(r.scores.map((s) => [s.id, s.score]))
+}

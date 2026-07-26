@@ -214,6 +214,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/whoami", get(routes::whoami::whoami))
         .route("/chat", post(routes::chat::post_chat))
         .route("/chat/stream", post(routes::chat::post_chat_stream))
+        .route("/judge", post(routes::judge::post_judge))
         .route("/status", get(routes::status::get_status))
         .route("/audit", get(routes::ledger::get_audit))
         .route("/requests", get(routes::ledger::get_requests))

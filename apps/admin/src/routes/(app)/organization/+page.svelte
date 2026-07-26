@@ -46,6 +46,29 @@
 		}
 	}
 
+	/**
+	 * Remove a role from a member via /rpc/rbac/unassign-role. Server-guarded (subset +
+	 * last-owner). NOTE: bumps the target's claims_version — removing your own role
+	 * signs you out.
+	 * @param {string} profileId @param {string} roleId
+	 */
+	async function unassign(profileId, roleId) {
+		if (!roleId || busy) return
+		busy = profileId
+		error = ''
+		try {
+			await api.unassignRole(profileId, roleId)
+			await load()
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e)
+		} finally {
+			busy = ''
+		}
+	}
+
+	/** role key → id, for mapping a member's role chips (which carry keys) to unassign. */
+	const roleIdByKey = $derived(new Map(roles.map((r) => [r.key, r.id])))
+
 	/** roles a member does NOT already hold (candidates to assign) */
 	/** @param {import('$lib/api').Member} m */
 	const assignable = (m) => roles.filter((r) => !m.roles.includes(r.key))
@@ -99,7 +122,21 @@
 							</div>
 							<div class="flex flex-wrap items-center justify-end gap-1.5">
 								{#each m.roles as r (r)}
-									<Chip tone={r === 'owner' || r === 'admin' ? 'accent' : 'mute'}>{r}</Chip>
+									{@const rid = roleIdByKey.get(r)}
+									<span class="inline-flex items-center gap-0.5">
+										<Chip tone={r === 'owner' || r === 'admin' ? 'accent' : 'mute'}>{r}</Chip>
+										{#if rid}
+											<button
+												onclick={() => unassign(m.id, rid)}
+												disabled={busy === m.id}
+												aria-label={`Remove the ${r} role from ${m.display_name ?? m.id}`}
+												title={`Remove ${r}`}
+												class="grid h-4 w-4 place-items-center rounded-full text-ink-faint hover:bg-paper-mute hover:text-danger disabled:opacity-40"
+											>
+												<span class="i-solar-close-circle-bold-duotone h-3.5 w-3.5"></span>
+											</button>
+										{/if}
+									</span>
 								{/each}
 								{#if assignable(m).length > 0}
 									<!-- assign a role the member doesn't hold (value resets after each pick) -->

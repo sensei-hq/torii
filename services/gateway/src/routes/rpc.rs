@@ -478,6 +478,144 @@ pub async fn rbac_assign_role(
 }
 
 #[derive(Deserialize)]
+pub struct UnassignRole {
+    pub profile_id: Uuid,
+    pub role_id: Uuid,
+}
+
+/// `POST /rpc/rbac/unassign-role` — capability `role.manage`. Removes a role and
+/// BUMPS the target's claims_version. Guarded like assign (target + role in-tenant,
+/// anti-escalation subset — you can't strip a role whose caps exceed your own) PLUS a
+/// last-owner guard: the removal must not leave the tenant with zero members holding
+/// `tenant.manage` (no orphaning the org).
+pub async fn rbac_unassign_role(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<UnassignRole>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "role.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    // target must be an ACTIVE member of the caller's tenant (else 404 — no
+    // cross-tenant delete + no cross-tenant claims_version DoS).
+    let member: bool = sqlx::query_scalar(
+        "select exists(select 1 from core.profile_tenants \
+           where profile_id = $1 and tenant_id = $2 and status = 'active')",
+    )
+    .bind(body.profile_id)
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(false);
+    if !member {
+        return (StatusCode::NOT_FOUND, "profile not found in tenant").into_response();
+    }
+
+    // role must belong to the caller's tenant (else 404).
+    let role_in_tenant: bool = sqlx::query_scalar(
+        "select exists(select 1 from core.roles where id = $1 and tenant_id = $2)",
+    )
+    .bind(body.role_id)
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(false);
+    if !role_in_tenant {
+        return (StatusCode::NOT_FOUND, "role not found in tenant").into_response();
+    }
+
+    // anti-escalation subset guard: the REMOVED role's capabilities must be a subset
+    // of the ACTOR's own — blocks an admin (role.manage, no tenant.manage) from
+    // stripping an owner's `owner` role.
+    let removed_caps: Vec<String> = match sqlx::query_scalar(
+        "select capability from core.role_permissions where role_id = $1 and tenant_id = $2",
+    )
+    .bind(body.role_id)
+    .bind(tenant)
+    .fetch_all(&state.pool)
+    .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("unassign-role: resolve removed caps: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+        }
+    };
+    let actor_caps = match CapabilitySet::resolve(&state.pool, &claims).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("unassign-role: resolve actor caps: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if !removed_caps.iter().all(|c| actor_caps.has(c)) {
+        return (
+            StatusCode::FORBIDDEN,
+            "cannot remove a role exceeding your own capabilities",
+        )
+            .into_response();
+    }
+
+    // last-owner guard: the removal must not leave the tenant with zero members
+    // holding `tenant.manage`. Counts distinct owners AFTER hypothetically removing
+    // this (profile, role) row — correctly keeps the target if they hold it via
+    // another role, or another member holds it.
+    let owners_after: i64 = sqlx::query_scalar(
+        "select count(distinct pr.profile_id) \
+           from core.profile_roles pr \
+           join core.role_permissions rp \
+             on rp.role_id = pr.role_id and rp.tenant_id = pr.tenant_id \
+          where pr.tenant_id = $1 and rp.capability = 'tenant.manage' \
+            and not (pr.profile_id = $2 and pr.role_id = $3)",
+    )
+    .bind(tenant)
+    .bind(body.profile_id)
+    .bind(body.role_id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(0);
+    if owners_after == 0 {
+        return (
+            StatusCode::CONFLICT,
+            "cannot remove the last owner of the tenant",
+        )
+            .into_response();
+    }
+
+    // Guards passed — remove the grant.
+    let del = sqlx::query(
+        "delete from core.profile_roles where tenant_id = $1 and profile_id = $2 and role_id = $3",
+    )
+    .bind(tenant)
+    .bind(body.profile_id)
+    .bind(body.role_id)
+    .execute(&state.pool)
+    .await;
+    if let Err(e) = del {
+        tracing::error!("unassign-role: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+    // Freshness gate: invalidate the target's existing tokens (target is tenant-validated).
+    let _ =
+        sqlx::query("update core.profiles set claims_version = claims_version + 1 where id = $1")
+            .bind(body.profile_id)
+            .execute(&state.pool)
+            .await;
+    audit(
+        &state,
+        tenant,
+        actor,
+        "role.unassigned",
+        "profile_role",
+        Some(body.profile_id),
+    )
+    .await;
+    (StatusCode::OK, Json(json!({ "unassigned": body.role_id }))).into_response()
+}
+
+#[derive(Deserialize)]
 pub struct SetFeature {
     pub feature_key: String,
     pub scope_type: String, // workspace | space | role

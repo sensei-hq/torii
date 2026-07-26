@@ -275,6 +275,10 @@ export const api = {
 	// assign a role to a member (bumps the target's claims_version — self-assign signs you out).
 	assignRole: (profile_id: string, role_id: string) =>
 		gwPost('/rpc/rbac/assign-role', { profile_id, role_id }),
+	// remove a role from a member. Server-guarded: anti-escalation subset + a last-owner
+	// guard (can't orphan the tenant). Bumps the target's claims_version.
+	unassignRole: (profile_id: string, role_id: string) =>
+		gwPost('/rpc/rbac/unassign-role', { profile_id, role_id }),
 	// workspace-default policy toggles.
 	settings: () => gwGet<{ settings: { setting_key: string; enabled: boolean }[] }>('/v1/settings'),
 	setSetting: (setting_key: string, enabled: boolean) =>

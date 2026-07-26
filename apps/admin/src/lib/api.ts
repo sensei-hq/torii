@@ -43,10 +43,9 @@ async function onUnauthorized(): Promise<void> {
 	} catch {
 		/* already gone */
 	}
-	// Hard nav (not goto): signOut() fires the kavach client's onAuthChange, which
-	// otherwise redirects to its default /auth (404) and beats a client-side goto.
-	// /signin is public in the kavach rules, so a full load renders it directly; the
-	// page teardown also re-arms `redirecting` for the next session.
+	// Hard nav (not goto): a full load to /signin (public in the kavach rules) tears
+	// down all in-memory auth state and re-arms `redirecting` via page teardown —
+	// robust against any client-nav race with the sign-out event.
 	window.location.assign('/signin')
 }
 

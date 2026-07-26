@@ -1,14 +1,10 @@
 <script>
 	import { setContext, onMount } from 'svelte'
-	import { page } from '$app/state'
-	import { invalidateAll, goto } from '$app/navigation'
+	import { goto } from '$app/navigation'
 	import { api } from '$lib/api'
 
 	let { children } = $props()
 	let ready = $state(false)
-
-	const kavach = $state({})
-	setContext('kavach', kavach)
 
 	// Real shell identity for AppShell's top bar (replaces the mock "Aiko · Administrator").
 	// A $state object shared via context so the async identity fetch updates the shell
@@ -20,17 +16,17 @@
 		org: null,
 		onSignout: async () => {
 			await api.signOut()
-			// Hard nav (not goto): signOut fires Supabase onAuthStateChange → the kavach
-			// adapter's invalidateAll re-runs the root load and cancels a client-side goto.
-			// A full load to /signin (now public) tears down all in-memory state cleanly.
+			// Hard nav (not goto): a full load to /signin (public) tears down all in-memory
+			// auth state cleanly and avoids any client-nav race with the sign-out event.
 			window.location.assign('/signin')
 		}
 	})
 	setContext('adminShell', shell)
 
 	onMount(async () => {
-		// Client-side auth guard: no Supabase session → sign in (runs first so a
-		// missing/failed kavach adapter can't leave the app unguarded).
+		// Client-side auth guard: no Supabase session → sign in. (The admin's session is
+		// managed entirely by api.ts's supabase-js client; the server hooks.server.js
+		// kavach handle enforces route rules — no client kavach instance is needed here.)
 		if (!(await api.hasSession())) {
 			goto('/signin')
 			return
@@ -44,14 +40,6 @@
 			if (org) shell.org = { mark: org[0].toUpperCase(), name: org, sub: 'organization' }
 		} catch {
 			/* shell falls back to a neutral label */
-		}
-		try {
-			const { createKavach } = await import('kavach')
-			const { adapter, logger } = await import('$kavach/auth')
-			Object.assign(kavach, createKavach(adapter, { logger, invalidateAll }))
-			kavach.onAuthChange(page.url)
-		} catch (e) {
-			console.warn('kavach init skipped:', e)
 		}
 	})
 </script>

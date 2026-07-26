@@ -79,6 +79,9 @@ target/
 !.env.example
 supabase.env
 
+# gateway service (launchd) log
+services/gateway/*.log
+
 # Playwright artifacts
 **/test-results/
 **/playwright-report/

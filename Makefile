@@ -10,7 +10,8 @@
 ## Bun workspaces: packages/* apps/*
 ## Cargo workspace: Cargo.toml at monorepo root → target/ at monorepo root
 
-.PHONY: install build test check lint e2e clean clean-cache clean-all help
+.PHONY: install build test check lint e2e clean clean-cache clean-all help \
+        gateway-build gateway-service gateway-restart gateway-stop gateway-logs gateway-status
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 
@@ -45,6 +46,58 @@ e2e: ## Run Playwright e2e for admin and desktop (desktop e2e builds the Tauri a
 	# Desktop e2e compiles the full Tauri bundle via `bunx tauri build --debug`.
 	# Expect 5-15 min on a cold cache; subsequent runs use incremental Rust builds.
 	bun run --filter @torii/desktop test:e2e
+
+# ── Gateway service (macOS launchd — resilient, auto-restarting dev service) ───
+#
+# The gateway loads its env from services/gateway/.env (dotenvy) — so the service is
+# NOT tied to a shell. One-time setup: `cp services/gateway/.env.example services/
+# gateway/.env` + fill it in, then `make gateway-service`. After a code change,
+# `make gateway-restart` rebuilds + restarts; launchd's KeepAlive auto-restarts on crash.
+
+GW_LABEL  := dev.torii.gateway
+GW_PLIST  := $(HOME)/Library/LaunchAgents/$(GW_LABEL).plist
+GW_BIN    := $(CURDIR)/target/debug/torii-gateway
+GW_CWD    := $(CURDIR)/services/gateway
+GW_LOG    := $(GW_CWD)/gateway.log
+GW_DOMAIN := gui/$(shell id -u)
+
+gateway-build: ## Build the torii-gateway binary (debug)
+	cargo build -p torii-gateway
+
+gateway-service: gateway-build ## Install + start the gateway as a launchd service (auto-restart)
+	@test -f "$(GW_CWD)/.env" || { echo "!! Missing $(GW_CWD)/.env — copy .env.example and fill it in first."; exit 1; }
+	@mkdir -p "$(HOME)/Library/LaunchAgents"
+	@printf '%s\n' \
+	  '<?xml version="1.0" encoding="UTF-8"?>' \
+	  '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+	  '<plist version="1.0"><dict>' \
+	  '  <key>Label</key><string>$(GW_LABEL)</string>' \
+	  '  <key>ProgramArguments</key><array><string>$(GW_BIN)</string></array>' \
+	  '  <key>WorkingDirectory</key><string>$(GW_CWD)</string>' \
+	  '  <key>KeepAlive</key><true/>' \
+	  '  <key>RunAtLoad</key><true/>' \
+	  '  <key>ThrottleInterval</key><integer>5</integer>' \
+	  '  <key>StandardOutPath</key><string>$(GW_LOG)</string>' \
+	  '  <key>StandardErrorPath</key><string>$(GW_LOG)</string>' \
+	  '  <key>ProcessType</key><string>Interactive</string>' \
+	  '</dict></plist>' > "$(GW_PLIST)"
+	-@launchctl bootout $(GW_DOMAIN)/$(GW_LABEL) 2>/dev/null || true
+	@launchctl bootstrap $(GW_DOMAIN) "$(GW_PLIST)"
+	@sleep 3; curl -s --max-time 3 -o /dev/null -w "gateway service up — health: %{http_code}\n" http://127.0.0.1:8787/health || echo "starting… check: make gateway-logs"
+
+gateway-restart: gateway-build ## Rebuild + restart the gateway service (fresh binary takes effect)
+	@launchctl kickstart -k $(GW_DOMAIN)/$(GW_LABEL) 2>/dev/null || { echo "!! service not installed — run 'make gateway-service' first"; exit 1; }
+	@sleep 3; curl -s --max-time 3 -o /dev/null -w "restarted — health: %{http_code}\n" http://127.0.0.1:8787/health || echo "starting… check: make gateway-logs"
+
+gateway-stop: ## Stop + unload the gateway service
+	-@launchctl bootout $(GW_DOMAIN)/$(GW_LABEL) 2>/dev/null && echo "gateway service stopped" || echo "gateway service not running"
+
+gateway-logs: ## Tail the gateway log
+	@touch "$(GW_LOG)"; tail -n 40 -f "$(GW_LOG)"
+
+gateway-status: ## Gateway service state + health
+	-@launchctl print $(GW_DOMAIN)/$(GW_LABEL) 2>/dev/null | grep -E "state = |pid = " | head -2 || echo "service not installed"
+	-@curl -s --max-time 3 -o /dev/null -w "health: %{http_code}\n" http://127.0.0.1:8787/health || echo "health: down"
 
 # ── Clean / Disk management ───────────────────────────────────────────────────
 

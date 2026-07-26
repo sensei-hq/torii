@@ -7,6 +7,6 @@
 	let { children } = $props()
 </script>
 
-<svelte:body use:themable={{ theme: vibe, storageKey: 'strategos-admin-theme' }} />
+<svelte:body use:themable={{ theme: vibe, storageKey: 'seiki-admin-theme' }} />
 
 {@render children()}

@@ -20,7 +20,7 @@ test.describe('Ask — local inference', () => {
 		await expect(input).toBeVisible({ timeout: 10_000 })
 
 		// Type a question and submit
-		await input.fill('What is Strategos?')
+		await input.fill('What is Torii?')
 		// The composer Send button (data-send). Header now also has plane-toggle
 		// buttons inside [data-ask], so scope to the stable hook (avoids strict-mode).
 		const sendButton = tauriPage.locator('[data-ask] [data-send]')

@@ -1,12 +1,12 @@
-//! In-process inference engine for the Strategos desktop app — the **local
+//! In-process inference engine for the Torii desktop app — the **local
 //! plane** (Phase 1b).
 //!
 //! This builds an `Arc<gateway::Gateway>` that runs entirely inside the Tauri
 //! process: no daemon, no HTTP hop. A single `embedded-llama` adapter
 //! (in-process llama.cpp via `sensei-local-providers::EmbeddedLlamaAdapter`,
 //! re-exported as `gateway::local::EmbeddedLlamaAdapter`) serves chat locally, with the model
-//! bytes resolved through a two-stage registry — Strategos-managed files first
-//! (`~/.strategos/models`), then a read-through view of the local Ollama cache
+//! bytes resolved through a two-stage registry — Torii-managed files first
+//! (`~/.torii/models`), then a read-through view of the local Ollama cache
 //! (`~/.ollama/models`). A model already pulled by Ollama (e.g. `gemma2:2b`) is
 //! reused in place; nothing has to ship with the binary. The per-model worker
 //! loads lazily on first inference.
@@ -65,7 +65,7 @@ async fn register_embedded_llama(adapters: &AdapterRegistry) {
     use gateway::local::{ChainedResolver, EmbeddedLlamaAdapter, ManagedResolver, OllamaResolver};
 
     let resolver = ChainedResolver::new()
-        .push(Arc::new(ManagedResolver::new(strategos_models_dir())))
+        .push(Arc::new(ManagedResolver::new(torii_models_dir())))
         .push(Arc::new(OllamaResolver::new(ollama_models_dir())));
 
     match EmbeddedLlamaAdapter::with_shared_backend("embedded-llama", Arc::new(resolver)) {
@@ -89,10 +89,10 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Strategos-managed model directory (`~/.strategos/models`), created if
+/// Torii-managed model directory (`~/.torii/models`), created if
 /// missing. First leg of the resolver chain.
-fn strategos_models_dir() -> PathBuf {
-    let dir = home_dir().join(".strategos").join("models");
+fn torii_models_dir() -> PathBuf {
+    let dir = home_dir().join(".torii").join("models");
     if let Err(e) = std::fs::create_dir_all(&dir) {
         log::warn!("gateway: could not create {}: {e}", dir.display());
     }

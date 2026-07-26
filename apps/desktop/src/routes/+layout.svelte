@@ -37,7 +37,7 @@
 		if (import.meta.env.VITE_E2E === 'true') {
 			// E2E only: deterministic seeded session, no network. Never true in production builds.
 			session.ready = true
-			session.user = { id: 'e2e', email: 'e2e@strategos.test', name: 'E2E Member', role: 'member' }
+			session.user = { id: 'e2e', email: 'e2e@torii.test', name: 'E2E Member', role: 'member' }
 		} else {
 			await session.init(sk)
 		}
@@ -49,5 +49,5 @@
 	})
 </script>
 
-<svelte:body use:themable={{ theme: vibe, storageKey: 'strategos-desktop-theme' }} />
+<svelte:body use:themable={{ theme: vibe, storageKey: 'torii-desktop-theme' }} />
 {@render children()}

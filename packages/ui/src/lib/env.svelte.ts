@@ -1,4 +1,4 @@
-// Capability/env state shared by the shell. Mirrors the mockups' StrategosEnv.
+// Capability/env state shared by the shell. Mirrors the mockups' ToriiEnv.
 type Mode = 'desktop' | 'offline' | 'web'
 const ORDER: Mode[] = ['desktop', 'offline', 'web']
 

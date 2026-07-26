@@ -25,8 +25,9 @@ comment on table tenants is
 - domain: optional email domain for auto-assignment (e.g. acme.com).
   When a new auth.users row is inserted, assign_tenant_by_domain() matches
   split_part(email, ''@'', 2) against this column.
-- is_platform: exactly one tenant may have this set to true — the Strategos
-  platform tenant. Users of this tenant can also manage the config schema
+- is_platform: exactly one tenant may have this set to true — the Seiki
+  platform tenant (the operator that runs the torii gateway for everyone else).
+  Users of this tenant can also manage the config schema
   (providers, models, routers). All other capabilities are identical to any
   other tenant.
 - Tenant isolation is enforced via RLS (see policies/), not partitioning.';
@@ -34,5 +35,5 @@ comment on table tenants is
 -- Bootstrap the single platform tenant at apply time (idempotent). It owns
 -- platform-default catalog (e.g. fallback chains) and must exist before seed import.
 insert into tenants (id, name, slug, is_platform, status, modified_by)
-values ('00000000-0000-0000-0000-000000000000', 'Strategos Platform', 'platform', true, 'active', 'seed')
+values ('00000000-0000-0000-0000-000000000000', 'Seiki Platform', 'platform', true, 'active', 'seed')
 on conflict (id) do nothing;

@@ -1,6 +1,6 @@
 <script>
 	import { onMount } from 'svelte'
-	import { PageHeader, Card, CardHead, Chip } from '@torii/ui'
+	import { PageHeader, Card, CardHead, Chip, Async, Empty } from '@torii/ui'
 	import { api } from '$lib/api'
 
 	/** @type {import('$lib/api').RequestRow[]} */
@@ -37,7 +37,7 @@
 	/>
 
 	{#if loading}
-		<p class="px-5 text-sm text-ink-mute">Loading…</p>
+		<Async loading />
 	{:else if error}
 		<div class="px-5">
 			<Card pad
@@ -91,7 +91,7 @@
 								</tr>
 							{/each}
 							{#if requests.length === 0}
-								<tr><td colspan="5" class="py-3 text-center text-ink-mute">No requests yet — ask something.</td></tr>
+								<tr><td colspan="5"><Empty icon="i-solar-history-bold-duotone" message="No requests yet" hint="Ask something." pad="py-8" /></td></tr>
 							{/if}
 						</tbody>
 					</table>

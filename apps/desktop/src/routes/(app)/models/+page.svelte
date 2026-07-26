@@ -1,7 +1,7 @@
 <script>
 	import { onMount } from 'svelte'
 	import { gateway } from '$lib/gateway.js'
-	import { ExecBadge, Pill } from '@torii/ui'
+	import { ExecBadge, Pill, Async } from '@torii/ui'
 
 	let models = $state([])
 	let loading = $state(true)
@@ -29,7 +29,7 @@
 
 	<div class="flex-1 overflow-auto px-6 py-4">
 		{#if loading}
-			<p class="text-sm text-ink-mute">Loading…</p>
+			<Async loading />
 		{:else if error}
 			<p class="text-sm text-ink-mute">{error}</p>
 		{:else if models.length === 0}

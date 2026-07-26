@@ -64,7 +64,7 @@
 	const isActive = (href) => (href === '/' ? path === '/' : path.startsWith(href))
 </script>
 
-<div class="grid h-full grid-rows-[auto_1fr]">
+<div data-app-shell class="grid h-full grid-rows-[auto_1fr]">
 	<!-- Chrome top bar -->
 	<header
 		class="flex h-[42px] flex-shrink-0 items-center gap-3 border-b border-paper-edge bg-paper px-4"

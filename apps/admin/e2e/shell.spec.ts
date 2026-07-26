@@ -1,7 +1,11 @@
 import { test, expect } from '@playwright/test'
 
-test('admin boots and renders the shell with the Zen-Sumi skin', async ({ page }) => {
-	await page.goto('/') // Phase 0: '/' is public → shell renders directly
+// Deterministic, no auth required. Phase-0 behaviour: the (app) guard bounces an
+// unauthenticated visitor to /signin, which renders the real Seiki sign-in page.
+test('unauthenticated / redirects to the sign-in page', async ({ page }) => {
+	await page.goto('/')
 	await expect(page.locator('app[data-style="rokkit"]')).toBeVisible()
-	await expect(page.locator('[data-app-shell]')).toBeVisible()
+	await expect(page).toHaveURL(/\/signin$/)
+	await expect(page.getByRole('heading', { name: /sign in to the admin portal/i })).toBeVisible()
+	await expect(page.getByRole('button', { name: /^sign in$/i })).toBeVisible()
 })

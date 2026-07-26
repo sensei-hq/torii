@@ -19,7 +19,7 @@ milestone: Phase-0
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. Consult the **rokkit skills** (`rokkit-components`, `semantic-styles-rokkit`, `skin-system-rokkit`, `command-system-rokkit`) at the Rokkit steps and the **svelte** MCP/skills for any `.svelte` file.
 
-**Goal:** Stand up the Strategos monorepo so both front-of-house apps (web **Admin** + desktop **Member Console** client) boot on a shared Rokkit design system and a swappable data layer, with the `gateway` crates and `kavach` linked dev-in-place — the foundation every later phase builds on.
+**Goal:** Stand up the Torii + Seiki monorepo so both front-of-house apps (web **Admin** + desktop **Member Console** client) boot on a shared Rokkit design system and a swappable data layer, with the `gateway` crates and `kavach` linked dev-in-place — the foundation every later phase builds on.
 
 **Architecture:** A `bun` workspace (`apps/*`, `packages/*`, `services/*`) plus a Cargo workspace (`services/gateway`, `apps/desktop/src-tauri`) that `[patch]`-es the sibling `gateway/` engine repo. `packages/ui` ports the mockups' Zen-Sumi visual language onto Rokkit (UnoCSS `presetRokkit` + a skin); `packages/core` exposes a `DataSource` interface with a mock adapter (seeded from the mockups) and a real adapter built on the Kavach Supabase adapter. `apps/admin` (SvelteKit → Cloudflare, kavach hybrid auth) and `apps/desktop` (SvelteKit static + Tauri 2 shell) both render a shared `AppShell`.
 
@@ -29,7 +29,7 @@ milestone: Phase-0
 
 - The sibling repos exist: `~/Developer/strategos/gateway` (the shared `sensei-*` engine repo — checked out at tag `v0.4.6`; **sibling of `monorepo/`**, hence the `../gateway` `[patch]` path in Task 1), `~/Developer/kavach`, and the Rokkit repo (the source of `@rokkit/*`).
 - `bun`, Rust stable + `cargo`, and the Tauri 2 system deps are installed.
-- A Supabase project / local stack is reachable. `PUBLIC_SUPABASE_URL` + `PUBLIC_SUPABASE_ANON_KEY` are known (see `.env.local` at the strategos repo root). **Schema note:** Phase 0's default data path is the **mock** adapter; the Supabase adapter is a stub read (Task 4 Step 8). The `models` table it reads — and every privileged table — is reshaped by **F1-rework (P3)** per `DECISIONS.md §5` (role/permission matrix, `router_credentials`, `similarity_search`→`vector(1024)`, consolidated `inference_calls`). Do **not** harden or depend on the current insecure F1 schema in P0; the real data layer lands after P3.
+- A Supabase project / local stack is reachable. `PUBLIC_SUPABASE_URL` + `PUBLIC_SUPABASE_ANON_KEY` are known (see `.env.local` at the Torii repo root). **Schema note:** Phase 0's default data path is the **mock** adapter; the Supabase adapter is a stub read (Task 4 Step 8). The `models` table it reads — and every privileged table — is reshaped by **F1-rework (P3)** per `DECISIONS.md §5` (role/permission matrix, `router_credentials`, `similarity_search`→`vector(1024)`, consolidated `inference_calls`). Do **not** harden or depend on the current insecure F1 schema in P0; the real data layer lands after P3.
 
 > **Crate reality (MIG-1, per `DECISIONS.md §3` + `gateway-issues.md`):** the engine is the six `sensei-*` crates at `v0.4.6` — `sensei-kernel`, `sensei-gateway`, `sensei-cloud-providers`, `sensei-local-engine`, `sensei-local-providers`, `sensei-kokoro`. There is **no** `gateway-embedded` crate and **no** `InferenceAdapter` type (deleted → capability-segregated traits `ChatModel`/`EmbedModel`/…). The desktop local plane is **in-process** (`sensei-local-providers::EmbeddedLlamaAdapter` / `OrtAdapter`, GGUF, **no daemon** — *not* "embedded Ollama"). P0 only wires the `[patch]` scaffolding (Task 1); the engine crates are first consumed in P1b (desktop embedded) / P2a (`services/gateway`).
 
@@ -52,7 +52,7 @@ monorepo/
       uno.config.js                # presetRokkit(rokkit.config)
       rokkit.config.js             # Zen-Sumi → Rokkit palette/skin/tokens
       src/app.css                  # Rokkit theme imports + Zen-Sumi token layer
-      src/index.js                 # re-exports Rokkit + Strategos atoms
+      src/index.js                 # re-exports Rokkit + Torii atoms
       src/lib/Pill.svelte          # first migrated atom (has test)
       src/lib/Pill.spec.svelte.js
       src/lib/ExecBadge.svelte     # split-plane badge atom (has test)
@@ -153,7 +153,7 @@ resolver = "2"
 # git deps to the local checkout while developing). Package names are `sensei-*`; the crate
 # DIRS under crates/ are unprefixed (kernel, gateway, cloud-providers, …). There is NO
 # `gateway-embedded` and NO `InferenceAdapter` (MIG-1 / DECISIONS §3). kokoro (TTS) is not
-# consumed by Strategos v1 — omit it.
+# consumed by Torii v1 — omit it.
 [patch."https://github.com/sensei-hq/gateway"]
 sensei-kernel          = { path = "../gateway/crates/kernel" }
 sensei-gateway         = { path = "../gateway/crates/gateway" }
@@ -792,7 +792,7 @@ export const load: LayoutServerLoad = ({ locals }) => ({
   let { children } = $props()
 </script>
 
-<svelte:body use:themable={{ theme: vibe, storageKey: 'strategos-admin-theme' }} />
+<svelte:body use:themable={{ theme: vibe, storageKey: 'seiki-admin-theme' }} />
 {@render children()}
 ```
 
@@ -825,7 +825,7 @@ export const load: LayoutServerLoad = ({ locals }) => ({
 </script>
 
 <AppShell app="admin" title="Overview">
-  <p class="p-4 text-surface-z6">Strategos Admin — shell booted.</p>
+  <p class="p-4 text-surface-z6">Seiki Admin — shell booted.</p>
 </AppShell>
 ```
 
@@ -925,7 +925,7 @@ export default defineConfig({
 })
 ```
 
-`apps/desktop/uno.config.js`, `rokkit.config.js`, `src/app.html`, `src/app.css` — identical to the admin versions (Task 5 Steps 2, 4, 5), with `storageKey: 'strategos-desktop-theme'`.
+`apps/desktop/uno.config.js`, `rokkit.config.js`, `src/app.html`, `src/app.css` — identical to the admin versions (Task 5 Steps 2, 4, 5), with `storageKey: 'torii-desktop-theme'`.
 
 - [ ] **Step 3: Layout + home route (shared shell, desktop chrome)**
 
@@ -940,7 +940,7 @@ export default defineConfig({
   let { children } = $props()
 </script>
 
-<svelte:body use:themable={{ theme: vibe, storageKey: 'strategos-desktop-theme' }} />
+<svelte:body use:themable={{ theme: vibe, storageKey: 'torii-desktop-theme' }} />
 {@render children()}
 ```
 
@@ -952,7 +952,7 @@ export default defineConfig({
 </script>
 
 <AppShell app="console" title="Workspace">
-  <p class="p-4 text-surface-z6">Strategos Console — desktop shell booted.</p>
+  <p class="p-4 text-surface-z6">Torii Console — desktop shell booted.</p>
 </AppShell>
 ```
 
@@ -1090,7 +1090,7 @@ Expected: FAIL — `Cannot find module './AppShell.svelte'`.
     aria-label="Primary"
     class="flex flex-col gap-1 border-r border-surface-z3 bg-surface-z1 p-3"
   >
-    <div class="mb-3 text-sm font-semibold text-primary-500">Strategos</div>
+    <div class="mb-3 text-sm font-semibold text-primary-500">Torii</div>
     {#each items as item}
       <a
         href={`#${item.toLowerCase()}`}
@@ -1131,7 +1131,7 @@ git commit -m "feat(ui): shared AppShell + ExecBadge atoms"
 
 ## Task 7.5: E2E Playwright harness + shell smoke tests
 
-Desktop uses the **Tauri socket harness** (`@srsholmes/tauri-playwright` + `tauri-plugin-playwright`, per the `tauri-playwright-testing` skill and the Sensei app at `~/Developer/sensei-hq/sensei/app/e2e`). Admin uses **web-mode Playwright**. Strategos has no separate daemon, so the desktop globalSetup is build → spawn → wait-for-socket → assert (no daemon-port / DB-isolation checks).
+Desktop uses the **Tauri socket harness** (`@srsholmes/tauri-playwright` + `tauri-plugin-playwright`, per the `tauri-playwright-testing` skill and the Sensei app at `~/Developer/sensei-hq/sensei/app/e2e`). Admin uses **web-mode Playwright**. Torii has no separate daemon, so the desktop globalSetup is build → spawn → wait-for-socket → assert (no daemon-port / DB-isolation checks).
 
 ### Desktop (Tauri)
 

@@ -21,9 +21,9 @@ milestone: Phase-1a
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax. For `.svelte` files use the **svelte** skill/MCP; for the ⌘K palette use **command-system-rokkit**; for skins/tokens use **skin-system-rokkit**/**semantic-styles-rokkit** (remember: `data-skin` + named tokens, no `-z{n}`). For E2E use **tauri-playwright-testing** (the harness already exists at `apps/desktop/e2e`).
 
-**Goal:** The Strategos desktop client gets its real Member Console shell and working client-only authentication: an unauthenticated user lands on Sign-in; after signing in, the session persists across restarts and they see the shell (title bar + nav rail + device footer + ⌘K workspace palette) with the console routes gated behind the session — all in the Tauri SPA with no SvelteKit server.
+**Goal:** The Torii desktop client gets its real Member Console shell and working client-only authentication: an unauthenticated user lands on Sign-in; after signing in, the session persists across restarts and they see the shell (title bar + nav rail + device footer + ⌘K workspace palette) with the console routes gated behind the session — all in the Tauri SPA with no SvelteKit server.
 
-**Architecture:** Auth is Kavach's **client-only session mode** (the first upstream kavach enhancement): a `supabase-js` client with `persistSession: true` wrapped by `@kavach/adapter-supabase`'s `getAdapter`, driven by `createKavach` on the client, with a runes `session.svelte.ts` store and a `@kavach/sentry` guard evaluated client-side (no `hooks.server`, no `/auth/session` endpoint). The shell chrome is ported from the mockups (`shell.jsx`/`chrome.jsx`) into `packages/ui` and composed in the desktop `(app)` layout; a `StrategosEnv`-style runes store drives desktop/offline/web gating.
+**Architecture:** Auth is Kavach's **client-only session mode** (the first upstream kavach enhancement): a `supabase-js` client with `persistSession: true` wrapped by `@kavach/adapter-supabase`'s `getAdapter`, driven by `createKavach` on the client, with a runes `session.svelte.ts` store and a `@kavach/sentry` guard evaluated client-side (no `hooks.server`, no `/auth/session` endpoint). The shell chrome is ported from the mockups (`shell.jsx`/`chrome.jsx`) into `packages/ui` and composed in the desktop `(app)` layout; a `ToriiEnv`-style runes store drives desktop/offline/web gating.
 
 **Tech Stack:** SvelteKit static (SPA) + Svelte 5 · `@supabase/supabase-js` (persistSession) · `kavach` + `@kavach/adapter-supabase` + `@kavach/sentry` + `@kavach/ui` · `@rokkit/states` (commands/vibe) + `@rokkit/actions` (shortcuts/themable) + `@rokkit/ui` (CommandPalette) · Tauri 2 · Playwright (existing harness).
 
@@ -37,7 +37,7 @@ milestone: Phase-1a
 packages/
   core/
     src/auth/
-      client.ts               # createStrategosKavach(): supabase(persistSession) + getAdapter + createKavach
+      client.ts               # createToriiKavach(): supabase(persistSession) + getAdapter + createKavach
       session.svelte.ts       # runes store: session/user/role, signIn/signOut, onAuthChange
       guard.ts                # createGuard(rules): client-side @kavach/sentry protect(path)
       auth.spec.ts
@@ -50,7 +50,7 @@ packages/
       TitleBar.svelte         # brand · EnvChip · search · theme · user menu
       NavRail.svelte          # brand+version · nav groups · DeviceFooter
       DesktopShell.svelte     # composes TitleBar + NavRail + ⌘K palette + content slot
-      env.svelte.ts           # StrategosEnv runes store (mode + capabilities)
+      env.svelte.ts           # ToriiEnv runes store (mode + capabilities)
       commands.ts             # ⌘K command + workspace registry (@rokkit/states)
 apps/desktop/
   src/routes/
@@ -72,10 +72,10 @@ apps/desktop/
 
 **Files:** create `src/lib/env.svelte.ts`, `EnvChip.svelte`(+spec), `DeviceFooter.svelte`(+spec), `OfflineBanner.svelte`, `DesktopOnlyNote.svelte`; modify `src/index.js`.
 
-- [ ] **Step 1: `src/lib/env.svelte.ts`** — the StrategosEnv runes store (ports `window.StrategosEnv`; modes desktop/offline/web)
+- [ ] **Step 1: `src/lib/env.svelte.ts`** — the ToriiEnv runes store (ports `window.ToriiEnv`; modes desktop/offline/web)
 
 ```ts
-// Capability/env state shared by the shell. Mirrors the mockups' StrategosEnv.
+// Capability/env state shared by the shell. Mirrors the mockups' ToriiEnv.
 type Mode = 'desktop' | 'offline' | 'web'
 const ORDER: Mode[] = ['desktop', 'offline', 'web']
 
@@ -144,14 +144,14 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { getAdapter } from '@kavach/adapter-supabase'
 import { createKavach } from 'kavach'
 
-export interface StrategosKavach {
+export interface ToriiKavach {
   client: SupabaseClient
   kavach: ReturnType<typeof createKavach>
 }
 
 // Client-only session: supabase-js persists + refreshes the session in localStorage
 // (persistSession/autoRefreshToken). No SvelteKit server hook, no /auth/session endpoint.
-export function createStrategosKavach(url: string, anonKey: string): StrategosKavach {
+export function createToriiKavach(url: string, anonKey: string): ToriiKavach {
   const client = createClient(url, anonKey, {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
   })
@@ -164,7 +164,7 @@ export function createStrategosKavach(url: string, anonKey: string): StrategosKa
 - [ ] **Step 3: `src/auth/session.svelte.ts`** — the runes session store
 
 ```ts
-import type { StrategosKavach } from './client'
+import type { ToriiKavach } from './client'
 
 export interface SessionUser { id: string; email?: string; name?: string; role: string }
 
@@ -174,10 +174,10 @@ class SessionStore {
   get authenticated() { return this.user !== null }
   get role() { return this.user?.role ?? 'anon' }
 
-  #sk: StrategosKavach | null = null
+  #sk: ToriiKavach | null = null
 
   // Hydrate from the persisted supabase session, then subscribe to changes.
-  async init(sk: StrategosKavach) {
+  async init(sk: ToriiKavach) {
     this.#sk = sk
     const { data } = await sk.client.auth.getSession()
     this.#apply(data.session)
@@ -262,11 +262,11 @@ test('guard forbids a member from an admin-only route', () => {
 
 - [ ] **Step 6: run → verify** (adjust to `@kavach/sentry`'s real `protect` return shape if it differs — the scan showed `{ status: 200|401|403|302, redirect? }`; if `setSession(undefined)` vs `null` matters, match its API). Make the three assertions pass. If sentry's exact status codes differ, assert the *semantics* (200 = allowed; non-200 with a redirect for the others) rather than exact numbers.
 
-- [ ] **Step 7: export** `createStrategosKavach`, `session`, `createGuard`, types from `src/index.ts`. Run `bun run test` + `bun run check` (tsc) — clean.
+- [ ] **Step 7: export** `createToriiKavach`, `session`, `createGuard`, types from `src/index.ts`. Run `bun run test` + `bun run check` (tsc) — clean.
 
 - [ ] **Step 8: commit** — `feat(core): kavach client-only session + client-side route guard`
 
-> **Upstream note:** this client-only composition (supabase persistSession + createKavach + client-side sentry, no server handle) is the first Strategos→Kavach contribution. Leave a `// UPSTREAM(kavach): package as a client-only session mode` comment in `client.ts`.
+> **Upstream note:** this client-only composition (supabase persistSession + createKavach + client-side sentry, no server handle) is the first Torii→Kavach contribution. Leave a `// UPSTREAM(kavach): package as a client-only session mode` comment in `client.ts`.
 
 ---
 
@@ -278,7 +278,7 @@ test('guard forbids a member from an admin-only route', () => {
 
 - [ ] **Step 2: `TitleBar.svelte`** — port the mockup title bar (`docs/mockups/app/shell.jsx` / `components/chrome.jsx`). Props: `{ user, onCommand }`. Regions: brand mark (left), `EnvChip`, a search button that opens the ⌘K palette (`onCommand`), a theme toggle (`ThemeSwitcherToggle` from `@rokkit/app`), and a user menu (avatar initials + name + role + sign-out). Use named tokens. Emit `onsignout`. Keep markup faithful to the mockup but Svelte-5 idiomatic.
 
-- [ ] **Step 3: `NavRail.svelte`** — port the nav rail. Props: `{ items, active, appName = 'Strategos', version, footer }` where `items` is the console nav (`Workspace/Ask/Library/Playground/Workflows/Activity/Settings`), `active` highlights the current route, `footer` is a `DeviceFooter` snippet. Brand + version at top; nav group in the middle; `{@render footer?.()}` at the bottom. Links `goto` via an `onnavigate` callback (or `href`). Named tokens.
+- [ ] **Step 3: `NavRail.svelte`** — port the nav rail. Props: `{ items, active, appName = 'Torii', version, footer }` where `items` is the console nav (`Workspace/Ask/Library/Playground/Workflows/Activity/Settings`), `active` highlights the current route, `footer` is a `DeviceFooter` snippet. Brand + version at top; nav group in the middle; `{@render footer?.()}` at the bottom. Links `goto` via an `onnavigate` callback (or `href`). Named tokens.
 
 - [ ] **Step 4: `DesktopShell.svelte`** — compose the real shell: `TitleBar` (top) + a two-column body (`NavRail` left, routed content right via `{@render children?.()}`) + a `CommandPalette` (`@rokkit/ui`) bound to `mod+k` (via `@rokkit/actions` `shortcuts` / the `command-system-rokkit` pattern). Props: `{ user, items, active, version, localModels, onnavigate, onsignout }`. Renders `DeviceFooter` in the nav footer with `localModels`. This supersedes the bare `AppShell` for the desktop (admin keeps `AppShell` for now).
 
@@ -317,7 +317,7 @@ export const SUPABASE_ANON_KEY = PUBLIC_SUPABASE_ANON_KEY
   import { page } from '$app/state'
   import { vibe } from '@rokkit/states'
   import { themable } from '@rokkit/actions'
-  import { createStrategosKavach, session, createGuard } from '@torii/core'
+  import { createToriiKavach, session, createGuard } from '@torii/core'
   import { SUPABASE_URL, SUPABASE_ANON_KEY } from '$lib/env'
 
   let { children } = $props()
@@ -327,7 +327,7 @@ export const SUPABASE_ANON_KEY = PUBLIC_SUPABASE_ANON_KEY
     { path: '/', roles: '*' }
   ]
   const guard = createGuard(rules, { login: '/signin', home: '/' })
-  const sk = createStrategosKavach(SUPABASE_URL, SUPABASE_ANON_KEY)
+  const sk = createToriiKavach(SUPABASE_URL, SUPABASE_ANON_KEY)
   setContext('kavach', sk.kavach)
 
   onMount(async () => {
@@ -345,7 +345,7 @@ export const SUPABASE_ANON_KEY = PUBLIC_SUPABASE_ANON_KEY
   $effect(() => { if (session.ready) check(page.url.pathname) })
 </script>
 
-<svelte:body use:themable={{ theme: vibe, storageKey: 'strategos-desktop-theme' }} />
+<svelte:body use:themable={{ theme: vibe, storageKey: 'torii-desktop-theme' }} />
 {@render children()}
 ```
 
@@ -414,7 +414,7 @@ export const SUPABASE_ANON_KEY = PUBLIC_SUPABASE_ANON_KEY
 // in +layout.svelte onMount:
 if (import.meta.env.VITE_E2E === 'true') {
   session.ready = true
-  session.user = { id: 'e2e', email: 'e2e@strategos.test', name: 'E2E Member', role: 'member' }
+  session.user = { id: 'e2e', email: 'e2e@torii.test', name: 'E2E Member', role: 'member' }
 } else {
   await session.init(sk)
 }

@@ -146,7 +146,7 @@ Prefixes: **H** = C1 harden · **R** = C2 routing · **B** = C3 budgets · **G**
 - **Acceptance criteria:**
   - Root `Cargo.toml` `[patch]` targets the real `sensei-*` packages at `../gateway/crates/*` (no `gateway`/`gateway-embedded`); `services/gateway/Cargo.toml` (+ desktop `src-tauri/Cargo.toml`) depend on `sensei-gateway` at the pinned `v0.4.x` git tag.
   - `main.rs` adapter registration uses the `v0.4.x` `AdapterRegistry` + `RegisterInto`/capability-trait model; **no `InferenceAdapter` reference** remains (it is deleted).
-  - `cargo build -p strategos-gateway` (controller, background) compiles clean; `cargo check` resolves the workspace.
+  - `cargo build -p torii-gateway` (controller, background) compiles clean; `cargo check` resolves the workspace.
 - **Test scenarios:**
   - Given the repinned patch, When the controller runs `cargo build`, Then it compiles against `sensei-gateway@v0.4.x` with zero references to `gateway_embedded`/`InferenceAdapter`.
   - Given `list_adapters()` at boot, When logged, Then the cloud adapters register via the capability-trait registry.

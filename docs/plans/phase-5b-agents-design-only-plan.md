@@ -41,7 +41,7 @@ render from mock data with the "agent · v2" badge; no runtime execution path or
 **Architecture.** SvelteKit + Svelte 5 (Runes) + Rokkit, inside the existing desktop member console
 (`apps/desktop`, reused verbatim from W2). The two mockups become:
 (1) a shared **`wf` primitives module** (step/trigger/run-status metadata + `ToolChip` + helpers) — the
-Svelte analogue of the mockup's `window.StrategosWF`; (2) a set of route components under
+Svelte analogue of the mockup's `window.ToriiWF`; (2) a set of route components under
 `(app)/workflows`. Data comes **only** from the mock `DataSource` (`@torii/core` — extends the
 existing `packages/core/src/mock` layer with `WORKFLOWS` + `TOOLS` fixtures) plus a
 **localStorage-backed edit store** that mirrors the mockup's create/patch/toggle/share/flow behaviour
@@ -137,7 +137,7 @@ monorepo/
     +page.svelte                     # Workflows index (replaces the stub)
     [id]/+page.svelte                # Workflow detail (Builder/Runs/Governance)
     _wf/
-      wf.ts                          # shared step/trigger/status metadata + helpers (StrategosWF analogue)
+      wf.ts                          # shared step/trigger/status metadata + helpers (ToriiWF analogue)
       ToolChip.svelte
       WorkflowCard.svelte
       NewWorkflowDialog.svelte
@@ -189,7 +189,7 @@ acceptance criteria**, and **Given/When/Then** scenarios. TDD: the spec/E2E is a
 ### X2-2 — Shared `wf` primitives + missing W4 atoms
 - **Layers:** route-local `_wf/wf.ts` + `ToolChip.svelte`; `packages/ui` atoms
 - **Depends on:** P0/W4 (atoms), X2-1 (`Tool` type)
-- **Satisfies:** the mockup's `window.StrategosWF`; PD8
+- **Satisfies:** the mockup's `window.ToriiWF`; PD8
 - **Acceptance criteria:**
   - `wf.ts` exports `STEP` (glyph+label for `trigger·retrieve·draft·tool·classify·notify·branch·
     output·agent`), `TRIG` (`schedule·event·manual`), `STATUS` (`success·review·stepped·failed·

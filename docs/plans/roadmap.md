@@ -1,5 +1,5 @@
 ---
-title: Strategos — CANONICAL full-cycle v1 roadmap (single dependency graph + phase plan)
+title: Torii + Seiki — CANONICAL full-cycle v1 roadmap (single dependency graph + phase plan)
 description: The one authoritative ordering for all 23 modules (incl. C6), reconciling the three prior graphs (modules/README, per-module depends-on headers, clients-buildout §8), with F1-rework and the gateway-repo crate issues (GH-1 trace, GH-2 OAuth) sequenced as explicit prerequisites, and human secrets/approvals front-loaded.
 type: roadmap
 status: authoritative
@@ -11,7 +11,7 @@ supersedes_ordering_in:
 authority: docs/DECISIONS.md (RATIFIED 2026-07-23)
 ---
 
-# Strategos — CANONICAL full-cycle v1 roadmap
+# Torii + Seiki — CANONICAL full-cycle v1 roadmap
 
 > **This document is the single authoritative build ordering.** Where the module index graph
 > (`modules/README.md`), the per-module spec `Depends on:` headers, and the blueprint
@@ -214,7 +214,7 @@ The prior ordering sources disagreed; this roadmap resolves them:
    into it in P7; the retrieval-precision/recall/grounding signals are wired when C5 lands. No
    circular build.
 
-6. **Crate reality (v0.4.6) is a Strategos-side reconcile, not a doc rewrite.** MIG-1..4 fix the
+6. **Crate reality (v0.4.6) is a Torii-side reconcile, not a doc rewrite.** MIG-1..4 fix the
    `[patch]`, adapter registration, Cargo deps, and phase-plan wording to the real `sensei-*` crates
    (there is **no** `gateway-embedded` / `InferenceAdapter`). These are done inside the reconcile
    phases (P0, P1b, P2a, P2b) with a live compile loop — not blind-edited.

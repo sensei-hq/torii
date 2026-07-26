@@ -34,8 +34,8 @@ Deliver the two **authorization + custody foundations** the hardened central pla
 
 P4 builds **on the P2a skeleton `services/gateway`** (Axum + `sensei-gateway` + Postgres `GatewayStore`) and the **P3-reworked F1 schema** (all RBAC/device/credential *tables* landed in P3: RW2 roles/permissions, RW4 api-keys, RW10 device fixes, RW13 `router_credentials`, RW8 alerts). P4 lands the **runtime behavior + F2/F3-owned SQL functions/views/seed + the two Rust crates** that consume those tables:
 
-- **`crates/strategos-auth`** (new lib crate) — `JwtVerifier` (RS256/JWKS), `CapabilityResolver`, `DeviceGuard`, `AuthContext` assembly, API-key resolution. Consumed by `services/gateway`.
-- **`crates/strategos-vault`** (new lib crate) — `KekProvider` (`KmsKekProvider` prod / `EnvKekProvider` local-dev fail-closed), `CredentialVault` (envelope encrypt/decrypt, lifecycle, rotation), the OAuth refresh worker. Consumed by `services/gateway` (the sole `service_role` decryptor).
+- **`crates/torii-auth`** (new lib crate) — `JwtVerifier` (RS256/JWKS), `CapabilityResolver`, `DeviceGuard`, `AuthContext` assembly, API-key resolution. Consumed by `services/gateway`.
+- **`crates/torii-vault`** (new lib crate) — `KekProvider` (`KmsKekProvider` prod / `EnvKekProvider` local-dev fail-closed), `CredentialVault` (envelope encrypt/decrypt, lifecycle, rotation), the OAuth refresh worker. Consumed by `services/gateway` (the sole `service_role` decryptor).
 - **`services/gateway`** gains: RS256 middleware (replacing the P2a HS256 skeleton), the F2 `/rbac`/`/members`/`/tenants`/`/devices` RPCs, the F3 connection RPCs (`connect`/`oauth`/`rotate`/`revoke`), and the co-located refresh worker `tokio` task.
 - **dbd deltas (F2/F3-owned semantics; tables already exist from P3):** `custom_access_token_hook` + `profiles.claims_version`; the `SECURITY DEFINER` capability helpers `core.jwt_role_ids()`/`core.has_capability()`; the `core.capabilities` reference + 6 system-role seed; the tenant-domain auto-assignment trigger/function; the `router_credentials_meta` non-secret view.
 
@@ -110,7 +110,7 @@ Two groups — **F2-*** (identity/auth/RBAC) and **F3-*** (credential vault) —
   - Given `core.capabilities`, When compared to §4.3, Then it matches exactly — a drift test **fails** on any add/remove.
 
 #### F2-5 — C1 auth middleware crate: `JwtVerifier` + `CapabilityResolver` + `DeviceGuard`
-- **Layers:** Rust (`crates/strategos-auth`, TDD) → wire into `services/gateway`
+- **Layers:** Rust (`crates/torii-auth`, TDD) → wire into `services/gateway`
 - **Depends on:** F2-1..F2-4; P2a skeleton C1
 - **Authority:** F2 §4.5, §5.1, §5.7
 - **Acceptance criteria:**
@@ -124,7 +124,7 @@ Two groups — **F2-*** (identity/auth/RBAC) and **F3-*** (credential vault) —
   - Given a revoked device, When `DeviceGuard::check` runs, Then `DeviceRevoked` within ≤30 s / immediately on the Realtime signal.
 
 #### F2-6 — API-key / service-account identity resolution
-- **Layers:** Rust (`crates/strategos-auth`, TDD)
+- **Layers:** Rust (`crates/torii-auth`, TDD)
 - **Depends on:** F2-5; P3 RW4 (`api_keys`/`service_accounts`)
 - **Authority:** F2 §4.4; DECISIONS §1(#2), §2 W2
 - **Acceptance criteria:**
@@ -176,8 +176,8 @@ Two groups — **F2-*** (identity/auth/RBAC) and **F3-*** (credential vault) —
 
 ### Group B — Credential vault & crypto (F3)
 
-#### F3-1 — `strategos-vault` crate + `KekProvider` (KMS prod / Env local-dev fail-closed)
-- **Layers:** Rust (`crates/strategos-vault`, TDD)
+#### F3-1 — `torii-vault` crate + `KekProvider` (KMS prod / Env local-dev fail-closed)
+- **Layers:** Rust (`crates/torii-vault`, TDD)
 - **Depends on:** P3 RW13 (`router_credentials`/`tenant_keys`/`tenant_key_archive` DDL); human prereq 3 (KMS/KEK)
 - **Authority:** F3 §4.1, §5 (KEK custody); DECISIONS §2 W4
 - **Acceptance criteria:**
@@ -187,7 +187,7 @@ Two groups — **F2-*** (identity/auth/RBAC) and **F3-*** (credential vault) —
   - Given a fresh 32-byte DEK, When wrapped then unwrapped, Then it round-trips; `active_kek()` returns `(version, ref)`.
 
 #### F3-2 — Envelope encryption + `CredentialVault` BYOK path (AES-256-GCM DEK/KEK)
-- **Layers:** Rust (`crates/strategos-vault`, TDD)
+- **Layers:** Rust (`crates/torii-vault`, TDD)
 - **Depends on:** F3-1
 - **Authority:** F3 §2.1, §4.1, §5 (tenant isolation), §6(1,3)
 - **Acceptance criteria:**

@@ -1,6 +1,6 @@
 # Phase 0 Prerequisites: Global Bun Links
 
-Before running `bun install` in any Strategos app or package, two sibling repos must be registered as global bun links. The `link:` protocol in `package.json` dependencies resolves to these registrations.
+Before running `bun install` in any Torii app or package, two sibling repos must be registered as global bun links. The `link:` protocol in `package.json` dependencies resolves to these registrations.
 
 ## Required repos
 

@@ -180,7 +180,7 @@ monorepo/
 
 ## Task 9: acceptance + cleanup + push
 
-- [ ] **Step 1:** `make clean`-safe: the new crate builds; `bun run test`/`check`/`lint` still green (no JS changed, but confirm); `cargo build` (workspace) compiles `app` + `strategos-gateway`.
+- [ ] **Step 1:** `make clean`-safe: the new crate builds; `bun run test`/`check`/`lint` still green (no JS changed, but confirm); `cargo build` (workspace) compiles `app` + `torii-gateway`.
 - [ ] **Step 2:** `services/gateway/README.md` — run instructions (env vars, `cargo run`, the curl), the env-keys/F3-deferred note, the JWT-secret requirement.
 - [ ] **Step 3:** update `apps/README.md` / top-level docs: C1 exists; the desktop split-plane router (Phase 2b) will proxy cloud steps here.
 - [ ] **Step 4:** `make clean`, commit (`chore(phase2a): acceptance — C1 serves a real cloud answer`), **push `develop`**.

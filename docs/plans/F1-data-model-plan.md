@@ -26,7 +26,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
 
 ### Feature 1 — Schema reshape & de-partition
 
-- **Issue:** [#1](https://github.com/sensei-hq/strategos/issues/1)
+- **Issue:** [#1](https://github.com/sensei-hq/torii/issues/1)
 - **Layers:** DDL → seed
 - **Depends on:** —
 - **Acceptance criteria:**
@@ -41,7 +41,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
 
 ### Feature 2 — JWT claims hook & RLS tenant foundation
 
-- **Issue:** [#2](https://github.com/sensei-hq/strategos/issues/2)
+- **Issue:** [#2](https://github.com/sensei-hq/torii/issues/2)
 - **Layers:** JWT claims → RLS
 - **Depends on:** Feature 1
 - **Acceptance criteria:**
@@ -54,7 +54,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
 
 ### Feature 3 — Secrets lockdown (key vault)
 
-- **Issue:** [#3](https://github.com/sensei-hq/strategos/issues/3)
+- **Issue:** [#3](https://github.com/sensei-hq/torii/issues/3)
 - **Layers:** RLS
 - **Depends on:** Feature 2
 - **Acceptance criteria:**
@@ -66,7 +66,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
 
 ### Feature 4 — Spaces, knowledge access & confidentiality RLS
 
-- **Issue:** [#4](https://github.com/sensei-hq/strategos/issues/4)
+- **Issue:** [#4](https://github.com/sensei-hq/torii/issues/4)
 - **Layers:** DDL → RLS → seed
 - **Depends on:** Feature 2
 - **Acceptance criteria:**
@@ -78,7 +78,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
 
 ### Feature 5 — Budgets schema
 
-- **Issue:** [#5](https://github.com/sensei-hq/strategos/issues/5)
+- **Issue:** [#5](https://github.com/sensei-hq/torii/issues/5)
 - **Layers:** DDL → RLS → seed
 - **Depends on:** Feature 2
 - **Acceptance criteria:**
@@ -90,7 +90,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
 
 ### Feature 6 — Governance & ops tables (audit, settings, devices)
 
-- **Issue:** [#6](https://github.com/sensei-hq/strategos/issues/6)
+- **Issue:** [#6](https://github.com/sensei-hq/torii/issues/6)
 - **Layers:** DDL → RLS
 - **Depends on:** Feature 2
 - **Acceptance criteria:**
@@ -103,7 +103,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
 
 ### Feature 7 — Document workspace tables (collections, versions, assets)
 
-- **Issue:** [#7](https://github.com/sensei-hq/strategos/issues/7)
+- **Issue:** [#7](https://github.com/sensei-hq/torii/issues/7)
 - **Layers:** DDL → RLS
 - **Depends on:** Feature 4
 - **Acceptance criteria:**
@@ -115,7 +115,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
 
 ### Feature 8 — Split-plane columns
 
-- **Issue:** [#8](https://github.com/sensei-hq/strategos/issues/8)
+- **Issue:** [#8](https://github.com/sensei-hq/torii/issues/8)
 - **Layers:** DDL
 - **Depends on:** Feature 1
 - **Acceptance criteria:**
@@ -126,7 +126,7 @@ Implement the approved [F1 spec](../specs/F1-data-model.md): reshape the existin
 
 ### Feature 9 — Seed refresh & RLS-coverage test harness
 
-- **Issue:** [#9](https://github.com/sensei-hq/strategos/issues/9)
+- **Issue:** [#9](https://github.com/sensei-hq/torii/issues/9)
 - **Layers:** seed → tests
 - **Depends on:** Features 1–8
 - **Acceptance criteria:**

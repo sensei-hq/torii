@@ -1,4 +1,4 @@
--- Strategos seed data loader
+-- Seiki seed data loader
 -- Run after migration has been applied and staging tables populated
 -- Executes import procedures in dependency order
 

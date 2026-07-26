@@ -26,7 +26,7 @@ export PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
 export ANTHROPIC_API_KEY=... OPENAI_API_KEY=...        # BYOK; resolved per router.api_key_env_var
 # optional: export SUPABASE_JWT_SECRET=...             # enables the HS256 fallback
 
-cargo run -p strategos-gateway                          # listens on 127.0.0.1:8787
+cargo run -p torii-gateway                              # listens on 127.0.0.1:8787
 curl -s localhost:8787/health                           # {"status":"ok"}
 ```
 

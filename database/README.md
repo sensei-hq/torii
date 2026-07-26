@@ -1,4 +1,4 @@
-# Strategos Database (Supabase / PostgreSQL)
+# Seiki Database (Supabase / PostgreSQL)
 
 PostgreSQL schema and seed data managed with `dbd` (DB Deploy).
 No migrations — DDL is applied directly until the first versioned release.
@@ -100,7 +100,7 @@ Each `staging.import_*()` procedure:
 | fallback_chain_models | 26   | Ordered fallback sequences per chain                                                       |
 | modules               | 4    | Curator, Analyst, Operator, Mixologist                                                     |
 | features              | 14   | UI features per module                                                                     |
-| mcp_servers           | 2    | strategos, filesystem                                                                      |
+| mcp_servers           | 2    | torii, filesystem                                                                          |
 
 ## Design Documentation
 

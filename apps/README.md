@@ -1,4 +1,4 @@
-# Strategos — Contributor Guide
+# Torii + Seiki — Contributor Guide
 
 ## Prerequisites
 
@@ -99,7 +99,7 @@ Local inference + Ask complete — the desktop answers **on-device, offline, $0*
 
 - `apps/desktop/src-tauri` — embeds **`gateway-embedded`** (`llama-cpp` feature, Metal-accelerated) via
   the root `[patch]` → sibling `../gateway`; builds an `Arc<Gateway>` at startup
-  (`EmbeddedLlamaAdapter` over a `ChainedResolver(~/.strategos/models → ~/.ollama/models)`) held in
+  (`EmbeddedLlamaAdapter` over a `ChainedResolver(~/.torii/models → ~/.ollama/models)`) held in
   Tauri state. Default local chat model **`gemma2:2b`** (read-through of the Ollama blob — no download).
 - IPC commands `infer` / `list_models` / `gateway_status` (`#[tauri::command]`); the frontend calls them
   via `src/lib/gateway.ts` + the `ask.svelte.ts` runes store.

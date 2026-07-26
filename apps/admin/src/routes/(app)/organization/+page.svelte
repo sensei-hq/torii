@@ -97,16 +97,16 @@
 
 	{#if loading}
 		<Async loading />
-	{:else if error}
-		<div class="px-5">
-			<Card pad
-				><p class="text-sm text-accent">
-					{error}{error.includes('403') ? ' — needs the role.manage capability (owner/admin).' : ''}
-				</p></Card
-			>
-		</div>
 	{:else}
 		<div class="space-y-4 px-5 pb-6">
+			<!-- action/load errors show inline here, without hiding the member list -->
+			{#if error}
+				<Card pad
+					><p class="text-sm text-accent" role="alert">
+						{error}{error.includes('403') ? ' — needs the role.manage capability (owner/admin).' : ''}
+					</p></Card
+				>
+			{/if}
 			<!-- members + their role assignments -->
 			<Card flush>
 				<CardHead title="Members" meta={`${members.length}`} />

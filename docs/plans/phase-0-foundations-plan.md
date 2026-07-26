@@ -959,7 +959,7 @@ export default defineConfig({
 - [ ] **Step 4: Initialize Tauri 2 into `src-tauri/`**
 
 Run: `cd apps/desktop && bunx @tauri-apps/cli@2 init --ci \
-  --app-name strategos --window-title Strategos \
+  --app-name torii --window-title Torii \
   --frontend-dist ../build --dev-url http://localhost:5274 \
   --before-dev-command "" --before-build-command ""`
 Expected: creates `apps/desktop/src-tauri/` with `Cargo.toml`, `tauri.conf.json`, `src/main.rs`, `src/lib.rs`, `build.rs`.
@@ -968,7 +968,7 @@ Expected: creates `apps/desktop/src-tauri/` with `Cargo.toml`, `tauri.conf.json`
 
 Edit `apps/desktop/src-tauri/Cargo.toml` to inherit the workspace — for Phase 0, **do not add any `sensei-*` engine deps yet**; keep it a bare Tauri app that compiles as a member. (The embedded engine deps — `sensei-local-providers`/`sensei-local-engine` at the `v0.4.6` git tag, resolved through the root `[patch]` — are added in **P1b** per MIG-3, not here.) Confirm `apps/desktop/src-tauri` is listed in the root `Cargo.toml` `members` (Task 1 Step 4).
 
-Run: `cargo build -p strategos` (the src-tauri crate name from `tauri init`)
+Run: `cargo build -p app` (the src-tauri crate name from `tauri init`)
 Expected: compiles (a bare Tauri app, no custom commands yet).
 
 - [ ] **Step 6: Boot the web frontend (Tauri window is optional in Phase 0)**
@@ -1207,10 +1207,10 @@ const APP_REPO = resolve(__dirname, '..')
 // Adjust the bundle name if tauri.conf.json productName differs.
 const APP_BINARY = join(
   APP_REPO,
-  'src-tauri/target/debug/bundle/macos/strategos.app/Contents/MacOS/strategos'
+  'src-tauri/target/debug/bundle/macos/torii.app/Contents/MacOS/torii'
 )
 const SOCKET = '/tmp/tauri-playwright.sock'
-const PID_FILE = '/tmp/strategos-e2e-pid'
+const PID_FILE = '/tmp/torii-e2e-pid'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 async function waitForSocket(path, timeoutMs) {
@@ -1229,7 +1229,7 @@ export default async function globalSetup() {
     stdio: 'inherit'
   })
   try {
-    execFileSync('/usr/bin/pkill', ['-f', 'strategos.app'], { stdio: 'ignore' })
+    execFileSync('/usr/bin/pkill', ['-f', 'torii.app'], { stdio: 'ignore' })
   } catch {}
   await sleep(500)
   try {
@@ -1252,7 +1252,7 @@ export default async function globalSetup() {
 import { execFileSync } from 'child_process'
 import { existsSync, readFileSync, unlinkSync } from 'fs'
 
-const PID_FILE = '/tmp/strategos-e2e-pid'
+const PID_FILE = '/tmp/torii-e2e-pid'
 const SOCKET = '/tmp/tauri-playwright.sock'
 
 export default async function globalTeardown() {
@@ -1266,7 +1266,7 @@ export default async function globalTeardown() {
     unlinkSync(PID_FILE)
   }
   try {
-    execFileSync('/usr/bin/pkill', ['-f', 'strategos.app'], { stdio: 'ignore' })
+    execFileSync('/usr/bin/pkill', ['-f', 'torii.app'], { stdio: 'ignore' })
   } catch {}
   try {
     unlinkSync(SOCKET)
@@ -1389,7 +1389,7 @@ Expected: admin on `:5273`, desktop on `:5274`; both render `AppShell` with the 
 
 - [ ] **Step 3: Confirm the desktop crate compiles in the workspace**
 
-Run: `cargo build -p strategos`
+Run: `cargo build -p app`
 Expected: success.
 
 - [ ] **Step 4: Write `apps/README.md`** documenting: prerequisites (bun-linked rokkit + kavach), how to run each app, and the workspace layout. (Content: the "Prerequisites" + file-structure sections of this plan, condensed.)

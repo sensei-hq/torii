@@ -11,8 +11,8 @@ One shared component library and visual language used by every UI (web apps + th
 ## What we build
 
 - **Rokkit components** (List, Tree, Select, MultiSelect, Table, Tabs, Toggle, Menu, CommandPalette) consumed data-first (`items`, bindable `value`, `fields`, `onchange`/`onselect`).
-- **Semantic styles** via UnoCSS `presetRokkit` — named tokens (paper / ink / primary / on-primary / *-soft), **ported from `app/zs.css`'s named vocabulary** (the authoritative token source per DECISIONS §6), then extended with Strategos brand tokens (`rokkit.config.js` palette → skin → tokens).
-- **Skins**: light/dark dual palettes; a Strategos brand skin; `SkinSwitcherToggle`.
+- **Semantic styles** via UnoCSS `presetRokkit` — named tokens (paper / ink / primary / on-primary / *-soft), **ported from `app/zs.css`'s named vocabulary** (the authoritative token source per DECISIONS §6), then extended with Torii brand tokens (`rokkit.config.js` palette → skin → tokens).
+- **Skins**: light/dark dual palettes; a Torii brand skin; `SkinSwitcherToggle`.
 - **Command palette** (`mod+k`) via `@rokkit/states` + `@rokkit/actions`.
 - Shared atoms rebuilt as Rokkit-native components in a **dedicated atom-migration** pass. The mockups' `_ds/` system is **reference-only** (§6) — mine its vocabulary/behaviour, do not port it wholesale.
 - Packaged as `packages/ui`, consumed by web (Cloudflare Pages) and the Tauri app.

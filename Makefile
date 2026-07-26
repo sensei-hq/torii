@@ -60,6 +60,12 @@ GW_BIN    := $(CURDIR)/target/debug/torii-gateway
 GW_CWD    := $(CURDIR)/services/gateway
 GW_LOG    := $(GW_CWD)/gateway.log
 GW_DOMAIN := gui/$(shell id -u)
+# Poll /health for up to ~15s (the gateway needs ~5s: DB + JWKS + adapters + config).
+# $(call GW_WAIT,<prefix>) prints "<prefix>: health 200" once up, else a log hint.
+GW_WAIT = for i in $$(seq 1 15); do \
+	  if [ "$$(curl -s --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/health 2>/dev/null)" = "200" ]; then \
+	    echo "$(1): health 200"; exit 0; fi; sleep 1; \
+	done; echo "$(1): not healthy after 15s -- check: make gateway-logs"
 
 gateway-build: ## Build the torii-gateway binary (debug)
 	cargo build -p torii-gateway
@@ -83,11 +89,11 @@ gateway-service: gateway-build ## Install + start the gateway as a launchd servi
 	  '</dict></plist>' > "$(GW_PLIST)"
 	-@launchctl bootout $(GW_DOMAIN)/$(GW_LABEL) 2>/dev/null || true
 	@launchctl bootstrap $(GW_DOMAIN) "$(GW_PLIST)"
-	@sleep 3; curl -s --max-time 3 -o /dev/null -w "gateway service up — health: %{http_code}\n" http://127.0.0.1:8787/health || echo "starting… check: make gateway-logs"
+	@$(call GW_WAIT,gateway service up)
 
 gateway-restart: gateway-build ## Rebuild + restart the gateway service (fresh binary takes effect)
 	@launchctl kickstart -k $(GW_DOMAIN)/$(GW_LABEL) 2>/dev/null || { echo "!! service not installed — run 'make gateway-service' first"; exit 1; }
-	@sleep 3; curl -s --max-time 3 -o /dev/null -w "restarted — health: %{http_code}\n" http://127.0.0.1:8787/health || echo "starting… check: make gateway-logs"
+	@$(call GW_WAIT,restarted)
 
 gateway-stop: ## Stop + unload the gateway service
 	-@launchctl bootout $(GW_DOMAIN)/$(GW_LABEL) 2>/dev/null && echo "gateway service stopped" || echo "gateway service not running"

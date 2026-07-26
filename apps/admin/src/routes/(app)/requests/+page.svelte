@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte'
 	import { AppShell, PageHeader, Card, CardHead, Chip } from '@torii/ui'
 	import { api } from '$lib/api'
+	import { matchesRequest, matchesEvent } from '$lib/filters'
 
 	/** @type {import('$lib/api').RequestRow[]} */
 	let requests = $state([])
@@ -28,23 +29,8 @@
 	})
 
 	const needle = $derived(q.trim().toLowerCase())
-	const filteredRequests = $derived(
-		requests.filter((r) => {
-			if (plane !== 'all' && (r.execution_location ?? '') !== plane) return false
-			if (!needle) return true
-			return `${r.model} ${r.chain_id ?? ''} ${r.status} ${r.execution_location ?? ''}`
-				.toLowerCase()
-				.includes(needle)
-		})
-	)
-	const filteredEvents = $derived(
-		events.filter((e) => {
-			if (!needle) return true
-			return `${e.action} ${e.target_type ?? ''} ${e.target_id ?? ''} ${e.actor_id ?? ''}`
-				.toLowerCase()
-				.includes(needle)
-		})
-	)
+	const filteredRequests = $derived(requests.filter((r) => matchesRequest(r, needle, plane)))
+	const filteredEvents = $derived(events.filter((e) => matchesEvent(e, needle)))
 
 	/** @param {string} s */
 	const fmtTime = (s) => new Date(s).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })

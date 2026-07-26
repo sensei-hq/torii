@@ -11,6 +11,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { goto } from '$app/navigation'
 
 import { GATEWAY_URL, SUPABASE_ANON_KEY, SUPABASE_URL } from './env'
+import { meaningfulRole } from './identity'
 
 // A browser Supabase client purely to read the persisted session's access token —
 // Kavach signs in via Supabase under the hood, so `getSession()` returns the live JWT.
@@ -226,12 +227,7 @@ export const api = {
 		const email = data.session?.user?.email ?? null
 		let role: string | null = null
 		try {
-			const r = (await gwGet<WhoAmI>('/v1/whoami')).role
-			// The gateway returns the Supabase JWT `role` claim, which is always
-			// "authenticated" for any signed-in user — not the app role (owner/admin/member
-			// live in profile_roles, and are multi-valued). Drop the artifact rather than
-			// display a meaningless or fabricated role.
-			role = r && r !== 'authenticated' ? r : null
+			role = meaningfulRole((await gwGet<WhoAmI>('/v1/whoami')).role)
 		} catch {
 			/* role is advisory for the shell; email alone renders a real identity */
 		}

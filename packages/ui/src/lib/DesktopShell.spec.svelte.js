@@ -11,7 +11,8 @@ test('DesktopShell renders user, nav landmark, env chip and nav items', () => {
 			version: 1
 		}
 	})
-	expect(getByText('Alex Rivera')).toBeTruthy()
+	// TitleBar renders "{name} · {role}" in one node — match a substring.
+	expect(getByText(/Alex Rivera/)).toBeTruthy()
 	expect(getByRole('navigation')).toBeTruthy()
 	// palette is closed by default — 'Workspace' appears only in the nav rail
 	expect(getAllByText('Workspace').length).toBeGreaterThanOrEqual(1)

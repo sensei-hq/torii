@@ -120,7 +120,10 @@
 
 	<div class="grid min-h-0 grid-cols-[15rem_1fr]">
 		<!-- Rail sidebar -->
-		<aside class="flex flex-col overflow-y-auto border-r border-paper-edge bg-paper-soft px-3 py-4">
+		<nav
+			aria-label="Primary"
+			class="flex flex-col overflow-y-auto border-r border-paper-edge bg-paper-soft px-3 py-4"
+		>
 			<!-- brand -->
 			<div class="flex items-center gap-2.5 px-1.5">
 				<img src="/logo.svg" alt="" class="h-[22px] w-[22px]" />
@@ -177,7 +180,7 @@
 			{/each}
 			<span class="flex-1"></span>
 			<div class="px-2 font-mono text-[10px] text-ink-faint">gateway · healthy · {app}</div>
-		</aside>
+		</nav>
 
 		<!-- main content -->
 		<main class="min-h-0 overflow-auto">{@render children?.()}</main>

@@ -81,7 +81,10 @@
 <div data-desktop-shell class="grid h-full grid-rows-[auto_1fr]" use:shortcuts={commands}>
 	<TitleBar {user} {brand} title={workspace.name} onsearch={() => (paletteOpen = true)} {onsignout} />
 	<div class="grid min-h-0 grid-cols-[15rem_1fr] overflow-hidden">
-		<aside class="flex flex-col overflow-y-auto border-r border-paper-edge bg-paper-soft px-3 py-4">
+		<nav
+			aria-label="Primary"
+			class="flex flex-col overflow-y-auto border-r border-paper-edge bg-paper-soft px-3 py-4"
+		>
 			<!-- brand -->
 			<div class="flex items-center gap-2.5 px-1.5">
 				<img src="/logo.svg" alt="" class="h-[22px] w-[22px]" />
@@ -134,7 +137,7 @@
 			{/each}
 			<span class="flex-1"></span>
 			<DeviceFooter {localModels} configVersion={version} />
-		</aside>
+		</nav>
 		<section class="min-h-0 overflow-auto">{@render children?.()}</section>
 	</div>
 </div>

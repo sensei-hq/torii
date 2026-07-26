@@ -130,6 +130,61 @@ begin;
   end $$;
 rollback;
 
+-- 10. Last-owner guard (`/rpc/rbac/unassign-role`, HIGH): removing a role must NOT
+-- leave the tenant with zero `tenant.manage` holders. Proven with the gateway's exact
+-- `owners_after` query, in an isolated + rolled-back tenant so live data is untouched.
+begin;
+  do $$
+  declare
+    tt          uuid := 'ffff0000-0000-0000-0000-0000000000a0';
+    owner_role  uuid := 'ffff0000-0000-0000-0000-0000000000a1';
+    editor_role uuid := 'ffff0000-0000-0000-0000-0000000000a2';
+    o1          uuid := 'ffff0000-0000-0000-0000-0000000000b1';
+    o2          uuid := 'ffff0000-0000-0000-0000-0000000000b2';
+    n int;
+  begin
+    insert into core.tenants(id, name, slug, modified_by)
+      values (tt, 'authz-test', 'authz-test-a0', 't');
+    insert into core.roles(id, tenant_id, key, name) values
+      (owner_role,  tt, 'owner',  'Owner'),
+      (editor_role, tt, 'editor', 'Editor');
+    insert into core.role_permissions(tenant_id, role_id, capability) values
+      (tt, owner_role,  'tenant.manage'),
+      (tt, owner_role,  'role.manage'),
+      (tt, editor_role, 'doc.write');
+    insert into core.profiles(id) values (o1),(o2) on conflict do nothing;
+    insert into core.profile_roles(tenant_id, profile_id, role_id) values (tt, o1, owner_role);
+
+    -- (a) O1 is the SOLE owner → removing O1's owner role leaves 0 → guard REJECTS.
+    select count(distinct pr.profile_id) into n
+      from core.profile_roles pr
+      join core.role_permissions rp on rp.role_id = pr.role_id and rp.tenant_id = pr.tenant_id
+     where pr.tenant_id = tt and rp.capability = 'tenant.manage'
+       and not (pr.profile_id = o1 and pr.role_id = owner_role);
+    if n <> 0 then raise exception 'FAIL last-owner: sole-owner removal → owners_after=% (want 0)', n; end if;
+
+    -- (b) add O2 as a 2nd owner → removing O1 leaves 1 → guard ALLOWS.
+    insert into core.profile_roles(tenant_id, profile_id, role_id) values (tt, o2, owner_role);
+    select count(distinct pr.profile_id) into n
+      from core.profile_roles pr
+      join core.role_permissions rp on rp.role_id = pr.role_id and rp.tenant_id = pr.tenant_id
+     where pr.tenant_id = tt and rp.capability = 'tenant.manage'
+       and not (pr.profile_id = o1 and pr.role_id = owner_role);
+    if n <> 1 then raise exception 'FAIL last-owner: with 2 owners, removing one → owners_after=% (want 1)', n; end if;
+
+    -- (c) removing a NON-owner role never trips the guard (both owners still counted).
+    insert into core.profile_roles(tenant_id, profile_id, role_id) values (tt, o1, editor_role);
+    select count(distinct pr.profile_id) into n
+      from core.profile_roles pr
+      join core.role_permissions rp on rp.role_id = pr.role_id and rp.tenant_id = pr.tenant_id
+     where pr.tenant_id = tt and rp.capability = 'tenant.manage'
+       and not (pr.profile_id = o1 and pr.role_id = editor_role);
+    if n <> 2 then raise exception 'FAIL last-owner: removing a non-owner role changed the owner count → % (want 2)', n; end if;
+
+    raise notice 'RW12 last-owner guard: sole-owner removal BLOCKED, 2nd-owner removal ALLOWED, non-owner removal safe ✓';
+  end $$;
+rollback;
+
 \echo '== O1 append-only: audit_events is immutable even to superuser =='
 begin;
   do $$

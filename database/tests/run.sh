@@ -2,7 +2,7 @@
 # Run the full Seiki DB security + logic test suite.
 # Assumes the schema is applied+seeded: dbd -e dev reset && apply && policies && import
 set -euo pipefail
-: "${DATABASE_URL:?set DATABASE_URL, e.g. postgresql://postgres:postgres@127.0.0.1:54322/postgres}"
+: "${DATABASE_URL:?set DATABASE_URL, e.g. postgresql://postgres:postgres@127.0.0.1:55322/postgres}"
 here="$(cd "$(dirname "$0")" && pwd)"
 
 # Each harness raises on any failed assertion (ON_ERROR_STOP) → non-zero exit.

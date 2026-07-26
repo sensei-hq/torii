@@ -150,6 +150,7 @@
 									type="email"
 									placeholder="you@company.com"
 									autocomplete="username"
+									aria-label="Work email"
 									class="w-full rounded-md border border-paper-edge bg-paper px-3 py-2 text-sm text-ink focus:border-ink focus:outline-none"
 								/>
 							</div>
@@ -161,7 +162,7 @@
 									bind:value={password}
 									type="password"
 									placeholder="••••••••"
-									autocomplete="current-password"
+									autocomplete="current-password" aria-label="Password"
 									class="w-full rounded-md border border-paper-edge bg-paper px-3 py-2 text-sm text-ink focus:border-ink focus:outline-none"
 								/>
 							</div>

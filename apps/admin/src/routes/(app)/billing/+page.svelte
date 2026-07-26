@@ -112,6 +112,7 @@
 										<span class="text-[11px] text-ink-mute">cap $</span>
 										<input
 											bind:value={capDraft}
+											aria-label="Budget cap amount"
 											inputmode="decimal"
 											placeholder="∞ (blank = no cap)"
 											class="w-32 rounded-md border border-paper-edge bg-paper px-2 py-1 font-mono text-xs text-ink focus:border-ink focus:outline-none"

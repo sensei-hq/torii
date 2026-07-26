@@ -183,6 +183,7 @@
 						<div class="flex items-center gap-2">
 							<input
 								bind:value={name}
+								aria-label="API key name"
 								placeholder="key name (e.g. ingest-worker)"
 								class="w-48 rounded-md border border-paper-edge bg-paper px-2.5 py-1 font-mono text-xs text-ink placeholder:text-ink-mute"
 								onkeydown={(e) => e.key === 'Enter' && issue()}

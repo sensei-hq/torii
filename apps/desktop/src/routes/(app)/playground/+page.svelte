@@ -85,6 +85,7 @@
 					>
 					<textarea
 						bind:value={system}
+						aria-label="System prompt"
 						rows="2"
 						class="w-full resize-y rounded-md border border-paper-edge bg-paper px-3 py-2 text-sm text-ink focus:border-ink focus:outline-none"
 					></textarea>
@@ -95,6 +96,7 @@
 					>
 					<textarea
 						bind:value={prompt}
+						aria-label="Prompt"
 						{onkeydown}
 						rows="6"
 						placeholder="Ask anything… (⌘/Ctrl+Enter to run)"

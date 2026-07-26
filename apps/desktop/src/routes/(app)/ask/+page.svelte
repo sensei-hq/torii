@@ -115,6 +115,7 @@
 		<div class="flex items-center gap-2">
 			<input
 				bind:value={draft}
+				aria-label="Ask a question"
 				{onkeydown}
 				placeholder="Ask anything… (Enter to send)"
 				disabled={ask.loading}

@@ -66,6 +66,7 @@
 				></span>
 				<input
 					bind:value={q}
+					aria-label="Filter requests and audit events"
 					placeholder="Filter by model, status, action, actor…"
 					class="w-full rounded-md border border-paper-edge bg-paper py-2 pl-9 pr-3 text-sm text-ink placeholder:text-ink-mute focus:border-ink focus:outline-none"
 				/>

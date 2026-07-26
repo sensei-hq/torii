@@ -84,10 +84,10 @@
 				<span class="i-solar-cpu-bold-duotone h-3 w-3"></span>Desktop app
 			</span>
 			<span class="mx-1 h-4 w-px bg-paper-edge"></span>
-			<button class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute" title="Search"
+			<button class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute" title="Search" aria-label="Search"
 				><span class="i-solar-magnifer-bold-duotone h-4 w-4"></span></button
 			>
-			<button class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute" title="Notifications"
+			<button class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute" title="Notifications" aria-label="Notifications"
 				><span class="i-solar-bell-bold-duotone h-4 w-4"></span></button
 			>
 			<button
@@ -111,7 +111,7 @@
 			{#if onSignout}
 				<button
 					class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute"
-					title="Sign out"
+					title="Sign out" aria-label="Sign out"
 					onclick={onSignout}><span class="i-solar-logout-3-bold-duotone h-4 w-4"></span></button
 				>
 			{/if}

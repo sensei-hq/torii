@@ -3,9 +3,9 @@
 Strategos is a local-first **AI gateway** for an org: one address for every model across many
 routers, with a split execution plane (on-device vs via the gateway). Two first-party clients:
 
-- **Strategos Console** (`Strategos Console.html`) — member workspace: Workspace, Ask, Library,
+- **Torii** (`Torii.html`) — member workspace (desktop client): Workspace, Ask, Library,
   Playground, Activity/Requests, personal Settings.
-- **Strategos Admin** (`Strategos Admin.html`) — admin portal: Overview, Requests & audit,
+- **Seiki** (`Seiki.html`) — admin portal (web): Overview, Requests & audit,
   Organization, Onboarding, Models, Routing, Connections, Governance, Budgets & billing, Settings.
 
 Built with the **Zen-Sumi design system** (washi paper / sumi ink / one vermillion accent).

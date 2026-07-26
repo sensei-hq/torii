@@ -1,4 +1,4 @@
-/* Strategos Admin · view-devices.jsx
+/* Seiki · view-devices.jsx
    Device fleet — every enrolled device, where it executes, its app/config
    version, sync & offline-buffer health, and the revoke lever (kills a
    device's gateway access + key sync). */
@@ -48,7 +48,7 @@
             <div className="card-hd"><span className="zs-eyebrow">Enroll a device</span><button onClick={() => setEnroll(false)} style={{ display: 'grid', placeItems: 'center' }}><Icon name="close" size={15} tone="mute" /></button></div>
             <div style={{ padding: 'var(--space-5)' }}>
               <ol className="zs-body-sm" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.9 }}>
-                <li>The desktop app generates an <b>Ed25519</b> keypair on-device — the private key never leaves it.</li>
+                <li>Torii generates an <b>Ed25519</b> keypair on-device — the private key never leaves it.</li>
                 <li>It presents the <b>public key</b> to the gateway with a one-time enrolment code.</li>
                 <li>The gateway binds a <b>device session</b> to that pubkey; every call is signed by it.</li>
               </ol>

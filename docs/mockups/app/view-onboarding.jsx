@@ -1,8 +1,8 @@
-/* Strategos Admin Portal · view-onboarding.jsx
+/* Seiki · view-onboarding.jsx
    Tenant registration & onboarding — the setup checklist a new org works through,
    plus the registered tenant's identity details. Admin-only. */
 (function () {
-  const { Icon } = window.StrategosIcons;
+  const { Icon, BrandIcon } = window.StrategosIcons;
   const { Pill, PageHeader } = window.StrategosUI;
   const { BUDGET_TREE, money } = window.StrategosData;
   const { useState } = React;
@@ -14,7 +14,7 @@
     { k: 'router',  ic: 'router',     t: 'Connect a router',      s: '4 of 6 routers keyed. Add OpenRouter to unlock 300+ models.', done: false },
     { k: 'budgets', ic: 'wallet',     t: 'Set budgets',           s: 'Org cap set. Department caps pending for Finance & Support.', done: false },
     { k: 'invite',  ic: 'team',       t: 'Invite members',        s: '142 of 150 seats active. Bulk invite by domain available.', done: false },
-    { k: 'devices', ic: 'models',     t: 'Roll out the desktop app', s: 'Distribute installers and enrol devices for on-device models.', done: false },
+    { k: 'devices', ic: 'models',     t: 'Roll out Torii', s: 'Distribute Torii installers and enrol devices for on-device models.', done: false },
     { k: 'kb',      ic: 'library',    t: 'Set up spaces & knowledge base', s: 'Create spaces, set ingestion & retrieval defaults, import docs.', done: false },
   ];
 
@@ -24,7 +24,7 @@
   function SubFlow({ k }) {
     const grid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 'var(--space-4)' };
     if (k === 'org') return <div style={grid}><Field label="Legal name"><input style={inp} defaultValue="Northwind Estates Ltd" /></Field><Field label="Primary domain"><input style={inp} defaultValue="northwind.co" /></Field><Field label="Region"><select style={inp} defaultValue="eu-west-2">{['eu-west-2', 'eu-central-1', 'us-east-1'].map((r) => <option key={r}>{r}</option>)}</select></Field></div>;
-    if (k === 'sso') return <div><div style={grid}><button className="zs-btn zs-btn-primary" style={{ justifyContent: 'center' }}><Icon name="globe" size={14} tone="paper" /> Google OAuth · live</button><button className="zs-btn zs-btn-secondary" style={{ justifyContent: 'center' }}><Icon name="provider" size={14} tone="soft" /> GitHub OAuth · live</button><button className="zs-btn zs-btn-ghost" disabled style={{ justifyContent: 'center', opacity: 0.6 }}><Icon name="sso" size={14} tone="mute" /> SAML SSO · fast-follow</button></div><div className="mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--ink-mute)', marginTop: 'var(--space-3)' }}>142 seats · email + OAuth today · SAML SSO + SCIM directory sync are designed and land as a fast-follow.</div></div>;
+    if (k === 'sso') return <div><div style={grid}><button className="zs-btn zs-btn-secondary" style={{ justifyContent: 'center' }}><BrandIcon name="google" size={15} /> Google OAuth · live</button><button className="zs-btn zs-btn-secondary" style={{ justifyContent: 'center' }}><BrandIcon name="github" size={15} tone="ink" /> GitHub OAuth · live</button><button className="zs-btn zs-btn-ghost" disabled style={{ justifyContent: 'center', opacity: 0.6 }}><Icon name="sso" size={14} tone="mute" /> SAML SSO · fast-follow</button></div><div className="mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--ink-mute)', marginTop: 'var(--space-3)' }}>142 seats · email + OAuth today · SAML SSO + SCIM directory sync are designed and land as a fast-follow.</div></div>;
     if (k === 'region') return <div style={grid}><Field label="Primary region"><select style={inp} defaultValue="eu-west-2 · London">{['eu-west-2 · London', 'eu-central-1 · Frankfurt', 'us-east-1 · Virginia'].map((r) => <option key={r}>{r}</option>)}</select></Field><Field label="Egress"><select style={inp} defaultValue="In-region only">{['In-region only', 'Allow failover region'].map((r) => <option key={r}>{r}</option>)}</select></Field></div>;
     if (k === 'router') return <div className="flex items-center gap-3" style={{ flexWrap: 'wrap' }}><span className="mono" style={{ fontSize: 'var(--text-xs)', color: 'var(--ink-mute)' }}>Anthropic · OpenAI · Bedrock · Vercel keyed · OpenRouter + Ollama pending</span><span className="grow" /><button className="zs-btn zs-btn-primary zs-btn-sm"><Icon name="keys" size={13} tone="paper" /> Go to Connections →</button></div>;
     if (k === 'budgets') { const P = { day: 1 / 30, week: 7 / 30, mo: 1 }; const row = (n, depth) => (<React.Fragment key={n.name + depth}><div className="flex items-center gap-2" style={{ padding: '6px 0', paddingLeft: depth * 18, borderTop: depth ? '1px solid var(--paper-edge)' : 'none' }}><Icon name={n.kind === 'org' ? 'org' : n.kind === 'user' ? 'user' : n.kind === 'team' ? 'team' : 'dept'} size={13} tone={depth === 0 ? 'accent' : 'mute'} /><span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', fontWeight: depth === 0 ? 600 : 500, color: 'var(--ink)' }}>{n.name}</span><span className="dtag">{(n.name === 'Support' ? 'soft' : 'hard')}</span><span className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-mute)', width: 96, textAlign: 'right' }}>{money(n.cap, 0)}/mo</span></div>{(n.children || []).map((c) => row(c, depth + 1))}</React.Fragment>); return <div>{row(BUDGET_TREE, 0)}<div className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-faint)', marginTop: 'var(--space-3)' }}>Same tree as Organization · caps cascade org → dept → team → user · hard blocks, soft warns · edit periods in Organization</div></div>; }

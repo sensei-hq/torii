@@ -1,4 +1,4 @@
-/* Strategos Admin Portal · view-billing.jsx
+/* Seiki · view-billing.jsx
    Budgets & billing — the org → dept → user spend tree plus the license summary.
    Reuses StrategosData.BUDGET_TREE so the numbers match the rest of the gateway. */
 (function () {

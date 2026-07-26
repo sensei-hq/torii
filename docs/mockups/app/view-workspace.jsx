@@ -1,4 +1,4 @@
-/* Strategos Console · view-workspace.jsx (member home)
+/* Torii · view-workspace.jsx (member home)
    Task-focused. Pick up recent work, jump into a space, start something new. */
 (function () {
   const { Icon } = window.StrategosIcons;

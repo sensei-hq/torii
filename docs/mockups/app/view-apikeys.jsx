@@ -1,4 +1,4 @@
-/* Strategos Admin · view-apikeys.jsx
+/* Seiki · view-apikeys.jsx
    Programmatic access — the gateway is a programmable endpoint for the org's
    own apps. Issue scoped tenant API keys / service-account identities, watch
    usage, and rotate or revoke. */

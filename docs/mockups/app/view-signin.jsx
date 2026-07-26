@@ -1,9 +1,9 @@
-/* Strategos Console · view-signin.jsx — auth gate. Role chosen here scopes
+/* Torii · view-signin.jsx — auth gate. Role chosen here scopes
    everything that follows (RBAC). SSO-first, in the Zen-Sumi idiom.
    Layout: full-width intro header (brand · eyebrow · headline · summary),
    then two columns — routing diagram + value props | sign-in card. */
 (function () {
-  const { Icon, Enso, MarkPaths } = window.StrategosIcons;
+  const { Icon, BrandIcon, Enso, MarkPaths } = window.StrategosIcons;
   const { PROVIDER_HUE } = window.StrategosData;
   const { useState } = React;
 
@@ -35,7 +35,7 @@
       200: 'M160 200 C 232 200, 244 116, 272 116',
     };
     return (
-      <svg className="sgn-graphic" viewBox="0 0 420 232" role="img" aria-label="Strategos routes requests from many model providers through one gateway to your apps." fill="none">
+      <svg className="sgn-graphic" viewBox="0 0 420 232" role="img" aria-label="Requests from many model providers route through one gateway to your apps." fill="none">
         {/* connectors — base hairline */}
         {PROVIDERS.map((p) => (
           <path key={'b' + p.y} d={paths[p.y]} stroke="var(--paper-edge)" strokeWidth="1.5" />
@@ -74,11 +74,11 @@
     );
   }
 
-  function Brand({ size = 30, font = 26 }) {
+  function Brand({ size = 30, font = 26, name = 'Torii' }) {
     return (
       <div className="flex items-center gap-3">
         <Enso size={size} />
-        <span style={{ fontFamily: 'var(--font-display)', fontSize: font, letterSpacing: '-0.02em' }}>Strategos</span>
+        <span style={{ fontFamily: 'var(--font-display)', fontSize: font, letterSpacing: '-0.02em' }}>{name}</span>
       </div>
     );
   }
@@ -89,8 +89,8 @@
     const [sel, setSel] = useState(ids[0].persona);
     const id = ids.find((i) => i.persona === sel) || ids[0];
     const cross = isAdmin
-      ? { href: 'Strategos%20Console.html', label: 'Not an admin? Open the workspace' }
-      : { href: 'Strategos%20Admin.html', label: 'Administrator? Open the admin portal' };
+      ? { href: 'Torii.html', label: 'Not an admin? Open Torii' }
+      : { href: 'Seiki.html', label: 'Administrator? Open Seiki' };
 
     return (
       <div className="sgn-root">
@@ -125,7 +125,7 @@
           <header className="sgn-head">
             <div className="sgn-head-row">
               <span className="flex items-center gap-2">
-                <Brand size={32} font={28} />
+                <Brand size={32} font={28} name={isAdmin ? 'Seiki' : 'Torii'} />
                 <span className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-mute)', border: '1px solid var(--paper-edge)', borderRadius: 'var(--radius-full)', padding: '1px 7px' }}>v1.0</span>
               </span>
               <div className="zs-eyebrow" style={{ color: 'var(--accent)' }}>{isAdmin ? 'Admin portal · define · manage · control · inspect' : 'AI gateway · routing & governance'}</div>
@@ -136,7 +136,7 @@
             {/* ── left · routing diagram + value props ─────────────── */}
             <section className="sgn-intro">
               <p className="zs-body-sm" style={{ marginBottom: 'var(--space-5)', color: 'var(--ink-soft)', maxWidth: 460 }}>
-                Strategos routes every request across Anthropic, Google, OpenAI and your local models — then keeps spend, access and answer quality under one roof.
+                {isAdmin ? 'Seiki' : 'Torii'} routes every request across Anthropic, Google, OpenAI and your local models — then keeps spend, access and answer quality under one roof.
               </p>
               <div className="card" style={{ padding: 'var(--space-5) var(--space-5) var(--space-4)' }}>
                 <RoutingGraphic />
@@ -163,11 +163,11 @@
 
               {/* OAuth — v1 sign-in */}
               <div className="flex flex-col" style={{ gap: 8 }}>
-                <button className="zs-btn zs-btn-primary" style={{ width: '100%', justifyContent: 'center', height: 40 }} onClick={() => onSignIn(sel)}>
-                  <Icon name="globe" size={16} tone="paper" /> Continue with Google
+                <button className="zs-btn zs-btn-secondary" style={{ width: '100%', justifyContent: 'center', height: 40 }} onClick={() => onSignIn(sel)}>
+                  <BrandIcon name="google" size={17} /> Continue with Google
                 </button>
                 <button className="zs-btn zs-btn-secondary" style={{ width: '100%', justifyContent: 'center', height: 40 }} onClick={() => onSignIn(sel)}>
-                  <Icon name="provider" size={16} tone="soft" /> Continue with GitHub
+                  <BrandIcon name="github" size={17} tone="ink" /> Continue with GitHub
                 </button>
               </div>
 

@@ -1,4 +1,4 @@
-/* Strategos Console · view-playground.jsx — "chat with your documents",
+/* Torii · view-playground.jsx — "chat with your documents",
    layer by layer. Every toggle changes the trace, the answer, the meters. */
 (function () {
   const { Icon } = window.StrategosIcons;

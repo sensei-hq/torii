@@ -76,7 +76,9 @@
         } else {
           cell = el('div', `gcell cell note note-${row.kind}` + edge);
           const done = s.resolved && s.resolved[row.key];
-          const doneHtml = done ? `<span class="done">✓ Shipped — ${done}</span>` : '';
+          const prev = s.preview && s.preview[row.key];
+          const doneHtml = done ? `<span class="done">✓ Shipped — ${done}</span>`
+            : prev ? `<span class="done" style="color: var(--accent);">◐ v2 preview — ${prev}</span>` : '';
           cell.innerHTML = `<span class="nm">${row.mk}</span><span class="nt">${s[row.key]}${doneHtml}</span>`;
         }
         grid.appendChild(cell);
@@ -122,7 +124,8 @@
     const fc = el('div', 'focus-card');
     const dot = c.tone === 'fr' ? 'background: var(--warning);' : 'background: var(--accent);';
     const tags = c.tags.map((t) => `<span class="chip">${t}</span>`).join('');
-    const done = c.done ? `<span style="margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:var(--text-xs); color:var(--success); font-weight:600;">✓ Shipped</span>` : '';
+    const done = c.done ? `<span style="margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:var(--text-xs); color:var(--success); font-weight:600;">✓ Shipped</span>`
+      : c.preview ? `<span style="margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:var(--text-xs); color:var(--accent); font-weight:600;">◐ v2 preview</span>` : '';
     fc.innerHTML = `
       <div class="focus-rank"><span class="zs-dot" style="${dot}"></span>${c.rank}${done}</div>
       <h4>${c.title}</h4><p>${c.body}</p>

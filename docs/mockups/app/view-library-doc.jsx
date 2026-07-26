@@ -1,4 +1,4 @@
-/* Strategos Console · view-library-doc.jsx (member)
+/* Torii · view-library-doc.jsx (member)
    The document workspace — what opens when you select a Library item.
    Beyond "open": ingestion pipeline state, parse quality, the extracted-assets
    browser (rendered markdown · table-as-data-grid · figure gallery), the chunk

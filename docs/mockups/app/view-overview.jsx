@@ -1,4 +1,4 @@
-/* Strategos Console · view-overview.jsx — the daily briefing / dashboard. */
+/* Seiki · view-overview.jsx — the daily briefing / dashboard. */
 (function () {
   const { Icon } = window.StrategosIcons;
   const { ProviderDot, Pill, PageHeader } = window.StrategosUI;

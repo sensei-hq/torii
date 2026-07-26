@@ -1,4 +1,4 @@
-/* Strategos Console · data.jsx — the gateway's catalog + tenant context.
+/* Torii · data.jsx — the gateway's catalog + tenant context.
    Ported from the source product; values unchanged. */
 (function () {
   const MODELS = [

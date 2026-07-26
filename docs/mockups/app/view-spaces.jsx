@@ -1,4 +1,4 @@
-/* Strategos Admin · view-spaces.jsx
+/* Seiki · view-spaces.jsx
    Spaces & knowledge base — the admin/space-owned defaults behind the member
    Library and Playground. Per space: the ingestion & extraction profile, the
    chunking strategy, the retrieval mode + rerank, storage & quotas, and live

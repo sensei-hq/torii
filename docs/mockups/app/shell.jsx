@@ -1,4 +1,4 @@
-/* Strategos Console · shell.jsx — window chrome (with persona switch) + left rail. */
+/* Torii · shell.jsx — window chrome (with persona switch) + left rail. */
 (function () {
   const { Icon, Enso } = window.StrategosIcons;
   const { TIERS, wsByTier } = window.StrategosData;
@@ -89,14 +89,14 @@
     );
   }
 
-  function Chrome({ user, role, onSignOut, theme, onToggleTheme, title, onMenu }) {
+  function Chrome({ user, role, onSignOut, theme, onToggleTheme, title, onMenu, showEnv = true }) {
     return (
       <div className="zs-chrome">
         {onMenu && <button className="chrome-btn chrome-menu" onClick={onMenu} aria-label="Open navigation"><Icon name="menu" size={17} tone="mute" /></button>}
         <div className="zs-traffic"><span /><span /><span /></div>
         <div className="zs-chrome-title">{title}</div>
         <div className="chrome-tools">
-          <EnvChip />
+          {showEnv && <EnvChip />}
           <span style={{ width: 1, height: 18, background: 'var(--paper-edge)', margin: '0 6px' }} />
           <button className="chrome-btn" title="Search"><Icon name="search" size={16} tone="mute" /></button>
           <button className="chrome-btn" title="Notifications"><Icon name="bell" size={16} tone="mute" /></button>
@@ -124,7 +124,7 @@
     );
   }
 
-  function Rail({ section, setSection, account, workspace, onOpenSwitcher, groups, footer, open, onClose }) {
+  function Rail({ section, setSection, account, workspace, onOpenSwitcher, groups, footer, open, onClose, brand = 'Torii' }) {
     const ws = workspace;
     const tier = ws && TIERS.find((t) => t.key === ws.tier);
     return (
@@ -135,7 +135,7 @@
           {/* brand */}
           <div className="flex items-center gap-3" style={{ padding: '4px 6px 2px' }}>
             <Enso size={22} />
-            <span style={{ fontFamily: 'var(--font-display)', fontSize: 17, letterSpacing: '-0.01em' }}>Strategos</span>
+            <span style={{ fontFamily: 'var(--font-display)', fontSize: 17, letterSpacing: '-0.01em' }}>{brand}</span>
           </div>
 
           {/* active workspace — opens the command palette */}

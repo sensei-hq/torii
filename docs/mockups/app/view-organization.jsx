@@ -1,4 +1,4 @@
-/* Strategos Console · view-organization.jsx (admin)
+/* Seiki · view-organization.jsx (admin)
    Multi-level hierarchy (org → department → team → user) with a budget at every
    level, each enforceable per day / week / month, plus people → team mapping. */
 (function () {
@@ -277,7 +277,7 @@
               <div className="zs-eyebrow" style={{ margin: 'var(--space-5) 0 var(--space-3)' }}>Map directory groups → roles</div>
               <div style={{ border: '1px solid var(--paper-edge)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
                 <table className="tbl">
-                  <thead><tr><th>Directory group</th><th className="num">Members</th><th>Strategos role</th></tr></thead>
+                  <thead><tr><th>Directory group</th><th className="num">Members</th><th>Seiki role</th></tr></thead>
                   <tbody>
                     {GROUPS0.map((g) => (
                       <tr key={g.group}>

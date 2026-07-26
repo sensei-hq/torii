@@ -1,4 +1,4 @@
-/* Strategos Admin · view-features.jsx
+/* Seiki · view-features.jsx
    Feature management — the control-ownership model (UiFeature × UiFeatureState).
    Admins decide which controls a member sees and whether a member may override
    them. Every control resolves to one of four states:

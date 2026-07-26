@@ -41,10 +41,10 @@ lint: ## Prettier format-check + ESLint across all workspaces
 # ── E2E ───────────────────────────────────────────────────────────────────────
 
 e2e: ## Run Playwright e2e for admin and desktop (desktop e2e builds the Tauri app — slow)
-	bun run --filter @strategos/admin test:e2e
+	bun run --filter @seiki/admin test:e2e
 	# Desktop e2e compiles the full Tauri bundle via `bunx tauri build --debug`.
 	# Expect 5-15 min on a cold cache; subsequent runs use incremental Rust builds.
-	bun run --filter @strategos/desktop test:e2e
+	bun run --filter @torii/desktop test:e2e
 
 # ── Clean / Disk management ───────────────────────────────────────────────────
 

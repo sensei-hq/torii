@@ -7,7 +7,7 @@ window.STRATEGOS_JOURNEYS = [
     kanji: '問',
     name: 'The member',
     sub: 'mon · to ask',
-    who: 'A developer or analyst inside the org. Lives in the Console. Wants an answer or a working draft, and wants to trust that what they send is allowed and what they get back is private.',
+    who: 'Anyone in the org who uses AI to get work done — a developer, analyst, marketer, or ops teammate. Lives in the Console. Wants an answer or a working draft, and wants to trust that what they send is allowed and what they get back is private.',
     goal: 'Get real work done with the best model for the task — without thinking about routers, keys, or quotas.',
     quote: '“Just give me an answer I can trust, and tell me where it ran.”',
     stages: [
@@ -68,17 +68,17 @@ window.STRATEGOS_JOURNEYS = [
         }
       },
       {
-        kanji: '繰', no: 'Phase 05', name: 'Automate', emo: 0.58, emoLabel: 'Empowered',
-        does: ['Creates a workflow — trigger → steps', 'Builds it as a List or a DAG canvas', 'Shares it — team or company-wide'],
-        thinks: '“I did this once by hand — now it runs every Monday without me.”',
-        touch: ['Workflows', 'Builder', 'Runs'],
-        friction: 'A good result in Ask or Playground is a dead end — nothing makes the one-off repeatable.',
-        opportunity: 'Promote a proven recipe into a workflow: a trigger, a chain of steps, and a run history — governed like any call.',
-        gap: 'No way to author agents that decide their own steps, nor guardrails purpose-built for unattended runs.',
-        resolved: {
-          friction: 'Workflows ship — you author one yourself (add / edit / reorder steps), set its trigger, then share it (just you · workspace · specific people · company-wide).',
-          opportunity: 'each workflow carries a Runs history (status, cost, what it touched) and a Governance tab — allowed tools, budget impact, approval gates.'
-          /* gap left open on purpose: ReAct agents are a v2 preview, not yet shippable */
+        kanji: '繰', no: 'Phase 05', name: 'Automate', emo: 0.48, emoLabel: 'Intrigued',
+        does: ['Explores the Workflows preview', 'Reads a flow — trigger → steps', 'Sees a run trace + governance tab'],
+        thinks: '“I can see where this is going — but I can’t switch it on yet.”',
+        touch: ['Workflows · v2', 'Builder', 'Runs'],
+        friction: 'A good result in Ask or Playground is still a dead end in v1 — nothing makes the one-off actually repeatable yet.',
+        opportunity: 'Promote a proven recipe into a governed workflow: a trigger, a chain of steps, a run history — the whole module is designed and previewable.',
+        gap: 'Workflows (both flows and ReAct agents) are gated to a v2 preview — Run, create and edit are disabled; nothing executes unattended in v1.',
+        preview: {
+          friction: 'the Workflows module is built and explorable — flows, a step builder, run history and a governance tab — but marked v2 preview, so Run / create / edit are off.',
+          opportunity: 'each workflow shows its Runs history (status, cost, what it touched) and a Governance tab (allowed tools, budget, approval gates) as a design preview.',
+          gap: 'flows and ReAct agents both land in v2 — v1 ships the design, not live execution.'
         }
       },
       {
@@ -91,7 +91,7 @@ window.STRATEGOS_JOURNEYS = [
         gap: 'No personal budget meter, no in-product appeal/request-increase flow.',
         resolved: {
           friction: 'Activity shows your live ceiling; at 100% you drop to the free local model — never a hard wall.',
-          opportunity: 'the org → dept → you cascade is visible, with a one-tap Request increase to your admin.',
+          opportunity: 'the org → dept → you cascade is visible, with a one-tap Request increase to your admin — which now lands in the admin’s approval queue.',
           gap: 'personal budget meter + a request-increase flow (amount, reason, pending state) shipped.'
         }
       }
@@ -122,7 +122,7 @@ window.STRATEGOS_JOURNEYS = [
       },
       {
         title: 'Turn a task into a workflow',
-        note: 'The new repeatable layer — a proven one-off becomes a governed automation.',
+        note: 'The repeatable layer — designed end-to-end but gated to a v2 preview; a proven one-off will become a governed automation once it ships.',
         steps: [
           { label: 'Proven result', sub: 'Ask / Playground' },
           { label: 'Save as workflow', sub: 'Workflows' },
@@ -210,7 +210,7 @@ window.STRATEGOS_JOURNEYS = [
         gap: 'Tenant API keys + service-account identities are scoped but not yet a managed surface.',
         resolved: {
           friction: 'every API key / service account meters against the same cascade, so spend traces straight to a team.',
-          opportunity: 'budgets and key usage both read against the org → dept → user tree.',
+          opportunity: 'budgets and key usage both read against the org → dept → user tree — and a budget-request approval queue now consumes member requests (approve / reject), closing the member’s Stay-in-bounds loop.',
           gap: 'an API keys & service-accounts surface shipped — scope, spend-vs-cap and revoke per identity.'
         }
       }
@@ -245,7 +245,7 @@ window.STRATEGOS_JOURNEYS = [
 
 window.STRATEGOS_FOCUS = {
   title: 'Where to focus',
-  sub: 'Read across both journeys, three gaps moved the experience most — each sat at a low point on a curve and unlocked a flow that used to stall. All three have shipped; a fourth theme — repeatable automation — is now the live edge.',
+  sub: 'Read across both journeys, three gaps moved the experience most — each sat at a low point on a curve and unlocked a flow that used to stall. All three have shipped. A fourth theme — repeatable automation — is designed end-to-end but gated to a v2 preview, so it’s the edge still ahead, not a live capability.',
   cards: [
     {
       rank: '01 · highest leverage', tone: 'op',
@@ -262,14 +262,14 @@ window.STRATEGOS_FOCUS = {
     {
       rank: '03 · close the loop', tone: 'fr',
       title: 'From block to conversation',
-      body: 'Pair a personal budget meter + request-increase flow (member) with proactive alerts on the admin Overview. The blocked-request flow stops being a dead end.',
-      tags: ['Member · Phase 06', 'Admin · Phase 04', 'Roadmap P3'], done: true
+      body: 'Pair a personal budget meter + request-increase flow (member) with proactive alerts on the admin Overview. The blocked-request flow stops being a dead end — the request now lands in an admin approval queue. Remaining thread: the queue isn’t yet a proactive alert, so the admin still finds it by looking.',
+      tags: ['Member · Phase 06', 'Admin · Phase 05', 'Roadmap P3'], done: true
     },
     {
       rank: '04 · the live edge', tone: 'op',
       title: 'Repeatable automation',
-      body: 'The member’s new “Automate” moment: create a workflow, author its steps on a List or DAG canvas, share it (workspace · specific people · company-wide), and watch its runs — cost, trace and approval gates all in view. ReAct agents are the v2 preview still ahead.',
-      tags: ['Member · Phase 05', 'Workflows', 'Roadmap P4 · agents v2']
+      body: 'The member’s “Automate” moment: a workflow with a trigger, steps on a List or DAG canvas, a run history and a governance tab. The whole module is designed and explorable — but gated to a v2 preview: nothing runs unattended in v1, and ReAct agents sit behind the same gate.',
+      tags: ['Member · Phase 05', 'Workflows · v2', 'Roadmap P4 · agents'], preview: true
     }
   ]
 };

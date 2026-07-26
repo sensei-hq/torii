@@ -1,4 +1,4 @@
-/* Strategos Console · atoms.jsx — shared interactive atoms.
+/* Torii · atoms.jsx — shared interactive atoms.
    Exposes window.StrategosUI. */
 (function () {
   const { Icon } = window.StrategosIcons;
@@ -76,9 +76,9 @@
   }
 
   /* ── execution environment (prototype state: desktop / offline / web) ──
-     The desktop app can run models on-device; the web client cannot, and an
-     offline desktop buffers calls and falls back to local models. A single
-     switchable state drives every device/sync/offline affordance. */
+     Torii on the desktop can run models on-device; Torii in a browser cannot,
+     and an offline desktop buffers calls and falls back to local models. A
+     single switchable state drives every device/sync/offline affordance. */
   const ENV_ORDER = ['desktop', 'offline', 'web'];
   let _env = 'desktop';
   try { _env = localStorage.getItem('zs-env') || 'desktop'; } catch (e) {}
@@ -89,7 +89,7 @@
     const online = v !== 'offline';
     return {
       id: v, web, desktop: !web, online,
-      label: web ? 'Web app' : v === 'offline' ? 'Desktop · offline' : 'Desktop app',
+      label: web ? 'Web' : v === 'offline' ? 'Desktop · offline' : 'Desktop',
       sync: online ? 'synced' : 'offline · buffering',
       config: 'v412',
       buffer: online ? 0 : 3,        // calls queued to report
@@ -138,7 +138,7 @@
     if (admin) {
       line2 = '4 of 6 routers connected · config ' + meta.config;
     } else if (meta.web) {
-      line2 = 'web app · local models need desktop';
+      line2 = 'in a browser · local models need Torii for desktop';
     } else {
       line2 = meta.localModels + ' models on device · embeddings on-device' + (meta.buffer ? ' · ' + meta.buffer + ' calls queued' : '');
     }
@@ -151,7 +151,7 @@
   // inline status pill — "X models on device" / "Web · no local models" / offline
   function DevicePill() {
     const { meta } = useEnv();
-    const label = meta.web ? 'Web · no local models'
+    const label = meta.web ? 'Browser · no local models'
       : meta.online ? meta.localModels + ' models on device'
       : 'Offline · ' + meta.localModels + ' local · ' + meta.buffer + ' queued';
     const cls = 'pill' + (meta.web ? '' : meta.online ? ' success' : '');
@@ -175,13 +175,13 @@
         React.createElement(Icon, { name: 'models', size: 12, tone: 'success' }), 'on your device'));
   }
 
-  // desktop-only notice for the web client
+  // desktop-only notice for Torii in a browser
   function DesktopOnlyNote({ feature = 'Local models' }) {
     const { meta } = useEnv();
     if (!meta.web) return null;
     return React.createElement('div', { className: 'env-banner' },
       React.createElement(Icon, { name: 'globe', size: 16, tone: 'mute' }),
-      React.createElement('span', { style: { flex: 1 } }, feature + ' need the desktop app. On the web, every call runs via the gateway.'));
+      React.createElement('span', { style: { flex: 1 } }, feature + ' need Torii for desktop. In a browser, every call runs via the gateway.'));
   }
 
   // model picker (compact select styled)

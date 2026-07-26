@@ -1,4 +1,4 @@
-/* Strategos Console · view-workflows-builder.jsx
+/* Torii · view-workflows-builder.jsx
    The two builder directions for a workflow — a linear List builder and a
    DAG Canvas — plus the agent (v2 preview) builder. Shared step metadata and
    run-status colors live here and are reused by the index + runs views.

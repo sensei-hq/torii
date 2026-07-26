@@ -1,4 +1,4 @@
-/* Strategos Admin · view-alerts.jsx
+/* Seiki · view-alerts.jsx
    Alerts & notifications — delivery channels (email / Slack / webhook / SIEM)
    and the rules that fire into them (budget breach, outage, policy hit,
    anomaly). */

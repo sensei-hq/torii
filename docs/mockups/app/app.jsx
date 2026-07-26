@@ -1,7 +1,7 @@
-/* Strategos Console · app.jsx — member workspace root.
+/* Torii · app.jsx — member workspace root.
    The console is now user-focused: workspace, ask, library, playground, plus
    personal activity & settings. All tenant / gateway administration lives in
-   the separate Admin Portal (Strategos Admin.html). */
+   the separate admin portal, Seiki (Seiki.html). */
 (function () {
   const { Chrome, Rail, WorkspaceSwitcher, MobileTabs } = window.StrategosShell;
   const { Icon } = window.StrategosIcons;
@@ -57,7 +57,7 @@
     return (
       <div className="view-pad rise">
         <PageHeader eyebrow="Settings" title="Your preferences" subMax={600}
-          sub="How Strategos behaves for you. Workspace-wide policies are set by an administrator — those show a lock and can’t be changed here." />
+          sub="How Torii behaves for you. Workspace-wide policies are set by an administrator — those show a lock and can’t be changed here." />
 
         <div className="card" style={{ overflow: 'hidden' }}>
           <Head label="Appearance" />
@@ -113,7 +113,7 @@
           </Row>
         </div>
 
-        <div className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-faint)', marginTop: 'var(--space-5)' }}>Strategos · workspace · signed in as mara.okafor@northwind.co · locked preferences are governed by your admin</div>
+        <div className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-faint)', marginTop: 'var(--space-5)' }}>Torii · workspace · signed in as mara.okafor@northwind.co · locked preferences are governed by your admin</div>
       </div>
     );
   }
@@ -138,7 +138,7 @@
   ];
 
   const CFG = {
-    title: 'Strategos  ·  workspace', def: 'workspace', nav: NAV, role: 'Member',
+    title: 'Torii  ·  workspace', def: 'workspace', nav: NAV, role: 'Member',
     user: { name: 'Mara', initial: 'M' },
     account: { mark: 'M', name: 'Mara Okafor', sub: 'Leasing Ops · member' },
     footer: React.createElement(window.StrategosUI.DeviceFooter, { scope: 'member' }),
@@ -183,7 +183,7 @@
     const signIn = () => { setSection(CFG.def); setAuthed(true); };
     const nav = (id) => { setSection(id); setRailOpen(false); };
     const fullBleed = section === 'library' || section === 'ask';
-    const title = 'Strategos  ·  ' + ws.name;
+    const title = 'Torii  ·  ' + ws.name;
 
     if (!authed) return React.createElement(window.SignInView, { onSignIn: signIn, mode: 'member' });
 
@@ -191,7 +191,7 @@
       <div className="win has-mtabs">
         <Chrome user={CFG.user} role={CFG.role} onSignOut={() => setAuthed(false)} theme={theme} onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))} title={title} onMenu={() => setRailOpen((v) => !v)} />
         <div className="win-body">
-          <Rail section={section} setSection={nav} workspace={ws} onOpenSwitcher={() => setSwitcherOpen(true)} groups={CFG.nav} footer={CFG.footer} open={railOpen} onClose={() => setRailOpen(false)} />
+          <Rail section={section} setSection={nav} workspace={ws} onOpenSwitcher={() => setSwitcherOpen(true)} groups={CFG.nav} footer={CFG.footer} brand="Torii" open={railOpen} onClose={() => setRailOpen(false)} />
           <main className="view" key={section + wsId} style={fullBleed ? { overflow: 'hidden' } : undefined}>{renderView(section, nav, CFG.user, { theme, setTheme })}</main>
         </div>
         <MobileTabs section={section} onPick={nav} onMore={() => setRailOpen(true)}

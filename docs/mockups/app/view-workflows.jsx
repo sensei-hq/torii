@@ -1,4 +1,4 @@
-/* Strategos Console · view-workflows.jsx (member · Tools)
+/* Torii · view-workflows.jsx (member · Tools)
    Repeatable automation, scoped to the active workspace (+ company-wide
    shared). Create a workflow, author its steps (List ⇄ DAG canvas), share it
    (just me · this workspace · specific people · company-wide), and watch its

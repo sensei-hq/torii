@@ -1,4 +1,4 @@
-/* Strategos Console · view-requests.jsx — interaction ledger + "why this model" trace. */
+/* Torii · view-requests.jsx — interaction ledger + "why this model" trace. */
 (function () {
   const { Icon } = window.StrategosIcons;
   const { ProviderDot, ExecBadge, Meter, useEnv, useWorkspace, WorkspaceChip, PageHeader } = window.StrategosUI;

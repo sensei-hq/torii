@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════════════
-   Strategos · zs-responsive.css
+   Torii · Seiki · zs-responsive.css
    Normalized column grids + responsive / mobile layer.
-   Load AFTER zs-app.css in both Console and Admin.
+   Load AFTER zs-app.css in both Torii and Seiki.
 
    Grid vocabulary — replaces every ad-hoc inline grid-template-columns:
      .grid-split      main + aside, 1.6 : 1          → stacks ≤980px

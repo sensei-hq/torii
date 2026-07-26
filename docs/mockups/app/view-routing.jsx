@@ -1,4 +1,4 @@
-/* Strategos Admin · view-routing.jsx — routing behaviour, now editable.
+/* Seiki · view-routing.jsx — routing behaviour, now editable.
    Named chains per capability, an editable + reorderable fallback chain
    (add/remove/move steps, per-step model & trigger), which chain a space/role
    uses, and an editable routing policy. Budget *limits* live in Organization. */

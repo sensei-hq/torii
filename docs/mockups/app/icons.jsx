@@ -1,4 +1,4 @@
-/* Strategos Console · icons.jsx
+/* Torii · icons.jsx
    Iconography = Solar Icons (Bold Duotone) via the Iconify SVG API,
    tinted to the Zen-Sumi ink / accent scale. This is the "icons instead
    of kanji" layer: every functional mark that the source used a kanji for
@@ -110,7 +110,20 @@
     });
   }
 
-  // brand mark — the Strategos banner: a pennant of routed shards tapering
+  // brand marks for OAuth buttons — real provider logos (Google stays
+  // multicolor; GitHub is a silhouette, tinted to the ink ladder).
+  function BrandIcon({ name, size = 16, tone = 'ink', style }) {
+    const src = name === 'google'
+      ? 'https://api.iconify.design/logos:google-icon.svg'
+      : 'https://api.iconify.design/simple-icons:github.svg?color=' + encodeURIComponent(palette()[tone] || tone);
+    return React.createElement('img', {
+      src, width: size, height: size, alt: '',
+      style: Object.assign({ display: 'block', flexShrink: 0 }, style),
+      draggable: false,
+    });
+  }
+
+  // brand mark — the platform banner: a pennant of routed shards tapering
   // to a point, with a vermillion dollar-coin rosette. From uploads/strategos.svg,
   // tinted to the Zen-Sumi ink ladder so it follows light/dark themes.
   const MARK_COIN = 'M8.5 15C7.11942 15 6 16.1194 6 17.5C6 18.8806 7.11942 20 8.5 20C9.88058 20 11 18.8806 11 17.5C11 16.1194 9.88058 15 8.5 15ZM8.62444 18.7121L8.62556 18.889C8.62556 18.9135 8.60547 18.9342 8.58092 18.9342H8.42243C8.39788 18.9342 8.37779 18.9141 8.37779 18.8895V18.7143C7.88225 18.6775 7.649 18.3951 7.62388 18.0882C7.62165 18.0619 7.6423 18.0396 7.66853 18.0396H7.92634C7.9481 18.0396 7.96708 18.0552 7.97042 18.0765C7.99888 18.2533 8.13672 18.3856 8.38393 18.4185V17.6222L8.24609 17.5871C7.95424 17.5173 7.67634 17.3354 7.67634 16.9581C7.67634 16.5513 7.98549 16.3326 8.38058 16.2941V16.1099C8.38058 16.0854 8.40067 16.0653 8.42522 16.0653H8.58203C8.60658 16.0653 8.62667 16.0854 8.62667 16.1099V16.2924C9.00893 16.3309 9.29576 16.5541 9.32924 16.9018C9.33203 16.928 9.31138 16.9509 9.2846 16.9509H9.03404C9.01172 16.9509 8.99275 16.9342 8.98996 16.9124C8.96763 16.7494 8.83705 16.6166 8.62444 16.5876V17.3371L8.76618 17.37C9.12779 17.4593 9.37388 17.6323 9.37388 18.0195C9.37388 18.4397 9.06138 18.6741 8.62444 18.7121ZM8.02344 16.9325C8.02344 17.0742 8.11105 17.1842 8.29967 17.2522C8.32589 17.2628 8.35212 17.2712 8.38337 17.2801V16.5882C8.17746 16.6144 8.02344 16.7299 8.02344 16.9325ZM8.67355 17.6869C8.65792 17.6836 8.6423 17.6797 8.62444 17.6747V18.4208C8.86217 18.3996 9.02623 18.269 9.02623 18.0502C9.02623 17.8789 8.9375 17.7673 8.67355 17.6869Z';
@@ -135,6 +148,6 @@
     );
   }
 
-  window.StrategosIcons = { Icon, Enso: Mark, Mark, TONE,
+  window.StrategosIcons = { Icon, BrandIcon, Enso: Mark, Mark, TONE,
     MarkPaths: { coin: MARK_COIN, top: MARK_TOP, band2: MARK_BAND2, band3: MARK_BAND3, tip: MARK_TIP, nub: MARK_NUB, orb: MARK_ORB } };
 })();

@@ -1,4 +1,4 @@
-/* Strategos Admin Portal · admin.jsx — root.
+/* Seiki · admin.jsx — root.
    Tenant & gateway administration, split out of the member console. Offers two
    layouts to compare via Tweaks: a left sidebar rail, or a horizontal top bar. */
 (function () {
@@ -33,7 +33,7 @@
             </div>
           ))}
         </div>
-        <div className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-faint)', marginTop: 'var(--space-5)' }}>Strategos · gateway · healthy · last heartbeat 2s ago</div>
+        <div className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-faint)', marginTop: 'var(--space-5)' }}>Seiki · gateway · healthy · last heartbeat 2s ago</div>
       </div>
     );
   }
@@ -222,10 +222,10 @@
       <React.Fragment>
         <style>{ATOP_STYLE}</style>
         <div className="win">
-          <Chrome user={USER} role="Administrator" onSignOut={() => setAuthed(false)} theme={theme} onToggleTheme={() => setTweak('dark', !t.dark)} title="Strategos  ·  admin portal" onMenu={layout === 'rail' ? () => setRailOpen((v) => !v) : undefined} />
+          <Chrome user={USER} role="Administrator" onSignOut={() => setAuthed(false)} theme={theme} onToggleTheme={() => setTweak('dark', !t.dark)} title="Seiki  ·  admin portal" showEnv={false} onMenu={layout === 'rail' ? () => setRailOpen((v) => !v) : undefined} />
           {layout === 'topbar' && <TopNav section={section} setSection={nav} groups={NAV} />}
           <div className="win-body">
-            {layout === 'rail' && <Rail section={section} setSection={nav} account={ACCOUNT} groups={NAV} footer={FOOTER} open={railOpen} onClose={() => setRailOpen(false)} />}
+            {layout === 'rail' && <Rail section={section} setSection={nav} account={ACCOUNT} groups={NAV} footer={FOOTER} brand="Seiki" open={railOpen} onClose={() => setRailOpen(false)} />}
             <main className="view" key={layout + section}>{renderView(section, go)}</main>
           </div>
         </div>

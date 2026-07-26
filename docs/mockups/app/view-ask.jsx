@@ -1,4 +1,4 @@
-/* Strategos Console · view-ask.jsx (member)
+/* Torii · view-ask.jsx (member)
    A targeted-task surface over the shared library. Full-bleed: a conversation
    column plus a live context rail (sources · follow-ups · scope). No knobs. */
 (function () {

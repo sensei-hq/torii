@@ -1,4 +1,4 @@
-/* Strategos Admin · view-templates.jsx
+/* Seiki · view-templates.jsx
    Prompt & template library — the shared, versioned prompts that power Ask's
    "Draft" and saved workflows, scoped per space. */
 (function () {

@@ -1,4 +1,4 @@
-/* Strategos Console · view-governance.jsx (admin)
+/* Seiki · view-governance.jsx (admin)
    Ownership · security · confidentiality for the shared content system. */
 (function () {
   const { Icon } = window.StrategosIcons;

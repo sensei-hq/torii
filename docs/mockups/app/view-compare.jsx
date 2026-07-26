@@ -1,4 +1,4 @@
-/* Strategos Console · view-compare.jsx (member)
+/* Torii · view-compare.jsx (member)
    Run one question across 2–4 models / pipelines side by side, with an
    optional quality-judge that ranks the answers. The old "mixologist". */
 (function () {

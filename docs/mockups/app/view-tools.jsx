@@ -1,4 +1,4 @@
-/* Strategos Admin · view-tools.jsx
+/* Seiki · view-tools.jsx
    Tools & MCP servers — register MCP servers (stdio for desktop, http/sse
    for shared) and set tool allow-lists per role. v1 scope. */
 (function () {
@@ -65,7 +65,7 @@
               <Switch on={s.status !== 'off'} onClick={() => toggleServer(s.id)} label={'Enable ' + s.id} />
             </div>
           ))}
-          <div className="card-foot dashed"><Icon name="info" size={14} tone="mute" /><span><b>stdio</b> servers run inside the desktop app (on-device, no egress). <b>http/sse</b> servers are shared and run via the gateway.</span></div>
+          <div className="card-foot dashed"><Icon name="info" size={14} tone="mute" /><span><b>stdio</b> servers run inside Torii (on-device, no egress). <b>http/sse</b> servers are shared and run via the gateway.</span></div>
         </div>
 
         <div className="card" style={{ overflow: 'hidden' }}>

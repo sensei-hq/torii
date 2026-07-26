@@ -1,4 +1,4 @@
-/* Strategos Admin · view-models.jsx — the model catalog, now editable.
+/* Seiki · view-models.jsx — the model catalog, now editable.
    Add or edit a custom model + endpoint, enable/disable per tenant, mark
    local-capable, and refresh capabilities from the router. */
 (function () {

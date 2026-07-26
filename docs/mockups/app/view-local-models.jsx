@@ -1,4 +1,4 @@
-/* Strategos Console · view-local-models.jsx (member · desktop)
+/* Torii · view-local-models.jsx (member · desktop)
    Browse, download, update and remove on-device models (GGUF / ONNX),
    set the local default, and watch storage. Web clients see the
    desktop-only note; everything runs on the member's own hardware. */
@@ -66,8 +66,8 @@
         {meta.web ? (
           <div className="card" style={{ padding: 'var(--space-7)', textAlign: 'center', marginTop: 'var(--space-5)' }}>
             <span className="glyph" style={{ width: 48, height: 48, margin: '0 auto var(--space-4)' }}><Icon name="globe" size={24} tone="mute" /></span>
-            <div className="zs-h3" style={{ marginBottom: 6 }}>Open Strategos on the desktop</div>
-            <p className="zs-body-sm" style={{ maxWidth: 420, margin: '0 auto' }}>On-device models need the desktop app’s embedded runtime. On the web, every call runs via the gateway.</p>
+            <div className="zs-h3" style={{ marginBottom: 6 }}>Open Torii on your desktop</div>
+            <p className="zs-body-sm" style={{ maxWidth: 420, margin: '0 auto' }}>On-device models need Torii’s embedded runtime. In a browser, every call runs via the gateway.</p>
           </div>
         ) : (
           <React.Fragment>

@@ -1,4 +1,4 @@
-/* Strategos Admin · view-connections.jsx — provider connections, editable.
+/* Seiki · view-connections.jsx — provider connections, editable.
    Connect a router (enter key → validate → store in the vault), rotate or
    revoke, set per-router custody (device-local vs gateway-proxied), and add a
    custom / OpenAI-compatible endpoint with its region. */

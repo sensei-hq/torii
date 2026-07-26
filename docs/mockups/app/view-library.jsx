@@ -1,4 +1,4 @@
-/* Strategos Console · view-library.jsx (member)
+/* Torii · view-library.jsx (member)
    The shared content system, now a document workspace. Uploads of any format
    are normalized to md / csv / json / images for consistent embeddings.
    This is the index: spaces, collections, tags, storage, multi-select + bulk
@@ -324,7 +324,7 @@
           {/* upload→normalize hint */}
           <div className="flex items-center gap-3" style={{ padding: 'var(--space-3) var(--space-4)', borderRadius: 'var(--radius)', background: 'var(--paper-mute)', border: '1px dashed var(--paper-edge)', marginBottom: 'var(--space-4)' }}>
             <Icon name="upload" size={16} tone="mute" />
-            <span className="zs-body-sm" style={{ flex: 1 }}>Drop <b>pdf · docx · xlsx · pptx</b> here — Strategos parses layout-first into <span className="mono" style={{ fontSize: 12 }}>md · csv · json · images</span>, then chunks and embeds for retrieval.</span>
+            <span className="zs-body-sm" style={{ flex: 1 }}>Drop <b>pdf · docx · xlsx · pptx</b> here — Torii parses layout-first into <span className="mono" style={{ fontSize: 12 }}>md · csv · json · images</span>, then chunks and embeds for retrieval.</span>
           </div>
 
           {/* items */}

@@ -5,8 +5,8 @@
 //! process: no daemon, no HTTP hop. A single `embedded-llama` adapter
 //! (in-process llama.cpp via `sensei-local-providers::EmbeddedLlamaAdapter`,
 //! re-exported as `gateway::local::EmbeddedLlamaAdapter`) serves chat locally, with the model
-//! bytes resolved through a two-stage registry — Torii-managed files first
-//! (`~/.torii/models`), then a read-through view of the local Ollama cache
+//! bytes resolved through a two-stage registry — managed files first
+//! (`~/.strategos/models`), then a read-through view of the local Ollama cache
 //! (`~/.ollama/models`). A model already pulled by Ollama (e.g. `gemma2:2b`) is
 //! reused in place; nothing has to ship with the binary. The per-model worker
 //! loads lazily on first inference.
@@ -65,7 +65,7 @@ async fn register_embedded_llama(adapters: &AdapterRegistry) {
     use gateway::local::{ChainedResolver, EmbeddedLlamaAdapter, ManagedResolver, OllamaResolver};
 
     let resolver = ChainedResolver::new()
-        .push(Arc::new(ManagedResolver::new(torii_models_dir())))
+        .push(Arc::new(ManagedResolver::new(managed_models_dir())))
         .push(Arc::new(OllamaResolver::new(ollama_models_dir())));
 
     match EmbeddedLlamaAdapter::with_shared_backend("embedded-llama", Arc::new(resolver)) {
@@ -89,10 +89,13 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Torii-managed model directory (`~/.torii/models`), created if
-/// missing. First leg of the resolver chain.
-fn torii_models_dir() -> PathBuf {
-    let dir = home_dir().join(".torii").join("models");
+/// Torii's managed model directory. Path stays `~/.strategos/models` for now —
+/// the on-disk identity (this dir, `local.db`, the `strategos://` deep-link
+/// scheme, the Tauri bundle id) renames together in the deferred T3 sweep so a
+/// piecemeal change can't orphan a user's pulled models. Created if missing;
+/// first leg of the resolver chain.
+fn managed_models_dir() -> PathBuf {
+    let dir = home_dir().join(".strategos").join("models");
     if let Err(e) = std::fs::create_dir_all(&dir) {
         log::warn!("gateway: could not create {}: {e}", dir.display());
     }

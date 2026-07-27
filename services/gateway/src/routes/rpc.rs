@@ -1271,3 +1271,61 @@ pub async fn connections_revoke(
     .await;
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
+
+#[derive(Deserialize)]
+pub struct OAuthConnect {
+    /// Router NAME (`config.routers.name`) — Anthropic in v1 (the only OAuth-capable adapter).
+    pub router: String,
+    /// The OAuth bearer / `setup-token` — WRITE-ONLY: sealed at rest, never returned/logged.
+    pub token: String,
+}
+
+/// `POST /rpc/connections/oauth-connect` — capability `connection.manage`. Seals a pasted OAuth
+/// bearer token (Anthropic `setup-token`, the ToS-safe path — no redirect) as the active
+/// `credential_type='oauth'` credential for the router; an api_key credential for the same
+/// router can coexist. The token is never returned or logged. (O-3a.)
+pub async fn connections_oauth_connect(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<OAuthConnect>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "connection.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let router_id = match resolve_router_id(&state, &body.router).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    match state
+        .tenant_keys
+        .store_oauth(
+            tenant,
+            router_id,
+            &body.token,
+            None,
+            None,
+            None,
+            None,
+            &actor.to_string(),
+        )
+        .await
+    {
+        Ok(id) => {
+            audit(
+                &state,
+                tenant,
+                actor,
+                "connection.oauth_connected",
+                "router_credential",
+                Some(id),
+            )
+            .await;
+            (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+        }
+        Err(e) => {
+            tracing::error!("connections oauth-connect: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response()
+        }
+    }
+}

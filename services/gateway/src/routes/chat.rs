@@ -299,10 +299,25 @@ async fn inject_tenant_credentials(
     ireq: &mut InferenceRequest,
 ) {
     let Some(tenant) = tenant else { return };
+    // api_key credentials (raw values → the engine's x-api-key path).
     match state.tenant_keys.get(tenant).await {
         Ok(creds) if !creds.is_empty() => ireq.credentials = (*creds).clone(),
         Ok(_) => {}
         Err(e) => tracing::warn!("F3: tenant key resolve failed, using platform keys: {e}"),
+    }
+    // OAuth credentials — marked with the kernel `oauth:` prefix so the adapter presents them
+    // as a bearer token. Overlaid on the same map keyed by router name; a router with both an
+    // api_key and an oauth credential gets the oauth one (the adapter honours the marker).
+    match state.tenant_keys.get_oauth(tenant).await {
+        Ok(oauth) => {
+            for (router, token) in oauth.iter() {
+                ireq.credentials.insert(
+                    router.clone(),
+                    format!("{}{}", gateway::types::credential::OAUTH_PREFIX, token),
+                );
+            }
+        }
+        Err(e) => tracing::warn!("F3: tenant oauth resolve failed, using platform keys: {e}"),
     }
 }
 

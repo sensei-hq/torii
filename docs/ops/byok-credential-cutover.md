@@ -33,9 +33,10 @@ setup never denies inference.
 - **Not-connected remote router** → falls through to the platform/env key (transitional).
 - **Local router** (no `api_key_env_var`) → no key needed.
 
-The tenant's key set is memoized in `TenantKeyCache` (`state.rs`), decrypt-on-miss and
-invalidated on every connect / rotate / revoke, so a rotation takes effect on the next call
-without a restart.
+The tenant's key set is memoized in `TenantKeyCache` — now the shared `sensei-vault` crate's
+(gateway#38 V5); the gateway pins it to `EnvKekProvider` + `PostgresVaultStore` in `state.rs`.
+Decrypt-on-miss, invalidated on every connect / rotate / revoke, so a rotation takes effect on
+the next call without a restart.
 
 ## Admin surface (F3-5)
 
@@ -77,6 +78,9 @@ fallback from tenant request resolution so a not-connected remote router **fails
 ## Follow-ups
 
 - **[#16](https://github.com/sensei-hq/torii/issues/16)** — OAuth credential vault (GH-2).
-- **[#17](https://github.com/sensei-hq/torii/issues/17)** — production KMS-backed KEK.
+- **[#17](https://github.com/sensei-hq/torii/issues/17)** — production KMS-backed KEK. The
+  `sensei-vault` crate now ships `SupabaseVaultKekProvider` for this, and under `TORII_ENV=prod`
+  a raw env KEK is **refused** (BYOK stays disabled in prod until this provider is wired). See
+  `deployment.md` → *Vault-crate cutover*.
 - **[#18](https://github.com/sensei-hq/torii/issues/18)** — rename `router_keys` →
   `router_credentials` (**done**).

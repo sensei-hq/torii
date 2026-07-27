@@ -26,15 +26,20 @@ pub struct AppState {
 pub type SharedState = Arc<AppState>;
 
 /// Build the F3 BYOK cache from the environment KEK. `TORII_KEK` (base64 32 bytes), with the
-/// legacy `STRATEGOS_KEK` as a fallback; the deployment profile is `TORII_PROFILE` (default
-/// `dev`). Under a `prod` profile a raw env KEK is refused (the crate's gap #1 fail-closed) →
-/// the cache is built with no vault (BYOK disabled; platform/env keys still serve) until a
-/// KMS-backed KEK is wired. An absent/invalid KEK in dev likewise disables BYOK without
-/// failing startup — a bad BYOK setup never denies inference.
+/// legacy `STRATEGOS_KEK` as a fallback; the deployment is `TORII_ENV` (`STRATEGOS_ENV`
+/// fallback, default `dev`) — the same var the rest of the gateway reads. Under `prod` a raw
+/// env KEK is refused (the crate's gap #1 fail-closed) → the cache is built with no vault (BYOK
+/// disabled; platform/env keys still serve) until a KMS-backed KEK is wired. An absent/invalid
+/// KEK in dev likewise disables BYOK without failing startup — a bad BYOK setup never denies
+/// inference.
 pub fn build_tenant_key_cache(pool: PgPool) -> TenantKeyCache {
-    let profile = match std::env::var("TORII_PROFILE").as_deref() {
-        Ok("prod") => Profile::Prod,
-        _ => Profile::Dev,
+    let env = std::env::var("TORII_ENV")
+        .or_else(|_| std::env::var("STRATEGOS_ENV"))
+        .unwrap_or_else(|_| "dev".to_string());
+    let profile = if env == "prod" {
+        Profile::Prod
+    } else {
+        Profile::Dev
     };
     match EnvKekProvider::from_env("TORII_KEK", profile)
         .or_else(|_| EnvKekProvider::from_env("STRATEGOS_KEK", profile))

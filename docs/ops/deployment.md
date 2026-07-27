@@ -89,9 +89,35 @@ env-var name in `config.routers.api_key_env_var`.
 The workspace `Cargo.toml` `[patch."https://github.com/sensei-hq/gateway"]` points the
 `sensei-*` crates at the **local sibling repo** (`../gateway`) for dev-in-place. That path
 does not exist in the Docker context, so the Dockerfile **strips the `[patch]` block** and
-builds against the git dependency (the pinned tag). The `sensei-gateway` git dep is pinned to `tag = "v0.4.6"` in `services/gateway/Cargo.toml`
+builds against the git dependency (the pinned tag). The `sensei-gateway` **and
+`sensei-vault`** git deps are pinned to `tag = "v0.4.7"` in `services/gateway/Cargo.toml`
 for reproducible prod builds. The central gateway is
 **cloud/HTTP-only** (no `local-engine`/llama.cpp), so the image is a plain Rust build.
+
+### Vault-crate cutover (v0.4.7) — do this IN ORDER before first deploy of the crate build
+
+The F3 vault moved from inline code to the shared `sensei-vault` crate (gateway#38 V5). The
+crate seals credentials **AAD-bound** (`tenant‖router`) and needs a schema the earlier inline
+vault didn't. Deploying the crate build to a prod DB **without** these steps breaks writes
+(the `ON CONFLICT … WHERE is_active` upsert needs the partial index) and reads (old empty-AAD
+rows fail to unseal). Sequence:
+
+1. **Apply the V4 schema to the prod Supabase** — `core.tenant_key_archive`, the partial
+   `router_credentials_active_ukey` (replacing the full unique), and their RLS. Apply the
+   DDL/policies as SQL (do **not** `dbd reset` a DB with real data — see
+   `supabase-configuration.md`).
+2. **Re-seal any pre-AAD rows** — for a DB that already held BYOK keys under the *inline*
+   (empty-AAD) vault, run the one-shot with the **prod** KEK:
+   `TORII_KEK=<prod> DATABASE_URL=<prod> cargo test -p sensei-vault --features sqlx -- --ignored reseal_all_pre_aad_credentials --nocapture`
+   (idempotent; a fresh prod DB with no BYOK rows is a no-op).
+3. **Then** `fly deploy` the crate build.
+
+> **KEK in prod (gap #1).** Under `TORII_ENV=prod` a raw `TORII_KEK` env var is **refused**
+> (`EnvKekProvider` fails closed) → BYOK is **disabled** in prod (platform/env keys still
+> serve; a bad KEK never denies inference) until a KMS/Supabase-Vault KEK provider is wired
+> (**torii#17** — the crate ships `SupabaseVaultKekProvider` for this). So setting `TORII_KEK`
+> in the Fly secrets below only enables BYOK in **dev/staging** (`TORII_ENV≠prod`); in prod it
+> is inert until #17.
 
 ---
 

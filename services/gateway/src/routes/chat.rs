@@ -289,6 +289,23 @@ async fn auto_fallback_enabled(state: &SharedState, tenant: Option<Uuid>) -> boo
     .unwrap_or(true)
 }
 
+/// F3 BYOK: overlay the caller-tenant's decrypted vault keys onto the request as the
+/// per-call `credentials` override (the engine prefers them over the platform/env key
+/// per router). **Fail-safe** — no tenant, an empty map, or a vault error leaves the
+/// request on platform keys; a bad BYOK setup never denies inference.
+async fn inject_tenant_credentials(
+    state: &SharedState,
+    tenant: Option<Uuid>,
+    ireq: &mut InferenceRequest,
+) {
+    let Some(tenant) = tenant else { return };
+    match state.tenant_keys.get(&state.pool, tenant).await {
+        Ok(creds) if !creds.is_empty() => ireq.credentials = (*creds).clone(),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("F3: tenant key resolve failed, using platform keys: {e}"),
+    }
+}
+
 /// A JSON error `Response` (used by the streaming handler, which can't `?`-return a tuple).
 fn error_response(code: StatusCode, msg: &str) -> Response {
     Response::builder()
@@ -314,7 +331,8 @@ pub async fn post_chat(
 ) -> Result<Json<ChatResponse>, (StatusCode, String)> {
     let mask = masking_enabled(&state, claims.tenant_id).await;
     let allow_fallback = auto_fallback_enabled(&state, claims.tenant_id).await;
-    let (ireq, redactions) = build_inference_request(&req, mask, allow_fallback);
+    let (mut ireq, redactions) = build_inference_request(&req, mask, allow_fallback);
+    inject_tenant_credentials(&state, claims.tenant_id, &mut ireq).await;
     let max_tokens = req.max_tokens.unwrap_or(1024);
     let input_est = estimate_input_tokens(&req);
 
@@ -533,7 +551,8 @@ pub async fn post_chat_stream(
 ) -> Response {
     let mask = masking_enabled(&state, claims.tenant_id).await;
     let allow_fallback = auto_fallback_enabled(&state, claims.tenant_id).await;
-    let (ireq, redactions) = build_inference_request(&req, mask, allow_fallback);
+    let (mut ireq, redactions) = build_inference_request(&req, mask, allow_fallback);
+    inject_tenant_credentials(&state, claims.tenant_id, &mut ireq).await;
     let max_tokens = req.max_tokens.unwrap_or(1024);
     let input_est = estimate_input_tokens(&req);
 

@@ -181,10 +181,24 @@ async fn main() -> anyhow::Result<()> {
         total
     );
 
+    // F3 BYOK: build the credential vault from the KEK. An absent/invalid KEK ⇒ BYOK
+    // disabled (env/platform keys still serve) — the gateway still starts.
+    let vault = match crate::vault::Vault::from_env() {
+        Ok(v) => {
+            tracing::info!("F3 vault: enabled (per-tenant BYOK active)");
+            Some(v)
+        }
+        Err(e) => {
+            tracing::warn!("F3 vault disabled (no/invalid KEK: {e}); BYOK unavailable");
+            None
+        }
+    };
+
     let state: SharedState = Arc::new(AppState {
         pool,
         gateway: Arc::new(gw),
         jwks: RwLock::new(jwks),
+        tenant_keys: crate::state::TenantKeyCache::new(vault),
     });
 
     // O1: background audit → SIEM streamer (no-op until a `siem` notification_channel exists).

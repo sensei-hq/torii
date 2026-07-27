@@ -200,7 +200,7 @@ impl Vault {
 #[cfg(test)]
 impl Vault {
     /// Test-only constructor with a fixed KEK (no env dependency).
-    fn with_kek(kek: Kek) -> Self {
+    pub(crate) fn with_kek(kek: Kek) -> Self {
         Self { kek }
     }
 }

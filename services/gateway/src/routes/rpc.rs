@@ -1164,17 +1164,6 @@ pub struct RevokeRouter {
     pub router: String,
 }
 
-/// Build the F3 vault from the env KEK, mapping a missing/invalid KEK to a 500.
-// `Result<_, Response>` matches this module's convention (see `authorize`); the lint
-// only fires here because this helper is sync (async siblings desugar past it).
-#[allow(clippy::result_large_err)]
-fn vault_or_500() -> Result<crate::vault::Vault, Response> {
-    crate::vault::Vault::from_env().map_err(|e| {
-        tracing::error!("vault: KEK unavailable: {e}");
-        (StatusCode::INTERNAL_SERVER_ERROR, "vault unavailable").into_response()
-    })
-}
-
 /// Resolve a router NAME to its id (routers are platform config, not tenant-scoped).
 /// 404 if unknown.
 async fn resolve_router_id(state: &SharedState, name: &str) -> Result<Uuid, Response> {
@@ -1205,12 +1194,9 @@ async fn connect_or_rotate(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let vault = match vault_or_500() {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
-    match vault
-        .store_router_key(
+    match state
+        .tenant_keys
+        .store(
             &state.pool,
             tenant,
             router_id,
@@ -1267,12 +1253,9 @@ pub async fn connections_revoke(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let vault = match vault_or_500() {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
-    if let Err(e) = vault
-        .revoke_router_key(&state.pool, tenant, router_id, &actor.to_string())
+    if let Err(e) = state
+        .tenant_keys
+        .revoke(&state.pool, tenant, router_id, &actor.to_string())
         .await
     {
         tracing::error!("connections revoke: {e}");

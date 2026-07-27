@@ -313,7 +313,15 @@ pub async fn apikeys_revoke(
         tracing::error!("apikeys_revoke: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
     }
-    audit(&state, tenant, actor, "apikey.revoked", "api_key", Some(body.id)).await;
+    audit(
+        &state,
+        tenant,
+        actor,
+        "apikey.revoked",
+        "api_key",
+        Some(body.id),
+    )
+    .await;
     (StatusCode::OK, Json(json!({ "revoked": body.id }))).into_response()
 }
 
@@ -932,7 +940,15 @@ pub async fn settings_set(
         tracing::error!("settings_set: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
     }
-    audit(&state, tenant, actor, "settings.set", "tenant_settings", None).await;
+    audit(
+        &state,
+        tenant,
+        actor,
+        "settings.set",
+        "tenant_settings",
+        None,
+    )
+    .await;
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
@@ -980,7 +996,15 @@ pub async fn mcp_set_enabled(
         tracing::error!("mcp_set_enabled: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
     }
-    audit(&state, tenant, actor, "mcp.server.set", "mcp_server", Some(body.mcp_server_id)).await;
+    audit(
+        &state,
+        tenant,
+        actor,
+        "mcp.server.set",
+        "mcp_server",
+        Some(body.mcp_server_id),
+    )
+    .await;
     (StatusCode::OK, Json(json!({ "enabled": body.enabled }))).into_response()
 }
 
@@ -1005,13 +1029,14 @@ pub async fn mcp_set_tool_grant(
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let role_ok: bool =
-        sqlx::query_scalar("select exists(select 1 from core.roles where id = $1 and tenant_id = $2)")
-            .bind(body.role_id)
-            .bind(tenant)
-            .fetch_one(&state.pool)
-            .await
-            .unwrap_or(false);
+    let role_ok: bool = sqlx::query_scalar(
+        "select exists(select 1 from core.roles where id = $1 and tenant_id = $2)",
+    )
+    .bind(body.role_id)
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(false);
     if !role_ok {
         return (StatusCode::NOT_FOUND, "role not found in tenant").into_response();
     }
@@ -1056,7 +1081,15 @@ pub async fn mcp_set_tool_grant(
         tracing::error!("mcp_set_tool_grant: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
     }
-    audit(&state, tenant, actor, "mcp.tool.grant.set", "tool_allow_list", Some(body.role_id)).await;
+    audit(
+        &state,
+        tenant,
+        actor,
+        "mcp.tool.grant.set",
+        "tool_allow_list",
+        Some(body.role_id),
+    )
+    .await;
     (
         StatusCode::OK,
         Json(json!({ "role_id": body.role_id, "tool_name": body.tool_name, "allowed": body.allowed })),
@@ -1104,6 +1137,155 @@ pub async fn devices_revoke(
         tracing::error!("devices_revoke: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
     }
-    audit(&state, tenant, actor, "device.revoked", "device", Some(body.id)).await;
+    audit(
+        &state,
+        tenant,
+        actor,
+        "device.revoked",
+        "device",
+        Some(body.id),
+    )
+    .await;
     (StatusCode::OK, Json(json!({ "revoked": body.id }))).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct ConnectRouter {
+    /// Router NAME (`config.routers.name`), e.g. "openai".
+    pub router: String,
+    /// The BYOK provider secret — WRITE-ONLY: sealed at rest, never returned/logged.
+    pub key: String,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct RevokeRouter {
+    pub router: String,
+}
+
+/// Build the F3 vault from the env KEK, mapping a missing/invalid KEK to a 500.
+// `Result<_, Response>` matches this module's convention (see `authorize`); the lint
+// only fires here because this helper is sync (async siblings desugar past it).
+#[allow(clippy::result_large_err)]
+fn vault_or_500() -> Result<crate::vault::Vault, Response> {
+    crate::vault::Vault::from_env().map_err(|e| {
+        tracing::error!("vault: KEK unavailable: {e}");
+        (StatusCode::INTERNAL_SERVER_ERROR, "vault unavailable").into_response()
+    })
+}
+
+/// Resolve a router NAME to its id (routers are platform config, not tenant-scoped).
+/// 404 if unknown.
+async fn resolve_router_id(state: &SharedState, name: &str) -> Result<Uuid, Response> {
+    sqlx::query_scalar::<_, Uuid>("select id from config.routers where name = $1")
+        .bind(name)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("resolve_router_id: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        })?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "router not found").into_response())
+}
+
+/// Shared connect/rotate: both seal + upsert the tenant's active BYOK key for the
+/// router (one row per `(tenant, router)`). Identical server-side; distinct audit.
+async fn connect_or_rotate(
+    state: &SharedState,
+    claims: &Claims,
+    body: ConnectRouter,
+    action: &str,
+) -> Response {
+    let (tenant, actor) = match authorize(state, claims, "connection.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let router_id = match resolve_router_id(state, &body.router).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let vault = match vault_or_500() {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    match vault
+        .store_router_key(
+            &state.pool,
+            tenant,
+            router_id,
+            body.label.as_deref(),
+            &body.key,
+            &actor.to_string(),
+        )
+        .await
+    {
+        Ok(id) => {
+            audit(state, tenant, actor, action, "router_key", Some(id)).await;
+            (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+        }
+        Err(e) => {
+            tracing::error!("connections {action}: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response()
+        }
+    }
+}
+
+/// `POST /rpc/connections/connect` — capability `connection.manage`. Seals the
+/// provided provider key under the tenant DEK and stores it as the active BYOK
+/// credential for the router. The key is never returned or logged.
+pub async fn connections_connect(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<ConnectRouter>,
+) -> Response {
+    connect_or_rotate(&state, &claims, body, "connection.connected").await
+}
+
+/// `POST /rpc/connections/rotate` — capability `connection.manage`. Replaces the
+/// stored key in place (same row); reactivates it if it had been revoked.
+pub async fn connections_rotate(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<ConnectRouter>,
+) -> Response {
+    connect_or_rotate(&state, &claims, body, "connection.rotated").await
+}
+
+/// `POST /rpc/connections/revoke` — capability `connection.manage`. Deactivates the
+/// stored BYOK key for the router; resolution then falls back to the platform key.
+pub async fn connections_revoke(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<RevokeRouter>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "connection.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let router_id = match resolve_router_id(&state, &body.router).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let vault = match vault_or_500() {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if let Err(e) = vault
+        .revoke_router_key(&state.pool, tenant, router_id, &actor.to_string())
+        .await
+    {
+        tracing::error!("connections revoke: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+    audit(
+        &state,
+        tenant,
+        actor,
+        "connection.revoked",
+        "router_key",
+        None,
+    )
+    .await;
+    (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }

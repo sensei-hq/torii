@@ -272,6 +272,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/mcp/set-enabled", post(routes::rpc::mcp_set_enabled))
         .route("/mcp/set-tool-grant", post(routes::rpc::mcp_set_tool_grant))
         .route("/spaces/create", post(routes::rpc::spaces_create))
+        .route(
+            "/connections/connect",
+            post(routes::rpc::connections_connect),
+        )
+        .route("/connections/rotate", post(routes::rpc::connections_rotate))
+        .route("/connections/revoke", post(routes::rpc::connections_revoke))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::require_auth,

@@ -295,6 +295,13 @@ export const api = {
 	issueApiKey: (name?: string) => gwPost<IssuedKey>('/rpc/apikeys/issue', { name }),
 	// revoke a key — it stops authenticating immediately (auth denies non-active status).
 	revokeApiKey: (id: string) => gwPost('/rpc/apikeys/revoke', { id }),
+	// F3 BYOK — seal a provider key into the tenant vault (write-only; never re-fetchable).
+	// connect/rotate are the same server-side upsert; revoke deactivates it.
+	connectConnection: (router: string, key: string, label?: string) =>
+		gwPost('/rpc/connections/connect', { router, key, label }),
+	rotateConnection: (router: string, key: string) =>
+		gwPost('/rpc/connections/rotate', { router, key }),
+	revokeConnection: (router: string) => gwPost('/rpc/connections/revoke', { router }),
 	// set a feature's workspace-scope governance posture (4-state).
 	setFeature: (feature_key: string, state: FeatureState) =>
 		gwPost('/rpc/governance/set-feature', {

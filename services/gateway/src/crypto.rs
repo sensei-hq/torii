@@ -122,13 +122,12 @@ pub fn unseal_credential(
     Ok(Zeroizing::new(secret))
 }
 
-/// Seal a plaintext secret under the tenant DEK → `[IV][tag][ct]` (the DB layout),
-/// using a fresh random 96-bit nonce. Used when a provider credential is stored
-/// (the `/rpc/connections/*` write path lands in P5 once dev KEK/seed align).
-#[allow(dead_code)]
-pub fn seal_credential(dek: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+/// Seal `plaintext` under a 32-byte `key` → `[IV][tag][ct]` (the DB layout) with a
+/// fresh random 96-bit nonce. Shared by `seal_credential` (tenant DEK as key) and
+/// `seal_dek` (master KEK as key).
+fn seal_gcm(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
     use aes_gcm::aead::AeadInPlace;
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(dek));
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let mut buf = plaintext.to_vec();
     let tag = cipher
@@ -139,6 +138,30 @@ pub fn seal_credential(dek: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, Cryp
     out.extend_from_slice(&tag);
     out.extend_from_slice(&buf);
     Ok(out)
+}
+
+/// Seal a plaintext secret under the tenant DEK → `[IV][tag][ct]` (the DB layout).
+/// Used when a provider credential is stored (F3 `/rpc/connections/*` write path).
+#[allow(dead_code)]
+pub fn seal_credential(dek: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    seal_gcm(dek, plaintext)
+}
+
+/// Seal a freshly-generated tenant DEK under the master KEK → `[IV][tag][ct]`
+/// (`core.tenant_keys.encrypted_dek`). Round-trips with `unseal_dek`.
+#[allow(dead_code)]
+pub fn seal_dek(kek: &Kek, dek: &[u8; 32]) -> Result<Vec<u8>, CryptoError> {
+    seal_gcm(&kek.0, dek)
+}
+
+/// Generate a fresh random 32-byte data-encryption key from the OS CSPRNG.
+/// Held in `Zeroizing` so it is wiped from memory when the caller drops it.
+#[allow(dead_code)]
+pub fn generate_dek() -> Zeroizing<[u8; 32]> {
+    let key = Aes256Gcm::generate_key(&mut OsRng);
+    let mut dek = Zeroizing::new([0u8; 32]);
+    dek.copy_from_slice(key.as_slice());
+    dek
 }
 
 #[cfg(test)]
@@ -177,6 +200,28 @@ mod tests {
             *unseal_credential(&dek, &sealed2).unwrap(),
             "sk-ant-live-xyz"
         );
+    }
+
+    #[test]
+    fn seal_dek_round_trips_under_the_kek() {
+        let kek = Kek::from_bytes([5u8; 32]);
+        let dek = [42u8; 32];
+        let sealed = seal_dek(&kek, &dek).unwrap();
+        // fresh random nonce each call → distinct ciphertext, both unseal.
+        assert_ne!(sealed, seal_dek(&kek, &dek).unwrap());
+        assert_eq!(*unseal_dek(&kek, &sealed).unwrap(), dek);
+    }
+
+    #[test]
+    fn seal_dek_tamper_fails_closed() {
+        let kek = Kek::from_bytes([6u8; 32]);
+        let mut sealed = seal_dek(&kek, &[1u8; 32]).unwrap();
+        let last = sealed.len() - 1;
+        sealed[last] ^= 0x01; // flip a bit
+        assert!(matches!(
+            unseal_dek(&kek, &sealed),
+            Err(CryptoError::Decrypt)
+        ));
     }
 
     #[test]

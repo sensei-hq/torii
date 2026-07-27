@@ -9,6 +9,9 @@ import { session } from '@torii/core'
 // change / device revoke). Clear the dead session and bounce to sign-in once.
 let redirecting = false
 async function onUnauthorized(): Promise<void> {
+	// E2E: the seeded session carries no real access token, so gateway reads 401 — but that
+	// must NOT sign the test session out or bounce it to /signin (it would never reach the app).
+	if (import.meta.env.VITE_E2E === 'true') return
 	if (redirecting || (typeof window !== 'undefined' && window.location.pathname.endsWith('/signin')))
 		return
 	redirecting = true

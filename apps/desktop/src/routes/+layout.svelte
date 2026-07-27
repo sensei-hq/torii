@@ -36,8 +36,10 @@
 	onMount(async () => {
 		if (import.meta.env.VITE_E2E === 'true') {
 			// E2E only: deterministic seeded session, no network. Never true in production builds.
-			session.ready = true
+			// Set `user` BEFORE `ready`: flipping `ready` triggers the reactive guard, which
+			// would bounce the session if it saw no user yet.
 			session.user = { id: 'e2e', email: 'e2e@torii.test', name: 'E2E Member', role: 'member' }
+			session.ready = true
 		} else {
 			await session.init(sk)
 		}

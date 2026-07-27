@@ -5,8 +5,8 @@ test.describe('Desktop shell', () => {
 		// Phase 0 smoke — updated for DesktopShell (data-desktop-shell replaces data-app-shell)
 		await expect(tauriPage.locator('[data-desktop-shell]')).toBeVisible({ timeout: 20_000 })
 		await expect(tauriPage.locator('nav[aria-label="Primary"]')).toBeVisible()
-		// Workspace h1 is in the (app)/+page.svelte section, not in a <header>
+		// Home h1 is the welcome banner in (app)/+page.svelte ("Welcome back, <name>.")
 		const title = await tauriPage.locator('h1').textContent()
-		expect(title).toContain('Workspace')
+		expect(title).toContain('Welcome')
 	})
 })

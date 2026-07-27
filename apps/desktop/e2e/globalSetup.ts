@@ -25,11 +25,23 @@ async function waitForSocket(path: string, timeoutMs: number): Promise<void> {
 
 export default async function globalSetup(): Promise<void> {
 	// Build the e2e bundle (frontend + Rust). First run compiles Rust — slow.
-	execFileSync('bunx', ['tauri', 'build', '--debug', '--features', 'e2e-testing'], {
-		cwd: APP_REPO,
-		stdio: 'inherit',
-		env: { ...process.env, VITE_E2E: 'true' }
-	})
+	// The VITE_E2E flag MUST reach the SvelteKit build (it bakes the seeded session +
+	// stubbed inference — without it the app renders /signin and every test fails). Tauri
+	// does NOT forward the parent env to its beforeBuildCommand, so we override that command
+	// inline to carry the flag itself, rather than relying on env inheritance.
+	execFileSync(
+		'bunx',
+		[
+			'tauri',
+			'build',
+			'--debug',
+			'--features',
+			'e2e-testing',
+			'--config',
+			'{"build":{"beforeBuildCommand":"VITE_E2E=true bun run build"}}'
+		],
+		{ cwd: APP_REPO, stdio: 'inherit', env: { ...process.env, VITE_E2E: 'true' } }
+	)
 	try {
 		execFileSync('/usr/bin/pkill', ['-f', 'torii.app'], { stdio: 'ignore' })
 	} catch {}

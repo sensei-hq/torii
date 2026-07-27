@@ -90,7 +90,11 @@ fn estimate_input_tokens(req: &ChatRequest) -> u32 {
 /// across the messages + system prompt (a C6 governance signal). `mask` is the
 /// workspace's DLP posture (Settings → "PII & tenant masking"); when off, content
 /// passes through unredacted and the redaction count is 0.
-fn build_inference_request(req: &ChatRequest, mask: bool) -> (InferenceRequest, u32) {
+fn build_inference_request(
+    req: &ChatRequest,
+    mask: bool,
+    allow_fallback: bool,
+) -> (InferenceRequest, u32) {
     // C4 §2 W5 — redact-in-flight: strip secrets/PII from every message and the
     // system prompt BEFORE they egress to any model (cloud especially). One-way
     // placeholders (v1). Redaction counts flow into the governance/quality signal.
@@ -129,6 +133,10 @@ fn build_inference_request(req: &ChatRequest, mask: bool) -> (InferenceRequest, 
         auth: None,
         panel: None,
         consensus: None,
+        // Governance: when the workspace disabled "Automatic fallback", the engine
+        // attempts only the primary model and surfaces its error instead of
+        // silently stepping down the chain.
+        allow_fallback,
     };
     (ireq, redactions)
 }
@@ -263,6 +271,22 @@ async fn masking_enabled(state: &SharedState, tenant: Option<Uuid>) -> bool {
     .unwrap_or(true)
 }
 
+/// The workspace's "Automatic fallback" posture (Settings → step down on budget or
+/// provider error without asking). Default ON (absent setting = enabled); an admin can
+/// disable it as a capability-gated, audited workspace policy, pinning inference to the
+/// primary model. Fail-safe: a DB read error keeps fallback ON (preserves availability).
+async fn auto_fallback_enabled(state: &SharedState, tenant: Option<Uuid>) -> bool {
+    let Some(tenant) = tenant else { return true };
+    sqlx::query_scalar::<_, bool>(
+        "select coalesce((select enabled from public.tenant_settings \
+           where tenant_id = $1 and setting_key = 'autoFallback'), true)",
+    )
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(true)
+}
+
 /// A JSON error `Response` (used by the streaming handler, which can't `?`-return a tuple).
 fn error_response(code: StatusCode, msg: &str) -> Response {
     Response::builder()
@@ -287,7 +311,8 @@ pub async fn post_chat(
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, String)> {
     let mask = masking_enabled(&state, claims.tenant_id).await;
-    let (ireq, redactions) = build_inference_request(&req, mask);
+    let allow_fallback = auto_fallback_enabled(&state, claims.tenant_id).await;
+    let (ireq, redactions) = build_inference_request(&req, mask, allow_fallback);
     let max_tokens = req.max_tokens.unwrap_or(1024);
     let input_est = estimate_input_tokens(&req);
 
@@ -505,7 +530,8 @@ pub async fn post_chat_stream(
     Json(req): Json<ChatRequest>,
 ) -> Response {
     let mask = masking_enabled(&state, claims.tenant_id).await;
-    let (ireq, redactions) = build_inference_request(&req, mask);
+    let allow_fallback = auto_fallback_enabled(&state, claims.tenant_id).await;
+    let (ireq, redactions) = build_inference_request(&req, mask, allow_fallback);
     let max_tokens = req.max_tokens.unwrap_or(1024);
     let input_est = estimate_input_tokens(&req);
 
@@ -680,9 +706,9 @@ mod tests {
     #[test]
     fn masking_gates_input_redaction() {
         let secret = "my key is AKIAIOSFODNN7EXAMPLE"; // canonical AWS example key
-        let (_, on) = build_inference_request(&req_with(secret), true);
+        let (_, on) = build_inference_request(&req_with(secret), true, true);
         assert!(on > 0, "masking on must redact the AWS key");
-        let (_, off) = build_inference_request(&req_with(secret), false);
+        let (_, off) = build_inference_request(&req_with(secret), false, true);
         assert_eq!(off, 0, "masking off must not redact");
     }
 }

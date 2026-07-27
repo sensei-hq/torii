@@ -103,6 +103,9 @@ pub async fn execute_judge(state: &SharedState, question: &str, answer: &str) ->
         auth: None,
         panel: None,
         consensus: None,
+        // Internal quality scorer on the fixed local `judge` chain — keep it
+        // resilient regardless of the workspace's user-facing fallback policy.
+        allow_fallback: true,
     };
 
     let start = std::time::Instant::now();

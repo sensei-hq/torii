@@ -6,9 +6,11 @@ create table if not exists router_credentials (
     references core.tenants(id) on delete cascade
 , id                uuid        not null default gen_random_uuid()
 , router_id         uuid        not null references config.routers(id)
-, encrypted_api_key bytea       not null
+, encrypted_api_key bytea
     -- Layout: [12-byte IV][16-byte auth tag][variable ciphertext]
-    -- Encrypted with the tenant's DEK (see core.tenant_keys)
+    -- Encrypted with the tenant's DEK (see core.tenant_keys). NULL for an oauth row (which
+    -- carries encrypted_oauth instead) — the right blob per type is enforced by the
+    -- router_credentials_blob_by_type CHECK (O-7).
 , key_label         varchar
 , is_active         boolean     not null default true
 , created_at        timestamptz not null default now()
@@ -19,11 +21,14 @@ create table if not exists router_credentials (
 
 -- V4: relaxed for rotation overlap. At most one ACTIVE credential per (tenant, router),
 -- but superseded (is_active = false) rows are retained rather than overwritten — so a
--- rotation can keep the prior key as history/rollback. The old full unique index is dropped
--- (defensive, for apply-over-existing; a fresh `dbd reset` never has it).
+-- rotation can keep the prior key as history/rollback.
+-- O-7 (F3 OAuth): the active-uniqueness key now includes credential_type, so ONE api_key AND
+-- ONE oauth credential can be active for the same (tenant, router) at once. Old index names are
+-- dropped (defensive, for apply-over-existing; a fresh `dbd reset` never has them).
 drop index if exists router_credentials_tenant_router_ukey;
+drop index if exists router_credentials_active_ukey;
 create unique index if not exists router_credentials_active_ukey
-  on router_credentials(tenant_id, router_id) where is_active;
+  on router_credentials(tenant_id, router_id, credential_type) where is_active;
 
 create index if not exists router_credentials_active_idx
   on router_credentials(tenant_id, router_id, is_active);
@@ -45,6 +50,17 @@ alter table router_credentials add column if not exists credential_type varchar(
 alter table router_credentials add column if not exists encrypted_oauth   bytea;   -- [IV][tag][access+refresh JSON ct]
 alter table router_credentials add column if not exists oauth_expires_at  timestamptz;
 alter table router_credentials add column if not exists oauth_scopes      text;
+alter table router_credentials add column if not exists oauth_client_id   text;    -- O-7: PKCE client_id (paste-token path leaves NULL)
 alter table router_credentials add column if not exists token_url         text;
 alter table router_credentials add column if not exists refresh_status    varchar(16);
 alter table router_credentials add column if not exists last_refreshed_at timestamptz;
+
+-- O-7 (F3 OAuth): an api_key row carries encrypted_api_key; an oauth row carries
+-- encrypted_oauth. encrypted_api_key is nullable (oauth rows have none); this CHECK keeps the
+-- right blob present for each credential_type so a half-written row can't exist.
+alter table router_credentials alter column encrypted_api_key drop not null;
+do $$ begin
+  alter table router_credentials add constraint router_credentials_blob_by_type
+    check ((credential_type = 'api_key' and encrypted_api_key is not null)
+        or (credential_type = 'oauth'   and encrypted_oauth   is not null));
+exception when duplicate_object then null; end $$;

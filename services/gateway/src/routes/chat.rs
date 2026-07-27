@@ -137,6 +137,8 @@ fn build_inference_request(
         // attempts only the primary model and surfaces its error instead of
         // silently stepping down the chain.
         allow_fallback,
+        // F3-4 sets per-tenant BYOK credentials here from the vault key cache.
+        credentials: Default::default(),
     };
     (ireq, redactions)
 }

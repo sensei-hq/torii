@@ -106,6 +106,8 @@ pub async fn execute_judge(state: &SharedState, question: &str, answer: &str) ->
         // Internal quality scorer on the fixed local `judge` chain — keep it
         // resilient regardless of the workspace's user-facing fallback policy.
         allow_fallback: true,
+        // Local $0 judge uses no BYOK provider credentials.
+        credentials: Default::default(),
     };
 
     let start = std::time::Instant::now();

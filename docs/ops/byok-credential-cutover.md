@@ -78,9 +78,9 @@ fallback from tenant request resolution so a not-connected remote router **fails
 ## Follow-ups
 
 - **[#16](https://github.com/sensei-hq/torii/issues/16)** — OAuth credential vault (GH-2).
-- **[#17](https://github.com/sensei-hq/torii/issues/17)** — production KMS-backed KEK. The
-  `sensei-vault` crate now ships `SupabaseVaultKekProvider` for this, and under `TORII_ENV=prod`
-  a raw env KEK is **refused** (BYOK stays disabled in prod until this provider is wired). See
-  `deployment.md` → *Vault-crate cutover*.
+- **[#17](https://github.com/sensei-hq/torii/issues/17)** — production KMS-backed KEK
+  (**done**). Prod reads the KEK from **Supabase Vault** (`SupabaseVaultKekProvider`) under
+  `TORII_KEK_VAULT_SECRET` (default `torii_kek`); a raw env KEK is refused under `TORII_ENV=prod`.
+  Rotation via `Vault::rotate_kek`. See `deployment.md` → *Vault-crate cutover*.
 - **[#18](https://github.com/sensei-hq/torii/issues/18)** — rename `router_keys` →
   `router_credentials` (**done**).

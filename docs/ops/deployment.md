@@ -72,17 +72,21 @@ fly apps create torii-gateway                    # once
 fly secrets set --config services/gateway/fly.toml \
   DATABASE_URL='postgres://postgres:<pw>@db.<ref>.supabase.co:5432/postgres?sslmode=require' \
   PUBLIC_SUPABASE_URL='https://<ref>.supabase.co' \
-  TORII_KEK='<base64-32-bytes>' \
   ANTHROPIC_API_KEY='...' OPENAI_API_KEY='...'   # BYOK bootstrap; F3 vault supersedes later
+# NOTE: in prod the vault KEK is NOT an env secret — it lives in Supabase Vault (torii#17).
+# Seed it once (base64 of 32 bytes) under the name the gateway reads (default `torii_kek`):
+#   psql "$DATABASE_URL" -c "select vault.create_secret('<base64-32-bytes>', 'torii_kek')"
 fly deploy --config services/gateway/fly.toml
 fly certs add api-torii.sensei-hq.com --config services/gateway/fly.toml   # Fly issues TLS
 # then CNAME api-torii.sensei-hq.com → torii-gateway.fly.dev (DNS-only in Cloudflare)
 ```
 
 **Env the gateway reads** (`services/gateway/src/*.rs`): `DATABASE_URL`,
-`PUBLIC_SUPABASE_URL`, `PORT` (Fly sets `8080` → see `fly.toml`), `TORII_KEK` (KEK; legacy
-`STRATEGOS_KEK` still accepted), `TORII_ENV` (`prod`), and each provider's BYOK key by the
-env-var name in `config.routers.api_key_env_var`.
+`PUBLIC_SUPABASE_URL`, `PORT` (Fly sets `8080` → see `fly.toml`), `TORII_ENV` (`prod`), and
+each provider's BYOK key by the env-var name in `config.routers.api_key_env_var`. Vault KEK:
+in **dev** a base64 `TORII_KEK` (legacy `STRATEGOS_KEK` accepted); in **prod** the KEK is read
+from **Supabase Vault** (raw env KEK refused) under the secret named by `TORII_KEK_VAULT_SECRET`
+(default `torii_kek`).
 
 ### The one build subtlety — the `[patch]`
 
@@ -106,18 +110,21 @@ rows fail to unseal). Sequence:
    `router_credentials_active_ukey` (replacing the full unique), and their RLS. Apply the
    DDL/policies as SQL (do **not** `dbd reset` a DB with real data — see
    `supabase-configuration.md`).
-2. **Re-seal any pre-AAD rows** — for a DB that already held BYOK keys under the *inline*
+2. **Seed the prod KEK into Supabase Vault** — `select vault.create_secret('<base64-32-bytes>',
+   'torii_kek')` (or the name in `TORII_KEK_VAULT_SECRET`). Without it, prod comes up with BYOK
+   disabled (platform/env keys still serve).
+3. **Re-seal any pre-AAD rows** — for a DB that already held BYOK keys under the *inline*
    (empty-AAD) vault, run the one-shot with the **prod** KEK:
    `TORII_KEK=<prod> DATABASE_URL=<prod> cargo test -p sensei-vault --features sqlx -- --ignored reseal_all_pre_aad_credentials --nocapture`
    (idempotent; a fresh prod DB with no BYOK rows is a no-op).
-3. **Then** `fly deploy` the crate build.
+4. **Then** `fly deploy` the crate build.
 
-> **KEK in prod (gap #1).** Under `TORII_ENV=prod` a raw `TORII_KEK` env var is **refused**
-> (`EnvKekProvider` fails closed) → BYOK is **disabled** in prod (platform/env keys still
-> serve; a bad KEK never denies inference) until a KMS/Supabase-Vault KEK provider is wired
-> (**torii#17** — the crate ships `SupabaseVaultKekProvider` for this). So setting `TORII_KEK`
-> in the Fly secrets below only enables BYOK in **dev/staging** (`TORII_ENV≠prod`); in prod it
-> is inert until #17.
+> **KEK custody in prod (gap #1, torii#17 — wired).** Under `TORII_ENV=prod` a raw `TORII_KEK`
+> env var is **refused** (`EnvKekProvider` fails closed); the KEK is read from **Supabase Vault**
+> (`SupabaseVaultKekProvider`) under `TORII_KEK_VAULT_SECRET` (default `torii_kek`) — never raw
+> on the host, and absent from a plain DB dump. A missing/unreadable secret disables BYOK
+> (fail-safe) rather than denying inference. KEK rotation: `Vault::rotate_kek` re-wraps every
+> DEK; rotate the underlying Supabase-Vault secret in the same window.
 
 ---
 

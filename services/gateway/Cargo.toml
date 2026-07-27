@@ -21,9 +21,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy = "0.15"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 async-trait = "0.1"
-# base64 — H2 API-key encoding + C4 redaction heuristics. (F3 AEAD/zeroize now live in the
-# shared `vault` crate.)
+# base64 — H2 API-key encoding + C4 redaction heuristics. (F3 AEAD now lives in the `vault`
+# crate.)
 base64 = "0.22"
+# zeroize — name the KEK trait's return type in the GatewayKek provider enum (state.rs).
+zeroize = "1"
 # H2 API-key identity — argon2id hash/verify of high-entropy key secrets (RustCrypto).
 argon2 = { version = "0.5", features = ["std"] }
 # C4 redaction/DLP (§2 W5) — pattern + entropy secret/PII detection.

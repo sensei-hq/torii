@@ -181,7 +181,7 @@ async fn main() -> anyhow::Result<()> {
 
     // F3 BYOK: build the per-tenant credential cache from the env KEK. An absent/invalid KEK
     // ⇒ BYOK disabled (env/platform keys still serve) — the gateway still starts.
-    let tenant_keys = crate::state::build_tenant_key_cache(pool.clone());
+    let tenant_keys = crate::state::build_tenant_key_cache(pool.clone()).await;
 
     let state: SharedState = Arc::new(AppState {
         pool,

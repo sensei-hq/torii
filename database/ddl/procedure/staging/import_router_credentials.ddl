@@ -1,12 +1,12 @@
--- database/ddl/procedure/staging/import_router_keys.ddl
+-- database/ddl/procedure/staging/import_router_credentials.ddl
 set search_path to staging;
 
-create or replace procedure import_router_keys()
+create or replace procedure import_router_credentials()
 language plpgsql
 as
 $$
 begin
-  insert into public.router_keys(
+  insert into public.router_credentials(
      tenant_id, router_id, encrypted_api_key
    , key_label, is_active, modified_at, modified_by)
   select stg.tenant_id
@@ -16,14 +16,14 @@ begin
        , coalesce(stg.is_active, true)
        , coalesce(stg.modified_at, now())
        , coalesce(stg.modified_by, current_user)
-    from staging.router_keys stg
+    from staging.router_credentials stg
    inner join config.routers rtr
       on rtr.name = trim(stg.router_name)
    inner join core.tenants t
       on t.id = stg.tenant_id        -- skip rows when tenant not yet imported
    where not exists (
      select 1
-       from public.router_keys rk
+       from public.router_credentials rk
       where rk.tenant_id   = stg.tenant_id
         and rk.router_id   = rtr.id
    )

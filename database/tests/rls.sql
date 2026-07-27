@@ -24,7 +24,7 @@ begin
   where t.relrowsecurity = false
      or (
        -- deny-all, service_role-only tables: RLS on + 0 policies is the correct posture
-       t.tablename not in ('router_keys', 'tenant_keys', 'siem_cursors')
+       t.tablename not in ('router_credentials', 'tenant_keys', 'siem_cursors')
        and not exists (
          select 1 from pg_policies p
          where p.schemaname = t.schemaname and p.tablename = t.tablename
@@ -88,8 +88,8 @@ begin;
     end if;
 
     begin
-      perform 1 from public.router_keys;
-      raise exception 'FAIL secrets: router_keys readable by authenticated';
+      perform 1 from public.router_credentials;
+      raise exception 'FAIL secrets: router_credentials readable by authenticated';
     exception when insufficient_privilege then null;
     end;
 

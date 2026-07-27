@@ -1,7 +1,7 @@
 //! F3 credential vault — DB-backed resolution of provider credentials.
 //!
 //! Reads the per-tenant DEK from `core.tenant_keys` (sealed by the KEK), then
-//! decrypts a provider credential from `public.router_keys` (sealed by the DEK).
+//! decrypts a provider credential from `public.router_credentials` (sealed by the DEK).
 //! All decryption happens here in the gateway (`service_role`); a decrypted key
 //! is returned to the caller for immediate use and never persisted or logged.
 //!
@@ -57,7 +57,7 @@ impl Vault {
         router_id: Uuid,
     ) -> anyhow::Result<Option<Zeroizing<String>>> {
         let row = sqlx::query(
-            "select encrypted_api_key from public.router_keys \
+            "select encrypted_api_key from public.router_credentials \
              where tenant_id = $1 and router_id = $2 and is_active = true \
                and credential_type = 'api_key'",
         )
@@ -120,7 +120,7 @@ impl Vault {
         let sealed = seal_credential(&dek, plaintext.as_bytes())?;
 
         let id: Uuid = sqlx::query_scalar(
-            "insert into public.router_keys \
+            "insert into public.router_credentials \
                (tenant_id, id, router_id, encrypted_api_key, key_label, is_active, \
                 credential_type, modified_by) \
              values ($1, gen_random_uuid(), $2, $3, $4, true, 'api_key', $5) \
@@ -153,7 +153,7 @@ impl Vault {
         actor: &str,
     ) -> anyhow::Result<()> {
         sqlx::query(
-            "update public.router_keys set is_active = false, modified_by = $3 \
+            "update public.router_credentials set is_active = false, modified_by = $3 \
              where tenant_id = $1 and router_id = $2 \
                and credential_type = 'api_key' and is_active = true",
         )
@@ -175,7 +175,7 @@ impl Vault {
     ) -> anyhow::Result<std::collections::HashMap<String, String>> {
         let rows = sqlx::query(
             "select r.name as name, k.encrypted_api_key as enc \
-             from public.router_keys k \
+             from public.router_credentials k \
              join config.routers r on r.id = k.router_id \
              where k.tenant_id = $1 and k.is_active = true and k.credential_type = 'api_key'",
         )
@@ -288,7 +288,7 @@ mod integration {
             "rotate updates the same (tenant, router) row in place"
         );
         let active: i64 = sqlx::query_scalar(
-            "select count(*) from public.router_keys \
+            "select count(*) from public.router_credentials \
              where tenant_id = $1 and router_id = $2 and is_active",
         )
         .bind(tenant)
@@ -320,7 +320,7 @@ mod integration {
 
         // cleanup (order respects FKs).
         for stmt in [
-            "delete from public.router_keys where tenant_id = $1",
+            "delete from public.router_credentials where tenant_id = $1",
             "delete from core.tenant_keys where tenant_id = $1",
             "delete from core.tenants where id = $1",
         ] {

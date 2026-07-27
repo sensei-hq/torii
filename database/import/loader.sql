@@ -28,4 +28,4 @@ call staging.import_features();
 -- Skipped in prod: staging tables will be empty, procedures are no-ops
 call staging.import_tenants();
 call staging.import_tenant_keys();
-call staging.import_router_keys();
+call staging.import_router_credentials();

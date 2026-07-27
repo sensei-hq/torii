@@ -222,7 +222,7 @@ async fn tenant_connections(pool: &sqlx::PgPool, tenant: Uuid) -> sqlx::Result<V
                   (k.id is not null)              as connected, \
                   k.modified_at                   as connected_at \
              from config.routers r \
-             left join public.router_keys k \
+             left join public.router_credentials k \
                on k.router_id = r.id and k.tenant_id = $1 \
               and k.is_active = true and k.credential_type = 'api_key') t",
     )
@@ -624,7 +624,7 @@ mod connections_view {
         }
         // Tenant A connects a (dummy-sealed) BYOK key for openai; B connects nothing.
         sqlx::query(
-            "insert into public.router_keys \
+            "insert into public.router_credentials \
                (tenant_id, router_id, encrypted_api_key, key_label, modified_by, credential_type) \
              values ($1, $2, '\\x00'::bytea, 'byok', 'tester', 'api_key')",
         )
@@ -654,7 +654,7 @@ mod connections_view {
             "tenant B must never see A's key as connected"
         );
 
-        // cleanup — `on delete cascade` clears router_keys with the tenant.
+        // cleanup — `on delete cascade` clears router_credentials with the tenant.
         for t in [a, b] {
             sqlx::query("delete from core.tenants where id = $1")
                 .bind(t)

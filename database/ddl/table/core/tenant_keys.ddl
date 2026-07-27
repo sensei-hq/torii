@@ -18,5 +18,5 @@ comment on table tenant_keys is
 'Per-tenant Data Encryption Key (DEK) used to encrypt router API keys.
 - encrypted_dek: DEK encrypted with master KEK from STRATEGOS_KEK env var
 - dek_version: incremented by application on DEK rotation
-- DEK rotation requires re-encrypting all router_keys rows for this tenant atomically
-- KEK rotation only requires re-encrypting encrypted_dek rows (not router_keys)';
+- DEK rotation requires re-encrypting all router_credentials rows for this tenant atomically
+- KEK rotation only requires re-encrypting encrypted_dek rows (not router_credentials)';

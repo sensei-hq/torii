@@ -18,7 +18,7 @@ which need no credential at all.
 
 | Source | Where | Scope | Role |
 |---|---|---|---|
-| **Vault** (`public.router_keys`) | Postgres, sealed by tenant DEK → KEK | **per tenant** | **Authoritative.** The tenant's BYOK key, set via the admin Connections screen. |
+| **Vault** (`public.router_credentials`) | Postgres, sealed by tenant DEK → KEK | **per tenant** | **Authoritative.** The tenant's BYOK key, set via the admin Connections screen. |
 | **Env var** (`OPENAI_API_KEY`, …) | gateway process env | process-wide | **Transitional fallback** for a router a tenant hasn't connected. Being retired (see exit criterion). |
 
 ## How resolution works today (F3-4)
@@ -79,4 +79,4 @@ fallback from tenant request resolution so a not-connected remote router **fails
 - **[#16](https://github.com/sensei-hq/torii/issues/16)** — OAuth credential vault (GH-2).
 - **[#17](https://github.com/sensei-hq/torii/issues/17)** — production KMS-backed KEK.
 - **[#18](https://github.com/sensei-hq/torii/issues/18)** — rename `router_keys` →
-  `router_credentials`.
+  `router_credentials` (**done**).

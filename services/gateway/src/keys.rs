@@ -8,7 +8,7 @@
 //! This module bridges that name to the actual secret present in the process
 //! environment so `Gateway::refresh_router_keys` can inject it.
 //!
-//! # TODO(F3): replace env resolution with the router_keys AES-GCM vault decryption
+//! # TODO(F3): replace env resolution with the router_credentials AES-GCM vault decryption
 
 use std::collections::HashMap;
 
@@ -39,7 +39,7 @@ pub fn router_env_map(config: &GatewayConfig) -> HashMap<String, String> {
 /// treated as absent (returns `None`) so placeholder entries in `.env` files
 /// don't accidentally propagate as keys.
 ///
-/// # TODO(F3): replace env resolution with the router_keys AES-GCM vault decryption
+/// # TODO(F3): replace env resolution with the router_credentials AES-GCM vault decryption
 pub fn env_key_resolver(router_env: HashMap<String, String>) -> impl Fn(&str) -> Option<String> {
     move |router_id: &str| {
         let var = router_env.get(router_id)?;

@@ -2,7 +2,7 @@
 //!
 //! AES-256-GCM via the vetted `aes-gcm` crate (RustCrypto) — never hand-rolled.
 //! Envelope: a per-tenant **DEK** (in `core.tenant_keys.encrypted_dek`) is sealed
-//! by the master **KEK**; provider credentials (`public.router_keys`) are sealed by
+//! by the master **KEK**; provider credentials (`public.router_credentials`) are sealed by
 //! the tenant DEK. The gateway (`service_role`) is the ONLY place that decrypts;
 //! keys never leave it and never touch a client/device.
 //!

@@ -138,7 +138,7 @@ mod integration {
 
     async fn cleanup(pool: &PgPool, tenant: Uuid) {
         for stmt in [
-            "delete from public.router_keys where tenant_id = $1",
+            "delete from public.router_credentials where tenant_id = $1",
             "delete from core.tenant_keys where tenant_id = $1",
             "delete from core.tenants where id = $1",
         ] {

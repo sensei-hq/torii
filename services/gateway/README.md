@@ -48,7 +48,7 @@ is gemma4; `model` is the chain candidate's config name.)
 ## Deferred / follow-ups
 
 - **F3 key vault** — provider keys are read from **env** (`router.api_key_env_var`), not the encrypted
-  `router_keys` AES-GCM vault. Replace the env resolver with vault decryption (`// TODO(F3)` in `keys.rs`).
+  `router_credentials` AES-GCM vault. Replace the env resolver with vault decryption (`// TODO(F3)` in `keys.rs`).
 - **Cloud provider seed audit** — several seeded `api_model_id`s were placeholders and some `api_base_url`s
   wrong (e.g. the ollama base doubled `/v1`). The local (ollama→gemma) path is corrected + verified; the
   cloud routers still need a full audit of real provider model ids / base URLs.

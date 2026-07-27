@@ -4,7 +4,7 @@
 -- chains, governance, spaces, membership, catalog, credentials, the ledger, and
 -- gateway-produced document derivatives) go through the central gateway as
 -- service_role. `authenticated` gets INSERT/UPDATE/DELETE only on clearly
--- self-owned benign rows. Secret tables (router_keys/credentials, tenant_keys)
+-- self-owned benign rows. Secret tables (router_credentials/credentials, tenant_keys)
 -- are never granted here (secrets.sql: service_role only).
 
 grant usage on schema public, core to authenticated;

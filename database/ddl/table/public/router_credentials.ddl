@@ -17,15 +17,20 @@ create table if not exists router_credentials (
 , primary key (tenant_id, id)
 );
 
-create unique index if not exists router_credentials_tenant_router_ukey
-  on router_credentials(tenant_id, router_id);
+-- V4: relaxed for rotation overlap. At most one ACTIVE credential per (tenant, router),
+-- but superseded (is_active = false) rows are retained rather than overwritten — so a
+-- rotation can keep the prior key as history/rollback. The old full unique index is dropped
+-- (defensive, for apply-over-existing; a fresh `dbd reset` never has it).
+drop index if exists router_credentials_tenant_router_ukey;
+create unique index if not exists router_credentials_active_ukey
+  on router_credentials(tenant_id, router_id) where is_active;
 
 create index if not exists router_credentials_active_idx
   on router_credentials(tenant_id, router_id, is_active);
 
 comment on table router_credentials is
 'Encrypted router API keys per tenant.
-- One key per (tenant, router) — zero-downtime rotation not supported (replace the row)
+- One ACTIVE key per (tenant, router) (partial unique on is_active); superseded rows retained (V4)
 - id retained for API-layer row addressing; (tenant_id, router_id) is the effective unique key
 - encrypted_api_key: API key encrypted with tenant DEK from core.tenant_keys
 - viable_chain_models view uses this table to filter usable (router, model) combinations

@@ -21,16 +21,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy = "0.15"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 async-trait = "0.1"
-# F3 credential vault — vetted AEAD (RustCrypto AES-256-GCM), not hand-rolled.
-aes-gcm = "0.10"
+# base64 — H2 API-key encoding + C4 redaction heuristics. (F3 AEAD/zeroize now live in the
+# shared `vault` crate.)
 base64 = "0.22"
-# F3 key hygiene — best-effort zeroization of KEK/DEK/decrypted secrets on drop.
-zeroize = "1"
 # H2 API-key identity — argon2id hash/verify of high-entropy key secrets (RustCrypto).
 argon2 = { version = "0.5", features = ["std"] }
 # C4 redaction/DLP (§2 W5) — pattern + entropy secret/PII detection.
 regex = "1"
 once_cell = "1"
 # MIG-1: real package is `sensei-gateway` (v0.4.6); alias to `gateway` so imports stay short.
-gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", tag = "v0.4.6" }
+gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", tag = "v0.4.7" }
+# V5: shared BYOK credential vault (envelope crypto / KEK / store / Vault / TenantKeyCache).
+# `sqlx` = the Postgres store adapter. Aliased to `vault`; dev resolves via the workspace [patch].
+vault = { package = "sensei-vault", git = "https://github.com/sensei-hq/gateway", tag = "v0.4.7", features = ["sqlx"] }
 # MIG-2 will add `sensei-kernel` (capability traits / AdapterRegistry) when main.rs is migrated.

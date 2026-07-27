@@ -28,7 +28,6 @@ mod auth;
 mod budgets; // C3: budget-node resolution + hard reserve→commit on the inference hot path
 mod capabilities; // F2: server-side capability resolution + claims-version gate
 mod config_loader;
-mod crypto; // F3: DEK/KEK envelope crypto
 mod governance; // C4: output redaction + injection scan + why-this-model governance
 mod judge; // C6: opt-in LLM-as-judge (local gemma4) → judge_score signal
 mod keys;
@@ -38,7 +37,6 @@ mod routes;
 mod siem; // O1: background audit → SIEM streamer (per-tenant cursor, at-least-once)
 mod state;
 mod store;
-mod vault; // F3: DB-backed credential vault (replaces the env-key shim)
 
 use state::{AppState, SharedState};
 
@@ -181,24 +179,15 @@ async fn main() -> anyhow::Result<()> {
         total
     );
 
-    // F3 BYOK: build the credential vault from the KEK. An absent/invalid KEK ⇒ BYOK
-    // disabled (env/platform keys still serve) — the gateway still starts.
-    let vault = match crate::vault::Vault::from_env() {
-        Ok(v) => {
-            tracing::info!("F3 vault: enabled (per-tenant BYOK active)");
-            Some(v)
-        }
-        Err(e) => {
-            tracing::warn!("F3 vault disabled (no/invalid KEK: {e}); BYOK unavailable");
-            None
-        }
-    };
+    // F3 BYOK: build the per-tenant credential cache from the env KEK. An absent/invalid KEK
+    // ⇒ BYOK disabled (env/platform keys still serve) — the gateway still starts.
+    let tenant_keys = crate::state::build_tenant_key_cache(pool.clone());
 
     let state: SharedState = Arc::new(AppState {
         pool,
         gateway: Arc::new(gw),
         jwks: RwLock::new(jwks),
-        tenant_keys: crate::state::TenantKeyCache::new(vault),
+        tenant_keys,
     });
 
     // O1: background audit → SIEM streamer (no-op until a `siem` notification_channel exists).

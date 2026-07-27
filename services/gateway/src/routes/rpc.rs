@@ -1197,7 +1197,6 @@ async fn connect_or_rotate(
     match state
         .tenant_keys
         .store(
-            &state.pool,
             tenant,
             router_id,
             body.label.as_deref(),
@@ -1255,7 +1254,7 @@ pub async fn connections_revoke(
     };
     if let Err(e) = state
         .tenant_keys
-        .revoke(&state.pool, tenant, router_id, &actor.to_string())
+        .revoke(tenant, router_id, &actor.to_string())
         .await
     {
         tracing::error!("connections revoke: {e}");

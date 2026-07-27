@@ -189,7 +189,7 @@ pub async fn require_auth(State(state): State<SharedState>, req: Request, next: 
     // Scope the read-lock so it drops before any await point.
     let initial_result = {
         let jwks = state.jwks.read().await;
-        validate_token(&token, &*jwks)
+        validate_token(&token, &jwks)
     };
 
     let claims = match initial_result {
@@ -302,7 +302,9 @@ async fn authenticate_api_key(pool: &sqlx::PgPool, token: &str) -> Result<Claims
 
     // b. Look the key up by its PUBLIC prefix — PARAMETERIZED (never interpolated),
     //    so a prefix crafted to look like SQL is just an inert bind value.
-    let row: Option<(Uuid, String, Option<Uuid>, Option<Uuid>, Uuid, String)> = sqlx::query_as(
+    // (id, hashed_secret, profile_id, service_account_id, tenant_id, status)
+    type ApiKeyRow = (Uuid, String, Option<Uuid>, Option<Uuid>, Uuid, String);
+    let row: Option<ApiKeyRow> = sqlx::query_as(
         "select id, hashed_secret, profile_id, service_account_id, tenant_id, status \
            from public.api_keys where prefix = $1",
     )

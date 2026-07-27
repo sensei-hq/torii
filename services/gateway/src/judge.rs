@@ -92,7 +92,7 @@ pub async fn execute_judge(state: &SharedState, question: &str, answer: &str) ->
         payload: Payload::Chat {
             messages: vec![Message::text(
                 MessageRole::User,
-                &judge_prompt(question, answer),
+                judge_prompt(question, answer),
             )],
             system: None,
             max_tokens: Some(512),

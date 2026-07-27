@@ -111,7 +111,7 @@ fn build_inference_request(
     let messages: Vec<Message> = req
         .messages
         .iter()
-        .map(|m| Message::text(map_role(&m.role), &clean_of(&m.content)))
+        .map(|m| Message::text(map_role(&m.role), clean_of(&m.content)))
         .collect();
     let system = req.system.as_ref().map(|s| clean_of(s));
 
@@ -299,7 +299,7 @@ async fn inject_tenant_credentials(
     ireq: &mut InferenceRequest,
 ) {
     let Some(tenant) = tenant else { return };
-    match state.tenant_keys.get(&state.pool, tenant).await {
+    match state.tenant_keys.get(tenant).await {
         Ok(creds) if !creds.is_empty() => ireq.credentials = (*creds).clone(),
         Ok(_) => {}
         Err(e) => tracing::warn!("F3: tenant key resolve failed, using platform keys: {e}"),

@@ -12,6 +12,7 @@ resolver = "2"
 sensei-gateway         = { path = "../gateway/crates/gateway" }
 sensei-local-engine    = { path = "../gateway/crates/local-engine" }
 sensei-local-providers = { path = "../gateway/crates/local-providers" }
+sensei-vault           = { path = "../gateway/crates/vault" }  # V5: shared BYOK vault
 
 [profile.release]
 opt-level = 3

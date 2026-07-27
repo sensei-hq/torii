@@ -46,6 +46,28 @@ grid reflects per-tenant state from `GET /v1/connections` (`requires_key` / `con
 `connected_at`). The secret is write-only — entered in a password field, sealed server-side,
 and **never** returned or rendered.
 
+## OAuth credentials (Anthropic v1, #16)
+
+A router can also be connected with an **OAuth bearer** credential instead of a static api_key.
+v1 is **Anthropic-only** and uses the **ToS-safe paste-token** path (`claude setup-token` →
+`CLAUDE_CODE_OAUTH_TOKEN`); the PKCE authorization-code redirect and its refresh worker are built
+into the design but **deferred / config-gated off** (harvesting subscription tokens for a SaaS
+risks account bans — see the plan's ⚠️ note).
+
+- **Storage** — the shared `sensei-vault` crate seals the token bundle (AAD-bound under the tenant
+  DEK, exactly like an api_key) into `router_credentials.encrypted_oauth` with
+  `credential_type='oauth'`. One active api_key **and** one active oauth credential can coexist per
+  `(tenant, router)` (partial unique on `credential_type`, O-7). `encrypted_api_key` is nullable and
+  a CHECK keeps the right blob present per type.
+- **Connect** — `POST /rpc/connections/oauth-connect {router, token}` (cap `connection.manage`,
+  audited, token write-only); `oauth-revoke` deactivates it. The admin **Connections** screen has an
+  "OAuth" control per Anthropic-capable router (paste a setup-token, password field) alongside
+  paste-a-key.
+- **Injection** — `inject_tenant_credentials` overlays the tenant's OAuth tokens onto
+  `InferenceRequest.credentials`, marked with the kernel `oauth:` prefix; the Anthropic adapter
+  presents them as `Authorization: Bearer <token>` + the `anthropic-beta` oauth marker instead of
+  `x-api-key`. Same memoize-on-miss / invalidate-on-write cache; same fail-safe fallback.
+
 ## Cutover status & exit criterion
 
 - **Done:** vault is the authoritative per-request source; admin can connect/rotate/revoke;
@@ -78,6 +100,9 @@ fallback from tenant request resolution so a not-connected remote router **fails
 ## Follow-ups
 
 - **[#16](https://github.com/sensei-hq/torii/issues/16)** — OAuth credential vault (GH-2).
+  **v1 shipped** (paste-token, Anthropic): crate O-1/O-2, schema O-7, `oauth-connect`/`oauth-revoke`
+  (O-3a), per-request bearer injection (O-5), admin UI (O-6) — see the OAuth section above.
+  **Deferred / config-gated off:** the PKCE redirect (O-3b) + refresh worker (O-4).
 - **[#17](https://github.com/sensei-hq/torii/issues/17)** — production KMS-backed KEK
   (**done**). Prod reads the KEK from **Supabase Vault** (`SupabaseVaultKekProvider`) under
   `TORII_KEK_VAULT_SECRET` (default `torii_kek`); a raw env KEK is refused under `TORII_ENV=prod`.

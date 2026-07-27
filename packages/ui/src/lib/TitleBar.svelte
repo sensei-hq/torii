@@ -1,6 +1,7 @@
 <script>
 	import { ThemeSwitcherToggle } from '@rokkit/app'
 	import EnvChip from './EnvChip.svelte'
+	import BrandMark from './BrandMark.svelte'
 
 	let { user, brand = 'Torii', title = 'workspace', onsearch, onsignout } = $props()
 
@@ -11,7 +12,7 @@
 	data-title-bar
 	class="flex h-[42px] flex-shrink-0 items-center gap-3 border-b border-paper-edge bg-paper px-4"
 >
-	<img src="/logo.svg" alt="" class="h-5 w-5" />
+	<BrandMark size={20} />
 	<span class="font-heading text-sm text-ink">{brand}</span>
 	<EnvChip />
 

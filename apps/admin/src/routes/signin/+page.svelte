@@ -5,6 +5,7 @@
 	// magic-link / SAML are shown as honest fast-follow (disabled) until wired.
 	import { goto } from '$app/navigation'
 	import { api } from '$lib/api'
+	import { BrandMark } from '@torii/ui'
 
 	let email = $state('')
 	let password = $state('')
@@ -61,7 +62,7 @@
 		<!-- header · spans both columns -->
 		<header class="flex flex-wrap items-center justify-between gap-4 border-b border-paper-edge pb-3">
 			<span class="flex items-center gap-3">
-				<img src="/logo.svg" alt="" class="h-8 w-8" />
+				<BrandMark size={32} />
 				<span class="font-heading text-[28px] tracking-tight text-ink">Seiki</span>
 				<span
 					class="rounded-full border border-paper-edge px-2 py-0.5 font-mono text-[11px] text-ink-mute"

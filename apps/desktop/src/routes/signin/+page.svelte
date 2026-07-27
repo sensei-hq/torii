@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation'
 	import { resolve } from '$app/paths'
 	import { session } from '@torii/core'
+	import { BrandMark } from '@torii/ui'
 
 	let email = $state('')
 	let password = $state('')
@@ -47,8 +48,12 @@
 		<header class="sgn-head">
 			<div class="flex items-center justify-between gap-4 flex-wrap">
 				<span class="flex items-center gap-2.5">
-					<img src="/logo.svg" alt="" class="h-7 w-7" />
+					<BrandMark size={28} />
 					<span class="font-heading text-2xl tracking-tight text-ink">Torii</span>
+					<span
+						class="rounded-full border border-paper-edge px-1.5 py-px font-mono text-[11px] text-ink-mute"
+						>v1.0</span
+					>
 				</span>
 				<span class="text-xs font-medium tracking-widest text-accent uppercase">
 					AI gateway · routing &amp; governance
@@ -146,11 +151,12 @@
 						<text x="30" y="204" font-family="monospace" font-size="12.5" fill="var(--ink-soft)"
 							>local</text
 						>
-						<!-- hub circle -->
+						<!-- hub: the brand mark in its soft well (mirrors the mockup) -->
 						<circle cx="300" cy="116" r="29" fill="var(--accent-soft)" />
 						<circle cx="300" cy="116" r="29" stroke="var(--paper-edge)" stroke-width="1" />
-						<circle cx="300" cy="116" r="9" stroke="var(--ink)" stroke-width="1.5" />
-						<circle cx="300" cy="116" r="3" fill="var(--accent)" />
+						<g transform="translate(283 99)">
+							<BrandMark size={34} />
+						</g>
 						<text
 							x="300"
 							y="166"

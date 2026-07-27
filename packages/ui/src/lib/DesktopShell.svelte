@@ -9,6 +9,7 @@
 	import { CommandPalette } from '@rokkit/ui'
 	import TitleBar from './TitleBar.svelte'
 	import DeviceFooter from './DeviceFooter.svelte'
+	import BrandMark from './BrandMark.svelte'
 	import { registerShellCommands } from './commands.js'
 
 	let {
@@ -88,7 +89,7 @@
 		>
 			<!-- brand -->
 			<div class="flex items-center gap-2.5 px-1.5">
-				<img src="/logo.svg" alt="" class="h-[22px] w-[22px]" />
+				<BrandMark size={22} />
 				<span class="font-heading text-[17px] tracking-tight text-ink">{brand}</span>
 			</div>
 

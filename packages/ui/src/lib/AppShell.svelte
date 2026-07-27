@@ -3,6 +3,7 @@
 	// docs/mockups/app/{admin,shell}.jsx. Uses Rokkit named tokens throughout.
 	import { getContext } from 'svelte'
 	import { page } from '$app/state'
+	import BrandMark from './BrandMark.svelte'
 	// Light/dark switcher — drives vibe.mode; the `themable` action in the root layout
 	// writes data-mode to <html>/<body> and persists it (skin-system-rokkit skill).
 	import { vibe } from '@rokkit/states'
@@ -131,7 +132,7 @@
 		>
 			<!-- brand -->
 			<div class="flex items-center gap-2.5 px-1.5">
-				<img src="/logo.svg" alt="" class="h-[22px] w-[22px]" />
+				<BrandMark size={22} />
 				<span class="font-heading text-[17px] tracking-tight text-ink">{brand}</span>
 			</div>
 

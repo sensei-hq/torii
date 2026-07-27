@@ -1329,3 +1329,38 @@ pub async fn connections_oauth_connect(
         }
     }
 }
+
+/// `POST /rpc/connections/oauth-revoke` — capability `connection.manage`. Deactivates the
+/// tenant's OAuth credential for the router (independent of any api_key credential). (O-3a.)
+pub async fn connections_oauth_revoke(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<RevokeRouter>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "connection.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let router_id = match resolve_router_id(&state, &body.router).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if let Err(e) = state
+        .tenant_keys
+        .revoke_oauth(tenant, router_id, &actor.to_string())
+        .await
+    {
+        tracing::error!("connections oauth-revoke: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+    audit(
+        &state,
+        tenant,
+        actor,
+        "connection.oauth_revoked",
+        "router_credential",
+        None,
+    )
+    .await;
+    (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}

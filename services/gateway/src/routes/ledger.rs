@@ -220,11 +220,16 @@ async fn tenant_connections(pool: &sqlx::PgPool, tenant: Uuid) -> sqlx::Result<V
            select r.name, r.api_base_url, r.is_active, \
                   (r.api_key_env_var is not null) as requires_key, \
                   (k.id is not null)              as connected, \
-                  k.modified_at                   as connected_at \
+                  k.modified_at                   as connected_at, \
+                  (o.id is not null)              as oauth_connected, \
+                  o.modified_at                   as oauth_connected_at \
              from config.routers r \
              left join public.router_credentials k \
                on k.router_id = r.id and k.tenant_id = $1 \
-              and k.is_active = true and k.credential_type = 'api_key') t",
+              and k.is_active = true and k.credential_type = 'api_key' \
+             left join public.router_credentials o \
+               on o.router_id = r.id and o.tenant_id = $1 \
+              and o.is_active = true and o.credential_type = 'oauth') t",
     )
     .bind(tenant)
     .fetch_one(pool)

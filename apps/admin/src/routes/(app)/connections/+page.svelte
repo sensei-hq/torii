@@ -24,6 +24,11 @@
 	let keyInput = $state('')
 	let connBusy = $state('') // router name currently mutating
 
+	// OAuth (bearer / setup-token) connect — v1 Anthropic only. The pasted token lives only in
+	// `tokenInput` (a password field), is sent write-only, and is cleared the moment it returns.
+	let tokenEditing = $state('') // router name whose token input is open
+	let tokenInput = $state('')
+
 	/** 403 from the gateway means the caller lacks connection.manage — say so plainly. */
 	function connError(e) {
 		const msg = e instanceof Error ? e.message : String(e)
@@ -105,6 +110,42 @@
 		error = ''
 		try {
 			await api.revokeConnection(router)
+			await load()
+		} catch (e) {
+			error = connError(e)
+		} finally {
+			connBusy = ''
+		}
+	}
+
+	/** Seal a pasted OAuth bearer / setup-token into the vault (Anthropic v1). Coexists with an
+	 * api_key credential for the same router; the token is sent write-only and never echoed.
+	 * @param {import('$lib/api').Provider} p */
+	async function saveToken(p) {
+		const token = tokenInput.trim()
+		if (!token || connBusy) return
+		connBusy = p.name
+		error = ''
+		try {
+			await api.oauthConnectConnection(p.name, token)
+			tokenInput = ''
+			tokenEditing = ''
+			await load()
+		} catch (e) {
+			error = connError(e)
+		} finally {
+			connBusy = ''
+		}
+	}
+
+	/** Revoke the tenant's OAuth credential for the router (independent of any api_key).
+	 * @param {string} router */
+	async function disconnectOauth(router) {
+		if (connBusy) return
+		connBusy = router
+		error = ''
+		try {
+			await api.oauthRevokeConnection(router)
 			await load()
 		} catch (e) {
 			error = connError(e)
@@ -255,6 +296,61 @@
 										class="self-start rounded-md bg-primary px-3 py-1 text-xs font-medium text-on-primary"
 										>Connect</button
 									>
+								{/if}
+
+								<!-- OAuth (bearer / setup-token) — v1 Anthropic only; shown too if already set. -->
+								{#if p.name === 'anthropic' || p.oauth_connected}
+									<div
+										class="flex items-center gap-2 border-t border-dashed border-paper-edge pt-2"
+									>
+										<span class="text-[10px] font-semibold uppercase tracking-wider text-ink-mute"
+											>OAuth</span
+										>
+										{#if p.oauth_connected}
+											<Chip tone="success">token set</Chip>
+											<button
+												onclick={() => disconnectOauth(p.name)}
+												disabled={connBusy === p.name}
+												aria-label={`Revoke ${p.name} OAuth token`}
+												class="rounded-md border border-paper-edge px-2 py-1 text-[11px] text-ink-mute hover:border-danger hover:text-danger disabled:opacity-40"
+												>{connBusy === p.name ? '…' : 'Revoke'}</button
+											>
+										{:else if tokenEditing === p.name}
+											<input
+												type="password"
+												bind:value={tokenInput}
+												aria-label={`OAuth token for ${p.name}`}
+												placeholder="paste setup-token"
+												autocomplete="off"
+												class="min-w-0 flex-1 rounded-md border border-paper-edge bg-paper px-2.5 py-1 font-mono text-xs text-ink placeholder:text-ink-mute"
+												onkeydown={(e) => e.key === 'Enter' && saveToken(p)}
+											/>
+											<button
+												onclick={() => saveToken(p)}
+												disabled={connBusy === p.name || !tokenInput.trim()}
+												class="rounded-md bg-primary px-3 py-1 text-xs font-medium text-on-primary disabled:opacity-40"
+												>{connBusy === p.name ? 'Saving…' : 'Save'}</button
+											>
+											<button
+												onclick={() => {
+													tokenEditing = ''
+													tokenInput = ''
+												}}
+												disabled={connBusy === p.name}
+												class="rounded-md border border-paper-edge px-2 py-1 text-[11px] text-ink-soft hover:bg-paper-mute disabled:opacity-40"
+												>Cancel</button
+											>
+										{:else}
+											<button
+												onclick={() => {
+													tokenEditing = p.name
+													tokenInput = ''
+												}}
+												class="rounded-md border border-paper-edge px-2 py-1 text-[11px] text-ink-mute hover:border-accent hover:text-accent"
+												>Connect token</button
+											>
+										{/if}
+									</div>
 								{/if}
 							{/if}
 						</div>

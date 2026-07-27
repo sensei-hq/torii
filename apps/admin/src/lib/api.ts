@@ -137,6 +137,10 @@ export interface Provider {
 	connected: boolean
 	/** When the tenant's key was last set/rotated; null when not connected. */
 	connected_at: string | null
+	/** Has THIS tenant sealed an OAuth credential (bearer/setup-token) for the router? */
+	oauth_connected: boolean
+	/** When the tenant's OAuth credential was last set; null when not connected. */
+	oauth_connected_at: string | null
 }
 
 export interface ApiKey {
@@ -307,6 +311,10 @@ export const api = {
 	rotateConnection: (router: string, key: string) =>
 		gwPost('/rpc/connections/rotate', { router, key }),
 	revokeConnection: (router: string) => gwPost('/rpc/connections/revoke', { router }),
+	// F3 OAuth — seal a pasted OAuth bearer / setup-token (Anthropic v1, ToS-safe paste path).
+	oauthConnectConnection: (router: string, token: string) =>
+		gwPost('/rpc/connections/oauth-connect', { router, token }),
+	oauthRevokeConnection: (router: string) => gwPost('/rpc/connections/oauth-revoke', { router }),
 	// set a feature's workspace-scope governance posture (4-state).
 	setFeature: (feature_key: string, state: FeatureState) =>
 		gwPost('/rpc/governance/set-feature', {

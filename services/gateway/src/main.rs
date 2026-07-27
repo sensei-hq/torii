@@ -285,6 +285,10 @@ async fn main() -> anyhow::Result<()> {
             "/connections/oauth-connect",
             post(routes::rpc::connections_oauth_connect),
         )
+        .route(
+            "/connections/oauth-revoke",
+            post(routes::rpc::connections_oauth_revoke),
+        )
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::require_auth,

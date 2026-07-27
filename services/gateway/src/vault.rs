@@ -129,6 +129,7 @@ impl Vault {
                key_label = excluded.key_label, \
                is_active = true, \
                credential_type = 'api_key', \
+               modified_at = now(), \
                modified_by = excluded.modified_by \
              returning id",
         )

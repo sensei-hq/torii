@@ -18,6 +18,20 @@
 	let revealed = $state(null)
 	let copied = $state(false)
 
+	// BYOK connect/rotate — the pasted secret lives only in `keyInput` (a password field),
+	// is sent write-only to the vault, and is cleared the moment the call returns.
+	let editing = $state('') // router name whose key input is open ('' = none)
+	let keyInput = $state('')
+	let connBusy = $state('') // router name currently mutating
+
+	/** 403 from the gateway means the caller lacks connection.manage — say so plainly. */
+	function connError(e) {
+		const msg = e instanceof Error ? e.message : String(e)
+		return /\b403\b/.test(msg)
+			? 'You need the connection.manage capability to change connections.'
+			: msg
+	}
+
 	async function load() {
 		try {
 			const [c, k] = await Promise.all([api.connections(), api.apikeys()])
@@ -63,6 +77,42 @@
 		}
 	}
 
+	/** Seal a pasted key into the vault. Connect and rotate are the same server-side
+	 * upsert — pick the endpoint by current state so the audit action is right.
+	 * @param {import('$lib/api').Provider} p */
+	async function saveKey(p) {
+		const key = keyInput.trim()
+		if (!key || connBusy) return
+		connBusy = p.name
+		error = ''
+		try {
+			await (p.connected ? api.rotateConnection(p.name, key) : api.connectConnection(p.name, key))
+			keyInput = ''
+			editing = ''
+			await load() // reflect connected/last-set from the gateway; the key is never echoed
+		} catch (e) {
+			error = connError(e)
+		} finally {
+			connBusy = ''
+		}
+	}
+
+	/** Revoke the tenant's BYOK key — the router goes back to unavailable (no fallback).
+	 * @param {string} router */
+	async function disconnect(router) {
+		if (connBusy) return
+		connBusy = router
+		error = ''
+		try {
+			await api.revokeConnection(router)
+			await load()
+		} catch (e) {
+			error = connError(e)
+		} finally {
+			connBusy = ''
+		}
+	}
+
 	async function copyKey() {
 		if (!revealed) return
 		try {
@@ -75,7 +125,9 @@
 
 	/** @param {string} host */
 	const providerIcon = (host) =>
-		/ollama|localhost|127\.0\.0\.1/.test(host) ? 'i-solar-database-bold-duotone' : 'i-solar-server-minimalistic-bold-duotone'
+		/ollama|localhost|127\.0\.0\.1/.test(host)
+			? 'i-solar-database-bold-duotone'
+			: 'i-solar-server-minimalistic-bold-duotone'
 	/** @param {string} url */
 	const hostOf = (url) => {
 		try {
@@ -105,15 +157,17 @@
 				<Card pad><p class="text-sm text-accent">{error}</p></Card>
 			{/if}
 
-			<!-- Provider routers — the platform's credentialed upstreams (read-only; vault-managed). -->
+			<!-- Provider routers — bring-your-own-key. Remote providers use THIS org's own key
+			 (sealed in the vault); keyless local routers need none. No cross-tenant fallback. -->
 			<Card flush>
 				<CardHead
 					title="Routers & credentials"
-					meta={`${providers.filter((p) => p.configured).length}/${providers.length} configured`}
+					meta={`${providers.filter((p) => p.connected).length}/${providers.filter((p) => p.requires_key).length} connected`}
 				/>
 				<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
 					{#each providers as p, i (p.name)}
 						<div
+							data-router={p.name}
 							class="flex flex-col gap-2.5 border-paper-edge p-4 {i % 3 !== 2
 								? 'lg:border-r'
 								: ''} {i >= 3 ? 'lg:border-t' : ''} {i % 2 !== 1
@@ -123,7 +177,7 @@
 							<div class="flex items-center gap-3">
 								<Glyph
 									icon={providerIcon(p.api_base_url)}
-									tone={p.configured ? 'accent' : 'mute'}
+									tone={p.connected ? 'accent' : p.requires_key ? 'mute' : 'soft'}
 								/>
 								<div class="min-w-0 flex-1">
 									<div class="truncate text-sm font-semibold text-ink">{p.name}</div>
@@ -131,13 +185,78 @@
 										{p.is_active ? 'active' : 'inactive'}
 									</div>
 								</div>
-								<Chip tone={p.configured ? 'success' : 'mute'}>
-									{p.configured ? 'connected' : 'not set'}
-								</Chip>
+								{#if !p.requires_key}
+									<Chip tone="mute">local</Chip>
+								{:else if p.connected}
+									<Chip tone="success">connected</Chip>
+								{:else}
+									<Chip tone="warning">not set</Chip>
+								{/if}
 							</div>
 							<div class="truncate font-mono text-[11px] text-ink-mute" title={p.api_base_url}>
-								{hostOf(p.api_base_url)}
+								{hostOf(p.api_base_url)}{#if p.connected && p.connected_at}
+									· set {fmtDate(p.connected_at)}{:else if !p.requires_key}
+									· no key needed{/if}
 							</div>
+
+							{#if p.requires_key}
+								{#if editing === p.name}
+									<div class="flex items-center gap-2">
+										<input
+											type="password"
+											bind:value={keyInput}
+											aria-label={`API key for ${p.name}`}
+											placeholder="paste provider key"
+											autocomplete="off"
+											class="min-w-0 flex-1 rounded-md border border-paper-edge bg-paper px-2.5 py-1 font-mono text-xs text-ink placeholder:text-ink-mute"
+											onkeydown={(e) => e.key === 'Enter' && saveKey(p)}
+										/>
+										<button
+											onclick={() => saveKey(p)}
+											disabled={connBusy === p.name || !keyInput.trim()}
+											class="rounded-md bg-primary px-3 py-1 text-xs font-medium text-on-primary disabled:opacity-40"
+											>{connBusy === p.name ? 'Saving…' : 'Save'}</button
+										>
+										<button
+											onclick={() => {
+												editing = ''
+												keyInput = ''
+											}}
+											disabled={connBusy === p.name}
+											class="rounded-md border border-paper-edge px-2 py-1 text-[11px] text-ink-soft hover:bg-paper-mute disabled:opacity-40"
+											>Cancel</button
+										>
+									</div>
+								{:else if p.connected}
+									<div class="flex items-center gap-2">
+										<button
+											onclick={() => {
+												editing = p.name
+												keyInput = ''
+											}}
+											class="rounded-md border border-paper-edge px-2 py-1 text-[11px] text-ink-mute hover:border-accent hover:text-accent"
+											>Rotate</button
+										>
+										<button
+											onclick={() => disconnect(p.name)}
+											disabled={connBusy === p.name}
+											aria-label={`Revoke ${p.name} key`}
+											title="Revoke this key — the router becomes unavailable to the org"
+											class="rounded-md border border-paper-edge px-2 py-1 text-[11px] text-ink-mute hover:border-danger hover:text-danger disabled:opacity-40"
+											>{connBusy === p.name ? 'Revoking…' : 'Revoke'}</button
+										>
+									</div>
+								{:else}
+									<button
+										onclick={() => {
+											editing = p.name
+											keyInput = ''
+										}}
+										class="self-start rounded-md bg-primary px-3 py-1 text-xs font-medium text-on-primary"
+										>Connect</button
+									>
+								{/if}
+							{/if}
 						</div>
 					{/each}
 					{#if providers.length === 0}
@@ -147,8 +266,9 @@
 				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
 					<span class="i-solar-shield-check-bold-duotone mt-0.5 h-3.5 w-3.5 text-success"></span>
 					<span class="text-[11px] leading-relaxed text-ink-mute">
-						Credentials live in the org vault — the gateway proxies every call. Connect, rotate, and
-						per-router custody are managed server-side.
+						Remote providers authenticate with the org's own key, sealed in the vault and shown to
+						no one; local models need no key. Keys are write-only here — rotate replaces, revoke
+						removes.
 					</span>
 				</div>
 			</Card>
@@ -221,7 +341,9 @@
 							class:opacity-55={k.status === 'revoked'}
 						>
 							<Glyph
-								icon={k.service_account_id ? 'i-solar-server-bold-duotone' : 'i-solar-key-bold-duotone'}
+								icon={k.service_account_id
+									? 'i-solar-server-bold-duotone'
+									: 'i-solar-key-bold-duotone'}
 								tone="soft"
 							/>
 							<div class="min-w-0 flex-1">
@@ -251,7 +373,12 @@
 						</div>
 					{/each}
 					{#if keys.length === 0}
-						<Empty icon="i-solar-key-bold-duotone" message="No API identities yet" hint="Issue one above." pad="py-8" />
+						<Empty
+							icon="i-solar-key-bold-duotone"
+							message="No API identities yet"
+							hint="Issue one above."
+							pad="py-8"
+						/>
 					{/if}
 				</div>
 				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">

@@ -130,8 +130,13 @@ export interface BudgetRequest {
 export interface Provider {
 	name: string
 	api_base_url: string
-	configured: boolean
 	is_active: boolean
+	/** Does this router need a credential at all? Keyless local routers (ollama) don't. */
+	requires_key: boolean
+	/** Has THIS tenant sealed a BYOK key for the router? (No cross-tenant fallback.) */
+	connected: boolean
+	/** When the tenant's key was last set/rotated; null when not connected. */
+	connected_at: string | null
 }
 
 export interface ApiKey {

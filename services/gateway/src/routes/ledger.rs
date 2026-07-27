@@ -208,23 +208,41 @@ pub async fn get_apikeys(
     }
 }
 
-/// `GET /v1/connections` — the provider/router catalog (name, base URL, whether a
-/// credential env var is configured — never the secret). Capability `connection.manage`.
+/// Per-tenant provider/router catalog for the Connections screen. For each router:
+/// `requires_key` (needs a credential at all — keyless local routers like ollama don't),
+/// `connected` (THIS tenant has an active sealed BYOK key), and `connected_at` (when it
+/// was last set/rotated). There is **no** cross-tenant platform fallback: a remote router
+/// the tenant hasn't connected is simply unavailable to them — so `connected` is joined
+/// against the caller's tenant only, and one tenant can never observe another's key.
+async fn tenant_connections(pool: &sqlx::PgPool, tenant: Uuid) -> sqlx::Result<Value> {
+    sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.name), '[]'::json) from ( \
+           select r.name, r.api_base_url, r.is_active, \
+                  (r.api_key_env_var is not null) as requires_key, \
+                  (k.id is not null)              as connected, \
+                  k.modified_at                   as connected_at \
+             from config.routers r \
+             left join public.router_keys k \
+               on k.router_id = r.id and k.tenant_id = $1 \
+              and k.is_active = true and k.credential_type = 'api_key') t",
+    )
+    .bind(tenant)
+    .fetch_one(pool)
+    .await
+}
+
+/// `GET /v1/connections` — the caller tenant's provider/router catalog: which routers
+/// need a credential, which the tenant has connected (BYOK), and when — never the secret.
+/// Capability `connection.manage`.
 pub async fn get_connections(
     Extension(claims): Extension<Claims>,
     State(state): State<SharedState>,
 ) -> Response {
-    if let Err(resp) = require_read(&state, &claims, "connection.manage").await {
-        return resp;
-    }
-    let rows: Result<Value, _> = sqlx::query_scalar(
-        "select coalesce(json_agg(t order by t.name), '[]'::json) from ( \
-           select name, api_base_url, (api_key_env_var is not null) as configured, is_active \
-             from config.routers) t",
-    )
-    .fetch_one(&state.pool)
-    .await;
-    match rows {
+    let tenant = match require_read(&state, &claims, "connection.manage").await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    match tenant_connections(&state.pool, tenant).await {
         Ok(providers) => (StatusCode::OK, Json(json!({ "providers": providers }))).into_response(),
         Err(e) => {
             tracing::error!("get_connections: {e}");
@@ -555,6 +573,94 @@ pub async fn get_settings(
         Err(e) => {
             tracing::error!("get_settings: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}
+
+#[cfg(test)]
+mod connections_view {
+    //! Hits local Supabase (55322). Ignored by default — run with:
+    //!   `cargo test -p torii-gateway -- --ignored connections_view`
+    use super::tenant_connections;
+    use serde_json::Value;
+    use sqlx::postgres::PgPoolOptions;
+    use uuid::Uuid;
+
+    async fn pool() -> sqlx::PgPool {
+        let url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgresql://postgres:postgres@127.0.0.1:55322/postgres".into());
+        PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .expect("connect local Supabase (55322)")
+    }
+
+    /// The connected flag is scoped to the caller's tenant: tenant A's BYOK key must
+    /// never surface as `connected` for tenant B (the core isolation property), and a
+    /// key-bearing router reports `requires_key = true`.
+    #[tokio::test]
+    #[ignore = "requires local Supabase (55322)"]
+    async fn connected_is_per_tenant_isolated() {
+        let pool = pool().await;
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let router_id: Uuid =
+            sqlx::query_scalar("select id from config.routers where name = 'openai'")
+                .fetch_one(&pool)
+                .await
+                .expect("openai router seeded");
+
+        for t in [a, b] {
+            sqlx::query(
+                "insert into core.tenants (id, name, slug, modified_by) \
+                 values ($1, 'conn-test', $2, 'conn-test')",
+            )
+            .bind(t)
+            .bind(format!("conn-test-{t}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        // Tenant A connects a (dummy-sealed) BYOK key for openai; B connects nothing.
+        sqlx::query(
+            "insert into public.router_keys \
+               (tenant_id, router_id, encrypted_api_key, key_label, modified_by, credential_type) \
+             values ($1, $2, '\\x00'::bytea, 'byok', 'tester', 'api_key')",
+        )
+        .bind(a)
+        .bind(router_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let openai = |v: &Value| -> Value {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["name"] == "openai")
+                .cloned()
+                .expect("openai in catalog")
+        };
+        let oa = openai(&tenant_connections(&pool, a).await.unwrap());
+        let ob = openai(&tenant_connections(&pool, b).await.unwrap());
+
+        assert_eq!(oa["requires_key"], Value::Bool(true), "openai needs a key");
+        assert_eq!(oa["connected"], Value::Bool(true), "A connected its key");
+        assert!(!oa["connected_at"].is_null(), "connected_at is set for A");
+        assert_eq!(
+            ob["connected"],
+            Value::Bool(false),
+            "tenant B must never see A's key as connected"
+        );
+
+        // cleanup — `on delete cascade` clears router_keys with the tenant.
+        for t in [a, b] {
+            sqlx::query("delete from core.tenants where id = $1")
+                .bind(t)
+                .execute(&pool)
+                .await
+                .unwrap();
         }
     }
 }

@@ -6,8 +6,12 @@
 
 # ---- builder ---------------------------------------------------------------
 FROM rust:1.83-slim-bookworm AS builder
+# build-essential + cmake + clang: aws-lc-sys (pulled via rustls / aws-sdk-bedrockruntime)
+# compiles a C lib with CMake and may run bindgen (needs libclang). The slim image lacks them.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      pkg-config libssl-dev git ca-certificates && rm -rf /var/lib/apt/lists/*
+      pkg-config libssl-dev git ca-certificates \
+      build-essential cmake clang \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 
 # Copy the workspace. Only torii-gateway is compiled (`-p`); the Tauri desktop member is

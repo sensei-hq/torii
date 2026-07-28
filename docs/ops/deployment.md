@@ -60,24 +60,28 @@ bunx wrangler deploy     # deploys the Worker named "seiki"
 
 ## 3. torii-gateway → Fly.io
 
-`services/gateway/Dockerfile` (multi-stage Rust) + `services/gateway/fly.toml` are committed.
+`services/gateway/Dockerfile` (multi-stage Rust) + **`fly.toml` at the repo root** are committed.
 
-Run from the **repo root** (the Docker build context is the whole workspace; `fly.toml`
-points at `services/gateway/Dockerfile`):
+**`fly.toml` lives at the repo root on purpose:** Fly uses the directory holding `fly.toml` as
+the Docker build **context**, and this build needs the whole workspace (the Dockerfile COPYs
+`Cargo.toml`/`Cargo.lock`/`services/`/`apps/…`). So **always run `fly` from the repo root** —
+`fly.toml`'s `dockerfile = "services/gateway/Dockerfile"` is relative to that root context. Do
+**not** put `fly.toml` under `services/gateway` or run from there: Fly then resolves the
+dockerfile path against `services/gateway/` → `services/gateway/services/gateway/Dockerfile` →
+"Dockerfile not found". (Same for the GitHub-integration "working directory" — set it to root.)
 
 ```bash
-cd <repo-root>
+cd <repo-root>                                   # fly.toml is HERE
 fly apps create torii-gateway                    # once
-# secrets (never in git):
-fly secrets set --config services/gateway/fly.toml \
+# secrets (never in git) — BYOK-only, so NO provider api-key env vars:
+fly secrets set \
   DATABASE_URL='postgres://postgres:<pw>@db.<ref>.supabase.co:5432/postgres?sslmode=require' \
-  PUBLIC_SUPABASE_URL='https://<ref>.supabase.co' \
-  ANTHROPIC_API_KEY='...' OPENAI_API_KEY='...'   # BYOK bootstrap; F3 vault supersedes later
-# NOTE: in prod the vault KEK is NOT an env secret — it lives in Supabase Vault (torii#17).
-# Seed it once (base64 of 32 bytes) under the name the gateway reads (default `torii_kek`):
+  PUBLIC_SUPABASE_URL='https://<ref>.supabase.co'
+# The vault KEK is NOT an env secret — in prod (TORII_ENV=prod) a raw TORII_KEK is refused
+# (gap #1). Seed it into Supabase Vault once (base64 of 32 bytes, default name `torii_kek`):
 #   psql "$DATABASE_URL" -c "select vault.create_secret('<base64-32-bytes>', 'torii_kek')"
-fly deploy --config services/gateway/fly.toml
-fly certs add api-torii.sensei-hq.com --config services/gateway/fly.toml   # Fly issues TLS
+fly deploy                                       # picks up ./fly.toml, context = repo root
+fly certs add api-torii.sensei-hq.com            # Fly issues TLS
 # then CNAME api-torii.sensei-hq.com → torii-gateway.fly.dev (DNS-only in Cloudflare)
 ```
 

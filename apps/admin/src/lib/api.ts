@@ -336,6 +336,11 @@ export const api = {
 	// guard (can't orphan the tenant). Bumps the target's claims_version.
 	unassignRole: (profile_id: string, role_id: string) =>
 		gwPost('/rpc/rbac/unassign-role', { profile_id, role_id }),
+	// create a tenant-custom role (the "duplicate a default to customize" flow). Server-guarded:
+	// no-shadowing (409 on a reserved default key or existing custom key) + anti-escalation
+	// (403 if a requested capability exceeds your own).
+	createRole: (key: string, name: string, capabilities: string[]) =>
+		gwPost('/rpc/rbac/create-role', { key, name, capabilities }),
 	// workspace-default policy toggles.
 	settings: () => gwGet<{ settings: { setting_key: string; enabled: boolean }[] }>('/v1/settings'),
 	setSetting: (setting_key: string, enabled: boolean) =>

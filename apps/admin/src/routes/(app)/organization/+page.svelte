@@ -1,5 +1,6 @@
 <script>
 	import { onMount } from 'svelte'
+	import { SvelteSet } from 'svelte/reactivity'
 	import { AppShell, PageHeader, Card, CardHead, Glyph, Chip, Async, Empty } from '@torii/ui'
 	import { api } from '$lib/api'
 
@@ -86,6 +87,52 @@
 
 	/** @param {string} roleId @param {string} capKey */
 	const has = (roleId, capKey) => grantedByRole.get(roleId)?.has(capKey) ?? false
+
+	// ── custom roles: "duplicate a default to customize" (create-only) ──────────────
+	// Defaults stay read-only; this mints a tenant-only role prefilled from a source role's caps.
+	// The gateway enforces no-shadowing (409) + anti-escalation subset (403) — the UI shows the full
+	// catalog and surfaces the server's reason inline rather than second-guessing the caller's caps.
+	let dupOpen = $state(false)
+	let sourceName = $state('')
+	let newKey = $state('')
+	let newName = $state('')
+	/** selected capability keys for the new role (SvelteSet → reactive on in-place mutation) */
+	const selectedCaps = new SvelteSet()
+
+	/** Open the create panel, prefilled from an existing role. @param {import('$lib/api').Role} role */
+	function startDuplicate(role) {
+		dupOpen = true
+		sourceName = role.name
+		newKey = ''
+		newName = `${role.name} (custom)`
+		selectedCaps.clear()
+		for (const c of role.capabilities) selectedCaps.add(c)
+		error = ''
+	}
+
+	/** Toggle a capability in the selection. @param {string} key */
+	function toggleCap(key) {
+		if (selectedCaps.has(key)) selectedCaps.delete(key)
+		else selectedCaps.add(key)
+	}
+
+	/** Create the tenant-custom role via /rpc/rbac/create-role. */
+	async function submitRole() {
+		const key = newKey.trim()
+		const name = newName.trim()
+		if (!key || !name || busy) return
+		busy = 'create-role'
+		error = ''
+		try {
+			await api.createRole(key, name, [...selectedCaps])
+			dupOpen = false
+			await load()
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e)
+		} finally {
+			busy = ''
+		}
+	}
 </script>
 
 <AppShell app="admin" title="Organization">
@@ -103,7 +150,9 @@
 			{#if error}
 				<Card pad
 					><p class="text-sm text-accent" role="alert">
-						{error}{error.includes('403') ? ' — needs the role.manage capability (owner/admin).' : ''}
+						{error}{error.includes('403')
+							? ' — needs the role.manage capability (owner/admin).'
+							: ''}
 					</p></Card
 				>
 			{/if}
@@ -177,14 +226,99 @@
 						<div class="rounded-lg border border-paper-edge bg-paper px-3 py-2">
 							<div class="flex items-center gap-2">
 								<span class="text-sm font-semibold text-ink">{r.name}</span>
-								{#if r.is_system}<Chip>system</Chip>{/if}
+								{#if r.is_system}<Chip>system</Chip>{:else}<Chip tone="accent">custom</Chip>{/if}
 							</div>
 							<div class="mt-1 font-mono text-[11px] text-ink-mute">
 								{r.cap_count} capabilit{r.cap_count === 1 ? 'y' : 'ies'}
 							</div>
+							<button
+								onclick={() => startDuplicate(r)}
+								disabled={!!busy}
+								class="mt-2 inline-flex items-center gap-1 text-[11px] text-ink-soft hover:text-accent disabled:opacity-40"
+							>
+								<span class="i-solar-copy-bold-duotone h-3.5 w-3.5"></span>
+								Duplicate to customize
+							</button>
 						</div>
 					{/each}
 				</div>
+
+				{#if dupOpen}
+					<!-- inline create panel (prefilled from the source role); defaults themselves stay read-only -->
+					<div class="border-t border-paper-edge bg-paper-mute/40 p-4">
+						<div class="mb-3 flex items-center justify-between">
+							<h3 class="text-sm font-semibold text-ink">
+								New custom role <span class="font-normal text-ink-mute">from {sourceName}</span>
+							</h3>
+							<button
+								onclick={() => (dupOpen = false)}
+								class="text-[11px] text-ink-mute hover:text-ink">Cancel</button
+							>
+						</div>
+						<div class="flex flex-wrap gap-3">
+							<label class="flex flex-col gap-1">
+								<span class="text-[11px] text-ink-mute">Key (unique, lowercase)</span>
+								<input
+									bind:value={newKey}
+									placeholder="support"
+									class="w-48 rounded-md border border-paper-edge bg-paper px-2 py-1 font-mono text-xs text-ink"
+								/>
+							</label>
+							<label class="flex flex-col gap-1">
+								<span class="text-[11px] text-ink-mute">Display name</span>
+								<input
+									bind:value={newName}
+									class="w-64 rounded-md border border-paper-edge bg-paper px-2 py-1 text-xs text-ink"
+								/>
+							</label>
+						</div>
+
+						<div class="mt-3">
+							<div class="mb-1 text-[11px] text-ink-mute">
+								Capabilities <span class="text-ink-faint"
+									>({selectedCaps.size} selected — you can only grant capabilities you hold)</span
+								>
+							</div>
+							<div class="space-y-2">
+								{#each Object.entries(byDomain) as [domain, caps] (domain)}
+									<div>
+										<div class="text-[10px] font-semibold uppercase tracking-widest text-ink-mute">
+											{domain}
+										</div>
+										<div class="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+											{#each caps as c (c.key)}
+												<label
+													class="inline-flex items-center gap-1.5 text-xs text-ink"
+													title={c.description}
+												>
+													<input
+														type="checkbox"
+														checked={selectedCaps.has(c.key)}
+														onchange={() => toggleCap(c.key)}
+													/>
+													<span class="font-mono">{c.key}</span>
+												</label>
+											{/each}
+										</div>
+									</div>
+								{/each}
+							</div>
+						</div>
+
+						<div class="mt-4 flex items-center gap-3">
+							<button
+								onclick={submitRole}
+								disabled={!newKey.trim() || !newName.trim() || !!busy}
+								class="rounded-md bg-ink px-3 py-1.5 text-xs font-medium text-paper hover:opacity-90 disabled:opacity-40"
+							>
+								{busy === 'create-role' ? 'Creating…' : 'Create role'}
+							</button>
+							<span class="text-[11px] text-ink-mute"
+								>Creates a tenant-only role — the source default is unchanged.</span
+							>
+						</div>
+					</div>
+				{/if}
 			</Card>
 
 			<!-- the authoritative permission matrix: capabilities (rows, by domain) × roles (cols) -->
@@ -226,7 +360,8 @@
 										{#each roles as r (r.id)}
 											<td class="px-2 py-1.5 text-center">
 												{#if has(r.id, c.key)}
-													<span class="i-solar-check-circle-bold-duotone inline-block h-3.5 w-3.5 text-accent"
+													<span
+														class="i-solar-check-circle-bold-duotone inline-block h-3.5 w-3.5 text-accent"
 													></span>
 												{:else}
 													<span class="text-ink-faint">·</span>

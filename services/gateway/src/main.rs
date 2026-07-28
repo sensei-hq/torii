@@ -31,6 +31,7 @@ mod config_loader;
 mod governance; // C4: output redaction + injection scan + why-this-model governance
 mod judge; // C6: opt-in LLM-as-judge (local gemma4) → judge_score signal
 mod keys;
+mod provision; // DB auto-provision (dbd deploy) on startup — fetch schema ref → apply/import/policies
 mod quality; // C6: quality-signal capture (one implicit batch per inference call)
 mod redact; // C4: secret/PII redaction (DLP, §2 W5)
 mod routes;
@@ -73,6 +74,12 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     tracing::info!("Database connected");
+
+    // DB auto-provision (dbd deploy): if TORII_DB_SCHEMA_SOURCE is set and the catalog is absent,
+    // fetch the schema from that GitHub ref and apply + import + RLS policies BEFORE the config
+    // loader queries it — so a fresh prod Supabase becomes usable on first boot instead of
+    // crash-looping. No-op when unset (dev / pre-provisioned); advisory-locked; fail-closed.
+    provision::maybe_provision(&pool, &database_url).await?;
 
     // Fetch JWKS from Supabase at startup.
     // Degrades gracefully — an empty JWKS means auth will fail fast with 401

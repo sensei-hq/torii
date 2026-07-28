@@ -43,6 +43,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /torii-gateway /usr/local/bin/torii-gateway
 USER torii
 # Bind 0.0.0.0 so the platform proxy can reach the container; PORT from the host (Fly 8080).
-ENV HOST=0.0.0.0 PORT=8080 TORII_ENV=prod
+# XDG_CACHE_HOME: dbd's GitHub-tarball cache (startup auto-provision) needs a writable dir; the
+# `torii` user has no HOME, so point it at /tmp (world-writable).
+ENV HOST=0.0.0.0 PORT=8080 TORII_ENV=prod XDG_CACHE_HOME=/tmp/.cache
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/torii-gateway"]

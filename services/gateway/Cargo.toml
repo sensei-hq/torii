@@ -36,4 +36,7 @@ gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gate
 # V5: shared BYOK credential vault (envelope crypto / KEK / store / Vault / TenantKeyCache).
 # `sqlx` = the Postgres store adapter. Aliased to `vault`; dev resolves via the workspace [patch].
 vault = { package = "sensei-vault", git = "https://github.com/sensei-hq/gateway", tag = "v0.4.8", features = ["sqlx"] }
+# DB auto-provision on startup: dbd deploy (fetch schema from a GitHub ref → apply + import +
+# RLS policies) via the dbd-core library — same as the sensei daemon. `deploy` is a default feature.
+dbd-core = { git = "https://github.com/sensei-hq/dbd", tag = "v0.8.1" }
 # MIG-2 will add `sensei-kernel` (capability traits / AdapterRegistry) when main.rs is migrated.

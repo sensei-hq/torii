@@ -20,6 +20,9 @@ primary_region = 'iad'
   HOST = '0.0.0.0'
   PORT = '8080'
   TORII_ENV = 'prod'
+  # DB auto-provision on startup: fetch this schema source (GitHub owner/repo/path[@ref]) and
+  # dbd apply + import + policies if the catalog is absent. Unset ⇒ skip (assume pre-provisioned).
+  TORII_DB_SCHEMA_SOURCE = 'sensei-hq/torii/database@main'
 
 [http_service]
   internal_port = 8080

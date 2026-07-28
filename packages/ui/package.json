@@ -19,13 +19,13 @@
     "check": "svelte-check"
   },
   "dependencies": {
-    "@rokkit/core": "link:@rokkit/core",
-    "@rokkit/states": "link:@rokkit/states",
-    "@rokkit/actions": "link:@rokkit/actions",
-    "@rokkit/ui": "link:@rokkit/ui",
-    "@rokkit/app": "link:@rokkit/app",
-    "@rokkit/themes": "link:@rokkit/themes",
-    "@rokkit/unocss": "link:@rokkit/unocss"
+    "@rokkit/core": "^1.3.6",
+    "@rokkit/states": "^1.3.6",
+    "@rokkit/actions": "^1.3.6",
+    "@rokkit/ui": "^1.3.6",
+    "@rokkit/app": "^1.3.6",
+    "@rokkit/themes": "^1.3.6",
+    "@rokkit/unocss": "^1.3.6"
   },
   "devDependencies": {
     "@iconify-json/lucide": "^1.2.101",

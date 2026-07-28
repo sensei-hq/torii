@@ -1,8 +1,9 @@
 //! F2 · server-side capability resolution + the claims-version freshness gate.
 //!
 //! The JWT carries only `tenant_id` + `role_ids[]` + `claims_version` (F2 §4.1).
-//! C1 resolves the effective capability set from `core.role_permissions` for those
-//! role ids — the token is NEVER trusted for capabilities. Every privileged
+//! C1 resolves the effective capability set from `core.effective_role_permissions` (shared
+//! defaults + tenant customs) for those role ids — the token is NEVER trusted for capabilities.
+//! Every privileged
 //! `/rpc/*` handler calls [`CapabilitySet::require`] before it writes.
 //!
 //! Freshness: [`check_claims_version`] rejects a token whose `claims_version` is
@@ -26,8 +27,10 @@ impl CapabilitySet {
         let (Some(tenant_id), false) = (claims.tenant_id, claims.role_ids.is_empty()) else {
             return Ok(Self::default());
         };
+        // Read the effective view (shared defaults expanded per tenant + customs), so default-role
+        // grants (stored tenant_id NULL) resolve — the WHERE stays tenant-scoped by role_id.
         let rows = sqlx::query(
-            "select distinct capability from core.role_permissions \
+            "select distinct capability from core.effective_role_permissions \
              where tenant_id = $1 and role_id = any($2)",
         )
         .bind(tenant_id)

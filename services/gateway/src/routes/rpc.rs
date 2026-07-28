@@ -453,9 +453,10 @@ pub async fn rbac_assign_role(
         return (StatusCode::NOT_FOUND, "profile not found in tenant").into_response();
     }
 
-    // #8 role-tenant guard: the role must belong to the caller's tenant, else 404.
+    // #8 role-tenant guard: the role must be usable by the caller's tenant — a shared default
+    // (tenant_id NULL, expanded by the view) or the tenant's own custom role, else 404.
     let role_in_tenant: bool = sqlx::query_scalar(
-        "select exists(select 1 from core.roles where id = $1 and tenant_id = $2)",
+        "select exists(select 1 from core.effective_roles where role_id = $1 and tenant_id = $2)",
     )
     .bind(body.role_id)
     .bind(tenant)
@@ -471,7 +472,9 @@ pub async fn rbac_assign_role(
     // `role.manage`, lacks `tenant.manage`) from granting `owner` (holds
     // `tenant.manage`) — to self or anyone — thereby escalating.
     let assigned_caps: Vec<String> = match sqlx::query_scalar(
-        "select capability from core.role_permissions where role_id = $1 and tenant_id = $2",
+        // effective view so a default role's grants (tenant_id NULL) are counted — else the
+        // anti-escalation subset check would see zero caps and wrongly permit assigning `owner`.
+        "select capability from core.effective_role_permissions where role_id = $1 and tenant_id = $2",
     )
     .bind(body.role_id)
     .bind(tenant)
@@ -568,9 +571,9 @@ pub async fn rbac_unassign_role(
         return (StatusCode::NOT_FOUND, "profile not found in tenant").into_response();
     }
 
-    // role must belong to the caller's tenant (else 404).
+    // role must be usable by the caller's tenant — a shared default or the tenant's custom role.
     let role_in_tenant: bool = sqlx::query_scalar(
-        "select exists(select 1 from core.roles where id = $1 and tenant_id = $2)",
+        "select exists(select 1 from core.effective_roles where role_id = $1 and tenant_id = $2)",
     )
     .bind(body.role_id)
     .bind(tenant)
@@ -585,7 +588,8 @@ pub async fn rbac_unassign_role(
     // of the ACTOR's own — blocks an admin (role.manage, no tenant.manage) from
     // stripping an owner's `owner` role.
     let removed_caps: Vec<String> = match sqlx::query_scalar(
-        "select capability from core.role_permissions where role_id = $1 and tenant_id = $2",
+        // effective view so a default role's grants (tenant_id NULL) count in the subset guard.
+        "select capability from core.effective_role_permissions where role_id = $1 and tenant_id = $2",
     )
     .bind(body.role_id)
     .bind(tenant)
@@ -618,9 +622,11 @@ pub async fn rbac_unassign_role(
     // this (profile, role) row — correctly keeps the target if they hold it via
     // another role, or another member holds it.
     let owners_after: i64 = sqlx::query_scalar(
+        // effective view so a member holding the shared default `owner` role (grants stored
+        // tenant_id NULL) still counts toward tenant.manage — else the guard undercounts owners.
         "select count(distinct pr.profile_id) \
            from core.profile_roles pr \
-           join core.role_permissions rp \
+           join core.effective_role_permissions rp \
              on rp.role_id = pr.role_id and rp.tenant_id = pr.tenant_id \
           where pr.tenant_id = $1 and rp.capability = 'tenant.manage' \
             and not (pr.profile_id = $2 and pr.role_id = $3)",
@@ -1029,6 +1035,9 @@ pub async fn mcp_set_tool_grant(
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    // Base table (NOT the effective view) on purpose: a per-role tool grant is keyed only by
+    // role_id, so targeting a SHARED default role would leak the grant to every tenant. Tool
+    // grants must target a tenant's OWN custom role → require tenant_id = caller's tenant.
     let role_ok: bool = sqlx::query_scalar(
         "select exists(select 1 from core.roles where id = $1 and tenant_id = $2)",
     )

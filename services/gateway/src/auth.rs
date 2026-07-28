@@ -356,9 +356,10 @@ async fn authenticate_api_key(pool: &sqlx::PgPool, token: &str) -> Result<Claims
             aud: None,
         }
     } else if let Some(sa) = service_account_id {
-        // Service-account-bound: capabilities come from the tenant's `service` role.
+        // Service-account-bound: capabilities come from the `service` role. Effective view so the
+        // shared default service role (tenant_id NULL) resolves for this tenant.
         let role_ids: Vec<Uuid> = sqlx::query_scalar(
-            "select id from core.roles where tenant_id = $1 and key = 'service'",
+            "select role_id from core.effective_roles where tenant_id = $1 and key = 'service'",
         )
         .bind(tenant)
         .fetch_all(pool)

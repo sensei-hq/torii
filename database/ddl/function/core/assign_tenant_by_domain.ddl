@@ -36,8 +36,9 @@ begin
       values (NEW.id, v_tenant_id, 'domain_trigger')
       on conflict (profile_id) do nothing;
 
+    -- shared default 'member' role (tenant_id NULL); its grants resolve per-tenant via the view.
     select id into v_member from core.roles
-     where tenant_id = v_tenant_id and key = 'member';
+     where tenant_id is null and key = 'member';
     if v_member is not null then
       insert into core.profile_roles (tenant_id, profile_id, role_id, assigned_by)
         values (v_tenant_id, NEW.id, v_member, 'domain_trigger')

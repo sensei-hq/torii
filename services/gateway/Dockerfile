@@ -10,15 +10,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       pkg-config libssl-dev git ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 
-# Copy the workspace. Only torii-gateway is compiled (`-p`), but Cargo parses every member.
+# Copy the workspace. Only torii-gateway is compiled (`-p`); the Tauri desktop member is
+# dropped from the manifest below, so its sources aren't needed in the image.
 COPY Cargo.toml Cargo.lock ./
 COPY services ./services
-COPY apps/desktop/src-tauri/Cargo.toml ./apps/desktop/src-tauri/Cargo.toml
 
-# Strip the dev-in-place [patch] (points sensei-* at the local sibling repo ../gateway,
-# which is absent here) so the build resolves the git dependency instead. The tag is pinned in
-# services/gateway/Cargo.toml (currently tag = "v0.4.8") for a reproducible prod build.
-RUN sed -i '/^\[patch\./,/^$/d' Cargo.toml
+# Prep the workspace manifest for a cloud-only gateway build:
+#  1. Strip the dev-in-place [patch] (points sensei-* at the sibling repo ../gateway, absent
+#     here) so the build resolves the git dependency at the pinned tag
+#     (services/gateway/Cargo.toml, currently tag = "v0.4.8").
+#  2. Drop the `apps/desktop/src-tauri` workspace member — the Tauri desktop app. Cargo parses
+#     EVERY member even for `-p torii-gateway`, and that member's [lib] source isn't copied,
+#     so keep it out of `members` entirely (the gateway doesn't depend on it).
+RUN sed -i '/^\[patch\./,/^$/d' Cargo.toml && \
+    sed -i -E 's#"apps/desktop/src-tauri",[[:space:]]*##' Cargo.toml
 
 # Build only the gateway (not the Tauri desktop member).
 RUN cargo build --release -p torii-gateway && \

@@ -13,10 +13,10 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@kavach/adapter-supabase": "link:@kavach/adapter-supabase",
-    "@kavach/sentry": "link:@kavach/sentry",
+    "@kavach/adapter-supabase": "^1.0.0",
+    "@kavach/sentry": "^1.0.0",
     "@supabase/supabase-js": "^2.101.1",
-    "kavach": "link:kavach",
+    "kavach": "^1.0.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {

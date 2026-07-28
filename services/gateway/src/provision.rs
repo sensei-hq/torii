@@ -8,8 +8,9 @@
 //! (the DB is assumed already provisioned, e.g. local dev / a managed migration flow).
 //!
 //! Guards: a Postgres **advisory lock** serializes concurrent machines; a fast pre-check skips
-//! the (network) deploy when the catalog already exists, so scale-to-zero cold starts stay cheap
-//! and don't hammer the GitHub tarball API. **Fail-closed** — a provisioning error aborts
+//! the (network) deploy when the catalog is already **seeded** (apply + import are separate
+//! transactions, so it checks for seed rows, not just the table), keeping scale-to-zero cold
+//! starts cheap and off the GitHub tarball API. **Fail-closed** — a provisioning error aborts
 //! startup rather than serving a half-built database.
 
 use anyhow::{anyhow, Context};
@@ -31,10 +32,10 @@ pub async fn maybe_provision(pool: &PgPool, db_url: &str) -> anyhow::Result<()> 
         return Ok(());
     }
 
-    // Fast path: catalog already present → skip the network deploy (keeps cold starts cheap;
-    // apply schema *changes* to an existing DB out of band, not on every boot).
-    if catalog_present(pool).await? {
-        tracing::info!(%source, "db provision: schema present, skipping");
+    // Fast path: already seeded → skip the network deploy (keeps cold starts cheap; apply schema
+    // *changes* to an existing DB out of band, not on every boot).
+    if catalog_seeded(pool).await? {
+        tracing::info!(%source, "db provision: already seeded, skipping");
         return Ok(());
     }
 
@@ -51,7 +52,7 @@ pub async fn maybe_provision(pool: &PgPool, db_url: &str) -> anyhow::Result<()> 
         .context("db provision: pg_advisory_lock")?;
 
     // Re-check under the lock: another machine may have provisioned while we waited.
-    let result = if catalog_present(pool).await.unwrap_or(false) {
+    let result = if catalog_seeded(pool).await.unwrap_or(false) {
         tracing::info!("db provision: another machine provisioned while we waited; skipping");
         Ok(())
     } else {
@@ -66,13 +67,23 @@ pub async fn maybe_provision(pool: &PgPool, db_url: &str) -> anyhow::Result<()> 
     result
 }
 
-/// True once the seed catalog (`config.routers`) exists — the gateway's boot-time query target.
-async fn catalog_present(pool: &PgPool) -> anyhow::Result<bool> {
-    let reg: Option<String> = sqlx::query_scalar("select to_regclass('config.routers')::text")
+/// True once the catalog is **seeded** — `config.routers` exists AND has rows. dbd runs apply
+/// (schema) and import (seed) as SEPARATE transactions, so a created-but-empty table (apply
+/// committed, import didn't) must NOT count as provisioned — else a failed import would be
+/// skipped forever. Absent table OR zero rows ⇒ (re)provision (deploy is idempotent).
+async fn catalog_seeded(pool: &PgPool) -> anyhow::Result<bool> {
+    let exists: Option<String> = sqlx::query_scalar("select to_regclass('config.routers')::text")
         .fetch_one(pool)
         .await
-        .context("db provision: catalog precheck")?;
-    Ok(reg.is_some())
+        .context("db provision: catalog existence check")?;
+    if exists.is_none() {
+        return Ok(false);
+    }
+    let rows: i64 = sqlx::query_scalar("select count(*) from config.routers")
+        .fetch_one(pool)
+        .await
+        .context("db provision: catalog seed check")?;
+    Ok(rows > 0)
 }
 
 /// `dbd deploy`: resolve the source (GitHub tarball or local dir) → apply DDL → import seed →
@@ -88,45 +99,23 @@ async fn deploy(db_url: &str, source: &str) -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow!("db provision: database connection failed: {e}"))?;
 
-    // torii runs a single un-scoped schema (no sensei-style scopes) → apply/import everything
-    // by passing `None` for the scope filter.
-    tracing::info!("db provision: apply (DDL)");
+    // dbd deploy = apply (DDL) + import (seed) in one call. `None` scope = the full un-scoped
+    // set (torii has no sensei-style scopes). dry_run = false.
+    tracing::info!("db provision: dbd deploy (apply + import)");
     design
-        .apply(
-            &adapter,
-            None,
-            false,
-            None,
-            |desc: &str| tracing::debug!(step = "apply", desc, "starting"),
-            |desc: &str, err: Option<&str>| {
-                if let Some(e) = err {
-                    tracing::warn!(step = "apply", desc, error = e, "failed");
-                }
-            },
-            |_summary| tracing::info!("db provision: apply complete"),
-        )
+        .deploy(&adapter, false, None, |c| {
+            tracing::info!(
+                applied = c.apply.applied,
+                created = c.apply.created,
+                tables = c.import.tables,
+                "db provision: deploy complete"
+            );
+        })
         .await
-        .map_err(|e| anyhow!("db provision: apply failed: {e}"))?;
+        .map_err(|e| anyhow!("db provision: deploy failed: {e}"))?;
 
-    tracing::info!("db provision: import (seed)");
-    design
-        .import_data(
-            &adapter,
-            None,
-            false,
-            None,
-            |desc: &str| tracing::debug!(step = "import", desc, "starting"),
-            |desc: &str, err: Option<&str>| {
-                if let Some(e) = err {
-                    tracing::warn!(step = "import", desc, error = e, "failed");
-                }
-            },
-            |_summary| tracing::info!("db provision: import complete"),
-        )
-        .await
-        .map_err(|e| anyhow!("db provision: import failed: {e}"))?;
-
-    // RLS is the security premise (secret tables deny-all + service_role). A failed policy is fatal.
+    // RLS is a separate dbd step (its own CLI subcommand + library fn), required for the security
+    // premise (secret tables deny-all + service_role-only). A failed policy is fatal.
     tracing::info!("db provision: policies (RLS)");
     let report = dbd_core::design::apply_policies(&adapter, &project_dir, false)
         .await

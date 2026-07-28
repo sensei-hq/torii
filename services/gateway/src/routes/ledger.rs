@@ -284,13 +284,14 @@ pub async fn get_org(
     .await;
     let roles: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.cap_count desc, t.name), '[]'::json) from ( \
-           select r.id, r.key, r.name, r.is_system, \
+           select r.role_id as id, r.key, r.name, r.is_system, \
                   count(rp.capability) as cap_count, \
                   coalesce(json_agg(rp.capability order by rp.capability) filter (where rp.capability is not null), '[]'::json) as capabilities \
-             from core.roles r \
-             left join core.role_permissions rp on rp.role_id = r.id \
+             from core.effective_roles r \
+             left join core.effective_role_permissions rp \
+               on rp.role_id = r.role_id and rp.tenant_id = r.tenant_id \
             where r.tenant_id = $1 \
-            group by r.id, r.key, r.name, r.is_system) t",
+            group by r.role_id, r.key, r.name, r.is_system) t",
     )
     .bind(tenant)
     .fetch_one(&state.pool)
@@ -429,7 +430,7 @@ pub async fn get_tools(
         .await?;
         let roles: Value = sqlx::query_scalar(
             "select coalesce(json_agg(t order by t.name), '[]'::json) from ( \
-               select id, key, name from core.roles where tenant_id = $1) t",
+               select role_id as id, key, name from core.effective_roles where tenant_id = $1) t",
         )
         .bind(tenant)
         .fetch_one(&state.pool)

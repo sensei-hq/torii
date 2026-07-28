@@ -1,0 +1,6 @@
+{"key":"owner","name":"Owner","is_system":true}
+{"key":"admin","name":"Administrator","is_system":true}
+{"key":"editor","name":"Editor","is_system":true}
+{"key":"viewer","name":"Viewer","is_system":true}
+{"key":"member","name":"Member","is_system":true}
+{"key":"service","name":"Service","is_system":true}

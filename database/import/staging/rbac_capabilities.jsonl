@@ -1,0 +1,27 @@
+{"key":"budget.read","domain":"budget","description":"View budgets and spend"}
+{"key":"budget.write","domain":"budget","description":"Create/edit budget nodes; approve requests"}
+{"key":"budget.request","domain":"budget","description":"Request a budget increase on an attributed node"}
+{"key":"chain.read","domain":"routing","description":"View chains/bindings/policies"}
+{"key":"chain.write","domain":"routing","description":"Create/edit chains, bindings, routing policy"}
+{"key":"connection.manage","domain":"credentials","description":"Connect/rotate/revoke provider credentials"}
+{"key":"model.manage","domain":"catalog","description":"Add/enable models; edit pricing/overrides"}
+{"key":"space.create","domain":"knowledge","description":"Create spaces"}
+{"key":"space.join","domain":"knowledge","description":"Join a space"}
+{"key":"doc.read","domain":"knowledge","description":"Read documents (subject to classification)"}
+{"key":"doc.write","domain":"knowledge","description":"Create/edit own documents"}
+{"key":"doc.delete","domain":"knowledge","description":"Delete documents / retire chunks"}
+{"key":"doc.declassify","domain":"knowledge","description":"Lower a document classification"}
+{"key":"retrieval.manage","domain":"knowledge","description":"Promote space retrieval/chunking defaults"}
+{"key":"dataset.manage","domain":"knowledge","description":"Manage structured datasets + column sensitivity"}
+{"key":"dataset.compute","domain":"knowledge","description":"Run compute-without-exposing over a dataset"}
+{"key":"member.manage","domain":"org","description":"Invite/place/manage members"}
+{"key":"role.manage","domain":"org","description":"Create roles; assign capabilities/roles"}
+{"key":"apikey.manage","domain":"org","description":"Issue/rotate/revoke API keys + service accounts"}
+{"key":"tenant.manage","domain":"org","description":"Manage tenant settings + verified domains"}
+{"key":"mcp.manage","domain":"tools","description":"Register MCP servers + tool allow-lists"}
+{"key":"governance.manage","domain":"governance","description":"Edit masking/retention/redaction/classification/features"}
+{"key":"feature.manage","domain":"governance","description":"Set feature-governance state"}
+{"key":"device.manage","domain":"ops","description":"Manage/revoke enrolled devices"}
+{"key":"audit.read","domain":"observability","description":"Read the audit ledger"}
+{"key":"audit.export","domain":"observability","description":"Export filtered ledger/audit data"}
+{"key":"analytics.read","domain":"observability","description":"Read analytics dashboards"}

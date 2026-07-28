@@ -269,6 +269,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/devices/revoke", post(routes::rpc::devices_revoke))
         .route("/rbac/assign-role", post(routes::rpc::rbac_assign_role))
         .route("/rbac/unassign-role", post(routes::rpc::rbac_unassign_role))
+        .route("/rbac/create-role", post(routes::rpc::rbac_create_role))
         .route(
             "/governance/set-feature",
             post(routes::rpc::governance_set_feature),

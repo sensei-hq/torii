@@ -677,6 +677,128 @@ pub async fn rbac_unassign_role(
 }
 
 #[derive(Deserialize)]
+pub struct CreateRole {
+    pub key: String,
+    pub name: String,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
+/// `POST /rpc/rbac/create-role` — capability `role.manage`. Creates a TENANT-CUSTOM role
+/// (`tenant_id` = caller's tenant, `is_system=false`) with an initial capability set — the
+/// backend for the admin "duplicate a default to customize" flow. Guards:
+/// - **no-shadowing**: the key must not already resolve for this tenant — a shared default
+///   (owner/admin/…) or an existing custom role — else 409. The `(tenant_id, key)` unique does
+///   NOT catch this (a custom `tenant_id` ≠ a default's NULL), so this check is the only guard.
+/// - **anti-escalation**: every requested capability must be a SUBSET of the ACTOR's own resolved
+///   caps (mirrors assign-role), so an admin can't mint a role holding a cap they lack (a cap not
+///   in the catalog is never in the actor's set, so this also rejects unknown capabilities).
+///
+/// Role + grants are written in one transaction (dropping `tx` on any early return rolls back).
+pub async fn rbac_create_role(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<CreateRole>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "role.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    let key = body.key.trim();
+    let name = body.name.trim();
+    if key.is_empty() || name.is_empty() {
+        return (StatusCode::BAD_REQUEST, "key and name are required").into_response();
+    }
+
+    // no-shadowing / no-dup: reject a key already resolving for this tenant (default or custom).
+    let key_taken: bool = match sqlx::query_scalar(
+        "select exists(select 1 from core.effective_roles where tenant_id = $1 and key = $2)",
+    )
+    .bind(tenant)
+    .bind(key)
+    .fetch_one(&state.pool)
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("create-role: key check: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+        }
+    };
+    if key_taken {
+        return (
+            StatusCode::CONFLICT,
+            "role key already in use (reserved default or existing custom role)",
+        )
+            .into_response();
+    }
+
+    // anti-escalation: every requested capability must be one the ACTOR holds.
+    let actor_caps = match CapabilitySet::resolve(&state.pool, &claims).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("create-role: resolve actor caps: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if let Some(missing) = body.capabilities.iter().find(|c| !actor_caps.has(c)) {
+        return (
+            StatusCode::FORBIDDEN,
+            format!("cannot grant a capability you do not hold: {missing}"),
+        )
+            .into_response();
+    }
+
+    // Guards passed — write role + its grants atomically.
+    let mut tx = match state.pool.begin().await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("create-role: begin: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+        }
+    };
+    let role_id: Uuid = match sqlx::query_scalar(
+        "insert into core.roles (tenant_id, key, name, is_system, created_by) \
+         values ($1,$2,$3,false,$4) returning id",
+    )
+    .bind(tenant)
+    .bind(key)
+    .bind(name)
+    .bind(actor.to_string())
+    .fetch_one(&mut *tx)
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!("create-role: insert role: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+        }
+    };
+    for cap in &body.capabilities {
+        if let Err(e) = sqlx::query(
+            "insert into core.role_permissions (tenant_id, role_id, capability) values ($1,$2,$3)",
+        )
+        .bind(tenant)
+        .bind(role_id)
+        .bind(cap)
+        .execute(&mut *tx)
+        .await
+        {
+            tracing::error!("create-role: insert grant {cap}: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+        }
+    }
+    if let Err(e) = tx.commit().await {
+        tracing::error!("create-role: commit: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+
+    audit(&state, tenant, actor, "role.created", "role", Some(role_id)).await;
+    (StatusCode::OK, Json(json!({ "created": role_id }))).into_response()
+}
+
+#[derive(Deserialize)]
 pub struct SetFeature {
     pub feature_key: String,
     pub scope_type: String, // workspace | space | role
@@ -1372,4 +1494,56 @@ pub async fn connections_oauth_revoke(
     )
     .await;
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use sqlx::PgPool;
+    use uuid::Uuid;
+
+    async fn pool() -> PgPool {
+        let url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://postgres:postgres@127.0.0.1:55322/postgres".into());
+        PgPool::connect(&url)
+            .await
+            .expect("connect local Supabase (55322)")
+    }
+
+    /// The two SQL contracts `rbac_create_role` relies on: (1) the no-shadowing key-check flags a
+    /// shared default key (`owner`) as taken for ANY tenant — the only guard against shadowing,
+    /// since the `(tenant_id,key)` unique treats a custom `tenant_id` as distinct from a default's
+    /// NULL — and (2) a tenant-custom role's grant resolves through `core.effective_role_permissions`
+    /// for that tenant (the path `CapabilitySet::resolve` reads). DB-gated (needs the migrated schema).
+    #[tokio::test]
+    #[ignore = "requires local Supabase (55322) with the RBAC shared-defaults schema"]
+    async fn create_role_no_shadowing_and_resolves() {
+        let pool = pool().await;
+        let tenant = Uuid::new_v4();
+        sqlx::query("insert into core.tenants (id,name,slug,modified_by) values ($1,'crole-test',$2,'test')")
+            .bind(tenant).bind(format!("crole-test-{tenant}")).execute(&pool).await.unwrap();
+
+        // (1) no-shadowing: a default key is "taken" for this tenant; a fresh key is free.
+        let taken = |k: &'static str, t: Uuid, p: PgPool| async move {
+            sqlx::query_scalar::<_, bool>(
+                "select exists(select 1 from core.effective_roles where tenant_id=$1 and key=$2)")
+                .bind(t).bind(k).fetch_one(&p).await.unwrap()
+        };
+        assert!(taken("owner", tenant, pool.clone()).await, "default 'owner' must be flagged taken");
+        assert!(!taken("support", tenant, pool.clone()).await, "a fresh custom key must be free");
+
+        // (2) create a custom role + grant; assert it resolves via the effective view for the tenant.
+        let role_id: Uuid = sqlx::query_scalar(
+            "insert into core.roles (tenant_id,key,name,is_system,created_by) values ($1,'support','Support',false,'test') returning id")
+            .bind(tenant).fetch_one(&pool).await.unwrap();
+        sqlx::query("insert into core.role_permissions (tenant_id,role_id,capability) values ($1,$2,'budget.read')")
+            .bind(tenant).bind(role_id).execute(&pool).await.unwrap();
+        let resolves: bool = sqlx::query_scalar(
+            "select exists(select 1 from core.effective_role_permissions where tenant_id=$1 and role_id=$2 and capability='budget.read')")
+            .bind(tenant).bind(role_id).fetch_one(&pool).await.unwrap();
+        assert!(resolves, "custom-role grant must resolve via effective_role_permissions");
+        assert!(taken("support", tenant, pool.clone()).await, "created custom key is now taken (409 on re-create)");
+
+        // cleanup: dropping the tenant cascades to its roles + grants.
+        sqlx::query("delete from core.tenants where id=$1").bind(tenant).execute(&pool).await.unwrap();
+    }
 }

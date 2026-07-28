@@ -5,7 +5,9 @@
 # (Fly.io: `fly deploy` uses this via fly.toml's [build].dockerfile.)
 
 # ---- builder ---------------------------------------------------------------
-FROM rust:1.83-slim-bookworm AS builder
+# Rust 1.85+ required — the sensei-vault crate is edition 2024 (stabilized in 1.85). Pinned to
+# match the dev toolchain (1.97) so the prod build mirrors local.
+FROM rust:1.97-slim-bookworm AS builder
 # build-essential + cmake + clang: aws-lc-sys (pulled via rustls / aws-sdk-bedrockruntime)
 # compiles a C lib with CMake and may run bindgen (needs libclang). The slim image lacks them.
 RUN apt-get update && apt-get install -y --no-install-recommends \

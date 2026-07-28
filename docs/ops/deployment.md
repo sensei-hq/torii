@@ -130,6 +130,46 @@ rows fail to unseal). Sequence:
 > (fail-safe) rather than denying inference. KEK rotation: `Vault::rotate_kek` re-wraps every
 > DEK; rotate the underlying Supabase-Vault secret in the same window.
 
+> **State note (post auto-provision).** Prod was first provisioned by the `dbd-core`
+> auto-provision (`services/gateway/src/provision.rs`) from `sensei-hq/torii/database@main`,
+> which **already included** V4 + O-7. So on the live prod DB, cutover steps 1 & 3 above are
+> already satisfied (fresh install applied the full vault schema; no pre-AAD rows to reseal).
+> Only **step 2 (seed `torii_kek`)** remains to enable prod BYOK.
+
+### RBAC shared-defaults cutover — before the next `fly deploy`
+
+Auto-provision only **fresh-installs**; it skips a seeded DB (`provision.rs` — schema *changes*
+are applied out of band). Commit `b6eac56` (shared default roles via `core.effective_*` views)
+landed **after** prod was provisioned, so prod is missing the views + nullable `roles.tenant_id`.
+The new gateway build reads `core.effective_role_permissions`, so this schema **must land before
+that build deploys** or capability resolution errors (fail-closed → privileged ops blocked).
+
+Non-breaking because the sequence is ordered: applying the schema first is invisible to the
+**currently deployed** build (it reads the base tables filtered by `tenant_id = $1`, so the new
+`tenant_id NULL` default rows don't appear); then the new build deploys onto views that exist.
+
+```sh
+export PROD="<prod DATABASE_URL>"                 # Fly secret DATABASE_URL
+
+# 0. read-only inspect — confirm V4/O-7 present, see if any old per-tenant seed roles exist
+psql "$PROD" -tAc "select 'vault_v4o7=' || (to_regclass('public.router_credentials') is not null)::text; \
+  select 'rbac_views=' || (to_regclass('core.effective_roles') is not null)::text; \
+  select 'kek=' || exists(select 1 from vault.secrets where name='torii_kek')::text; \
+  select 'per_tenant_roles=' || count(*) from core.roles where tenant_id is not null"
+
+# 1. RBAC schema — dbd apply (additive: views + nullable tenant_id + constraint swap) + idempotent re-seed
+cd database
+DATABASE_URL="$PROD" dbd apply  -e prod
+DATABASE_URL="$PROD" dbd import -e prod
+```
+
+If step 0 shows `per_tenant_roles > 0` (the platform tenant's old seed roles), they remain as
+harmless duplicates surfaced as "customs" by the view — existing assignments still resolve. Tidy
+up **after** the deploy (repoint `profile_roles` from each old per-tenant role to the matching
+`tenant_id NULL` default by key, then delete the old rows). Not required for correctness.
+
+Then seed the KEK (step 2 above) and `fly deploy`.
+
 ---
 
 ## 4. Torii desktop

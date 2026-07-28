@@ -1,6 +1,8 @@
 # Fly.io deployment for the torii-gateway (central Rust/Axum inference gateway).
-# See docs/ops/deployment.md. Secrets (DATABASE_URL, PUBLIC_SUPABASE_URL, TORII_KEK, BYOK
-# provider keys) are set with `fly secrets set …` — never committed.
+# See docs/ops/deployment.md. Secrets (DATABASE_URL, PUBLIC_SUPABASE_URL, BYOK provider keys)
+# are set with `fly secrets set …` — never committed. The vault KEK is NOT an env secret in
+# prod: under TORII_ENV=prod a raw TORII_KEK is refused (gap #1); the KEK is read from Supabase
+# Vault (secret name TORII_KEK_VAULT_SECRET, default `torii_kek`). See deployment.md → Vault-crate cutover.
 #
 # Deploy FROM THE REPO ROOT so the Docker build context is the whole workspace:
 #   cd <repo-root> && fly deploy --config services/gateway/fly.toml

@@ -16,8 +16,8 @@ COPY services ./services
 COPY apps/desktop/src-tauri/Cargo.toml ./apps/desktop/src-tauri/Cargo.toml
 
 # Strip the dev-in-place [patch] (points sensei-* at the local sibling repo ../gateway,
-# which is absent here) so the build resolves the git dependency instead. PIN the tag in
-# services/gateway/Cargo.toml (tag = "v0.4.6") for a reproducible prod build.
+# which is absent here) so the build resolves the git dependency instead. The tag is pinned in
+# services/gateway/Cargo.toml (currently tag = "v0.4.8") for a reproducible prod build.
 RUN sed -i '/^\[patch\./,/^$/d' Cargo.toml
 
 # Build only the gateway (not the Tauri desktop member).

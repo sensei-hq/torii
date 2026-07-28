@@ -21,18 +21,16 @@ begin
       on rtr.name = trim(stg.router_name)
    inner join core.tenants t
       on t.id = stg.tenant_id        -- skip rows when tenant not yet imported
+   -- Idempotent via this guard (no ON CONFLICT): the active-unique index is now partial
+   -- ((tenant_id, router_id, credential_type) WHERE is_active), so a bare
+   -- `ON CONFLICT (tenant_id, router_id)` matches no constraint. Seed only inserts the api_key
+   -- credential (credential_type defaults to 'api_key'); an existing api_key row is left as-is.
    where not exists (
      select 1
        from public.router_credentials rk
-      where rk.tenant_id   = stg.tenant_id
-        and rk.router_id   = rtr.id
-   )
-  on conflict (tenant_id, router_id)
-  do update
-        set encrypted_api_key = excluded.encrypted_api_key
-          , key_label         = excluded.key_label
-          , is_active         = excluded.is_active
-          , modified_at       = excluded.modified_at
-          , modified_by       = excluded.modified_by;
+      where rk.tenant_id       = stg.tenant_id
+        and rk.router_id       = rtr.id
+        and rk.credential_type = 'api_key'
+   );
 end;
 $$;

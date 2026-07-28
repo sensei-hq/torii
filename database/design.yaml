@@ -25,7 +25,9 @@ import:
     truncate: true
     null_value: ''
   after:
-    - import/loader.sql
+    # dbd auto-runs the staging.import_*() procedures (dependency-ordered) during `import`, so
+    # no manual loader is needed. seed_rework seeds RBAC + budget data that isn't yet expressed
+    # as staging import files (TODO: migrate to import files + procs, then drop this too).
     - import/seed_rework.sql
 dbml:
   exclude:

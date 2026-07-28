@@ -11,7 +11,7 @@
 	//
 	// Env is managed in the Cloudflare dashboard as encrypted SECRETS (never in git):
 	//   PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY (publishable),
-	//   PUBLIC_GATEWAY_URL=https://api.torii.sensei-hq.com
+	//   PUBLIC_GATEWAY_URL=https://api-torii.sensei-hq.com
 	// `wrangler deploy` never deletes Secrets; keep_vars:true also preserves any dashboard
 	// plaintext Variables. At runtime SvelteKit reads these via $env/dynamic/public.
 	// Local dev: `bun run dev` (Vite) reads the gitignored .env.

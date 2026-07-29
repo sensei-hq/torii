@@ -89,7 +89,9 @@
 		try {
 			await api.transferOwnership(profileId)
 			await api.refreshSession()
-			window.location.assign('/organization')
+			// You just demoted yourself to admin — admin can't load /organization (needs
+			// role.manage), so go to the dashboard rather than bounce into a 403.
+			window.location.assign('/')
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e)
 		} finally {

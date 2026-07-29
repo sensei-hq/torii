@@ -208,7 +208,7 @@
 								<div class="truncate text-sm text-ink">
 									{m.display_name ?? m.email ?? 'Unnamed'}
 								</div>
-								<div class="font-mono text-[11px] text-ink-mute">{m.id.slice(0, 8)}</div>
+								<div class="font-mono text-xs text-ink-mute">{m.id.slice(0, 8)}</div>
 							</div>
 							<div class="flex flex-wrap items-center justify-end gap-1.5">
 								{#each m.roles as r (r)}
@@ -238,7 +238,7 @@
 											e.currentTarget.value = ''
 										}}
 										aria-label={`Add a role to ${m.display_name ?? m.id}`}
-										class="rounded-md border border-paper-edge bg-paper px-2 py-1 text-[11px] text-ink-soft disabled:opacity-40"
+										class="rounded-md border border-paper-edge bg-paper px-2 py-1 text-xs text-ink-soft disabled:opacity-40"
 									>
 										<option value="" disabled>+ role</option>
 										{#each assignable(m) as r (r.id)}
@@ -279,13 +279,13 @@
 								<span class="text-sm font-semibold text-ink">{r.name}</span>
 								{#if r.is_system}<Chip>system</Chip>{:else}<Chip tone="accent">custom</Chip>{/if}
 							</div>
-							<div class="mt-1 font-mono text-[11px] text-ink-mute">
+							<div class="mt-1 font-mono text-xs text-ink-mute">
 								{r.cap_count} capabilit{r.cap_count === 1 ? 'y' : 'ies'}
 							</div>
 							<button
 								onclick={() => startDuplicate(r)}
 								disabled={!!busy}
-								class="mt-2 inline-flex items-center gap-1 text-[11px] text-ink-soft hover:text-accent disabled:opacity-40"
+								class="mt-2 inline-flex items-center gap-1 text-xs text-ink-soft hover:text-accent disabled:opacity-40"
 							>
 								<span class="i-solar-copy-bold-duotone h-3.5 w-3.5"></span>
 								Duplicate to customize
@@ -303,12 +303,12 @@
 							</h3>
 							<button
 								onclick={() => (dupOpen = false)}
-								class="text-[11px] text-ink-mute hover:text-ink">Cancel</button
+								class="text-xs text-ink-mute hover:text-ink">Cancel</button
 							>
 						</div>
 						<div class="flex flex-wrap gap-3">
 							<label class="flex flex-col gap-1">
-								<span class="text-[11px] text-ink-mute">Key (unique, lowercase)</span>
+								<span class="text-xs text-ink-mute">Key (unique, lowercase)</span>
 								<input
 									bind:value={newKey}
 									placeholder="support"
@@ -316,7 +316,7 @@
 								/>
 							</label>
 							<label class="flex flex-col gap-1">
-								<span class="text-[11px] text-ink-mute">Display name</span>
+								<span class="text-xs text-ink-mute">Display name</span>
 								<input
 									bind:value={newName}
 									class="w-64 rounded-md border border-paper-edge bg-paper px-2 py-1 text-xs text-ink"
@@ -325,7 +325,7 @@
 						</div>
 
 						<div class="mt-3">
-							<div class="mb-1 text-[11px] text-ink-mute">
+							<div class="mb-1 text-xs text-ink-mute">
 								Capabilities <span class="text-ink-faint"
 									>({selectedCaps.size} selected — you can only grant capabilities you hold)</span
 								>
@@ -364,7 +364,7 @@
 							>
 								{busy === 'create-role' ? 'Creating…' : 'Create role'}
 							</button>
-							<span class="text-[11px] text-ink-mute"
+							<span class="text-xs text-ink-mute"
 								>Creates a tenant-only role — the source default is unchanged.</span
 							>
 						</div>
@@ -383,12 +383,12 @@
 						<thead>
 							<tr class="border-b border-paper-edge">
 								<th
-									class="px-4 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-ink-mute"
+									class="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-ink-mute"
 									>Capability</th
 								>
 								{#each roles as r (r.id)}
 									<th
-										class="px-2 py-2 text-center text-[11px] font-medium text-ink-soft"
+										class="px-2 py-2 text-center text-xs font-medium text-ink-soft"
 										title={r.name}
 									>
 										{r.key}
@@ -427,7 +427,7 @@
 				</div>
 				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
 					<span class="i-solar-shield-check-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
-					<span class="text-[11px] leading-relaxed text-ink-mute">
+					<span class="text-xs leading-relaxed text-ink-mute">
 						System roles are seeded and undeletable (display name renamable). Grants resolve
 						server-side by RLS + the gateway — a capability outside the closed catalog cannot be
 						stored, and the JWT is never trusted for authorization.

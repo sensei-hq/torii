@@ -76,19 +76,19 @@
 		<div class="space-y-4 px-5 pb-6">
 			<div class="grid grid-cols-3 gap-4">
 				<Card pad>
-					<div class="text-[11px] font-semibold uppercase tracking-wider text-ink-mute">
+					<div class="text-xs font-semibold uppercase tracking-wider text-ink-mute">
 						Features
 					</div>
 					<div class="font-heading text-2xl font-light text-ink">{features.length}</div>
 				</Card>
 				<Card pad>
-					<div class="text-[11px] font-semibold uppercase tracking-wider text-ink-mute">
+					<div class="text-xs font-semibold uppercase tracking-wider text-ink-mute">
 						Overridden
 					</div>
 					<div class="font-heading text-2xl font-light text-ink">{overrides}</div>
 				</Card>
 				<Card pad>
-					<div class="text-[11px] font-semibold uppercase tracking-wider text-ink-mute">Locked</div>
+					<div class="text-xs font-semibold uppercase tracking-wider text-ink-mute">Locked</div>
 					<div class="font-heading text-2xl font-light text-ink">
 						{features.filter((f) => effective(f) === 'locked').length}
 					</div>
@@ -129,7 +129,7 @@
 										disabled={busy === f.slug}
 										onclick={() => set(f.slug, s.v)}
 										aria-pressed={eff === s.v}
-										class="border-l border-paper-edge px-2.5 py-1 text-[11px] font-medium first:border-l-0 {eff ===
+										class="border-l border-paper-edge px-2.5 py-1 text-xs font-medium first:border-l-0 {eff ===
 										s.v
 											? 'bg-ink text-paper'
 											: 'text-ink-soft hover:bg-paper-mute'}">{s.label}</button
@@ -144,7 +144,7 @@
 				</div>
 				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
 					<span class="i-solar-shield-keyhole-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
-					<span class="text-[11px] leading-relaxed text-ink-mute">
+					<span class="text-xs leading-relaxed text-ink-mute">
 						Posture writes to the tenant's workspace scope and resolves server-side; a per-space or
 						per-role override can only tighten (never loosen) it, and every change is audited.
 					</span>

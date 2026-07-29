@@ -9,10 +9,10 @@
 </script>
 
 <div class="rounded-lg border border-paper-edge bg-paper-soft p-4 {cls}">
-	<div class="mb-2.5 text-[11px] font-semibold uppercase tracking-wider text-ink-mute">{label}</div>
+	<div class="mb-2.5 text-xs font-semibold uppercase tracking-wider text-ink-mute">{label}</div>
 	<div class="flex items-baseline gap-1">
 		<span class="font-heading text-3xl font-light leading-none {numTone}">{value}</span>
 		{#if unit}<span class="text-sm text-ink-mute">{unit}</span>{/if}
 	</div>
-	{#if hint}<div class="mt-2 font-mono text-[11px] text-ink-mute">{hint}</div>{/if}
+	{#if hint}<div class="mt-2 font-mono text-xs text-ink-mute">{hint}</div>{/if}
 </div>

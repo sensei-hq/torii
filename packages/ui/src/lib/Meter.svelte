@@ -11,7 +11,7 @@
 
 <div class="w-full">
 	{#if label || display}
-		<div class="mb-1 flex items-center justify-between gap-2 text-[11px]">
+		<div class="mb-1 flex items-center justify-between gap-2 text-xs">
 			<span class="truncate text-ink-mute">{label}</span>
 			{#if display}<span class="font-mono text-ink-soft">{display}</span>{/if}
 		</div>
@@ -19,5 +19,5 @@
 	<div class="h-1.5 overflow-hidden rounded-full bg-paper-mute">
 		<div class="h-full {fill}" style="width:{pct}%"></div>
 	</div>
-	{#if hint}<div class="mt-1 text-[11px] text-ink-faint">{hint}</div>{/if}
+	{#if hint}<div class="mt-1 text-xs text-ink-faint">{hint}</div>{/if}
 </div>

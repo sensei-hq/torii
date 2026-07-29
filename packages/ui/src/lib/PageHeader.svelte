@@ -7,7 +7,7 @@
 <div class="flex items-start justify-between gap-4 px-5 pb-3 pt-5">
 	<div class="min-w-0">
 		{#if eyebrow}
-			<div class="mb-0.5 text-[11px] font-semibold uppercase tracking-wider text-ink-mute">
+			<div class="mb-0.5 text-xs font-semibold uppercase tracking-wider text-ink-mute">
 				{eyebrow}
 			</div>
 		{/if}

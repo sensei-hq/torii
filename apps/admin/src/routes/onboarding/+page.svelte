@@ -38,7 +38,7 @@
 			class="space-y-3"
 		>
 			<div>
-				<span class="mb-1.5 block text-[11px] font-medium uppercase tracking-wider text-ink-mute"
+				<span class="mb-1.5 block text-xs font-medium uppercase tracking-wider text-ink-mute"
 					>Organization name</span
 				>
 				<input

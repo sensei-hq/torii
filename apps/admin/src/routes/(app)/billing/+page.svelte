@@ -109,7 +109,7 @@
 							<div class="flex-1">
 								{#if editing === n.id}
 									<div class="flex items-center gap-2">
-										<span class="text-[11px] text-ink-mute">cap $</span>
+										<span class="text-xs text-ink-mute">cap $</span>
 										<input
 											bind:value={capDraft}
 											aria-label="Budget cap amount"
@@ -140,7 +140,7 @@
 								{/if}
 							</div>
 							<span
-								class="w-12 text-right text-[11px] {n.enforcement === 'hard'
+								class="w-12 text-right text-xs {n.enforcement === 'hard'
 									? 'text-ink-soft'
 									: 'text-ink-mute'}">{n.enforcement}</span
 							>

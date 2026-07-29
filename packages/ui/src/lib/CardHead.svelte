@@ -11,12 +11,12 @@
 	{:else}
 		<span class="flex items-center gap-2">
 			{#if icon}<span class="{icon} h-3.5 w-3.5 text-ink-soft"></span>{/if}
-			<span class="text-[11px] font-semibold uppercase tracking-wider text-ink-mute">{title}</span>
+			<span class="text-xs font-semibold uppercase tracking-wider text-ink-mute">{title}</span>
 		</span>
 	{/if}
 	{#if right}
 		{@render right()}
 	{:else if meta}
-		<span class="font-mono text-[11px] text-ink-mute">{meta}</span>
+		<span class="font-mono text-xs text-ink-mute">{meta}</span>
 	{/if}
 </div>

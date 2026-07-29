@@ -222,7 +222,7 @@
 								/>
 								<div class="min-w-0 flex-1">
 									<div class="truncate text-sm font-semibold text-ink">{p.name}</div>
-									<div class="font-mono text-[11px] uppercase tracking-wider text-ink-mute">
+									<div class="font-mono text-xs uppercase tracking-wider text-ink-mute">
 										{p.is_active ? 'active' : 'inactive'}
 									</div>
 								</div>
@@ -234,7 +234,7 @@
 									<Chip tone="warning">not set</Chip>
 								{/if}
 							</div>
-							<div class="truncate font-mono text-[11px] text-ink-mute" title={p.api_base_url}>
+							<div class="truncate font-mono text-xs text-ink-mute" title={p.api_base_url}>
 								{hostOf(p.api_base_url)}{#if p.connected && p.connected_at}
 									· set {fmtDate(p.connected_at)}{:else if !p.requires_key}
 									· no key needed{/if}
@@ -264,7 +264,7 @@
 												keyInput = ''
 											}}
 											disabled={connBusy === p.name}
-											class="rounded-md border border-paper-edge px-2 py-1 text-[11px] text-ink-soft hover:bg-paper-mute disabled:opacity-40"
+											class="rounded-md border border-paper-edge px-2 py-1 text-xs text-ink-soft hover:bg-paper-mute disabled:opacity-40"
 											>Cancel</button
 										>
 									</div>
@@ -275,7 +275,7 @@
 												editing = p.name
 												keyInput = ''
 											}}
-											class="rounded-md border border-paper-edge px-2 py-1 text-[11px] text-ink-mute hover:border-accent hover:text-accent"
+											class="rounded-md border border-paper-edge px-2 py-1 text-xs text-ink-mute hover:border-accent hover:text-accent"
 											>Rotate</button
 										>
 										<button
@@ -283,7 +283,7 @@
 											disabled={connBusy === p.name}
 											aria-label={`Revoke ${p.name} key`}
 											title="Revoke this key — the router becomes unavailable to the org"
-											class="rounded-md border border-paper-edge px-2 py-1 text-[11px] text-ink-mute hover:border-danger hover:text-danger disabled:opacity-40"
+											class="rounded-md border border-paper-edge px-2 py-1 text-xs text-ink-mute hover:border-danger hover:text-danger disabled:opacity-40"
 											>{connBusy === p.name ? 'Revoking…' : 'Revoke'}</button
 										>
 									</div>
@@ -312,7 +312,7 @@
 												onclick={() => disconnectOauth(p.name)}
 												disabled={connBusy === p.name}
 												aria-label={`Revoke ${p.name} OAuth token`}
-												class="rounded-md border border-paper-edge px-2 py-1 text-[11px] text-ink-mute hover:border-danger hover:text-danger disabled:opacity-40"
+												class="rounded-md border border-paper-edge px-2 py-1 text-xs text-ink-mute hover:border-danger hover:text-danger disabled:opacity-40"
 												>{connBusy === p.name ? '…' : 'Revoke'}</button
 											>
 										{:else if tokenEditing === p.name}
@@ -337,7 +337,7 @@
 													tokenInput = ''
 												}}
 												disabled={connBusy === p.name}
-												class="rounded-md border border-paper-edge px-2 py-1 text-[11px] text-ink-soft hover:bg-paper-mute disabled:opacity-40"
+												class="rounded-md border border-paper-edge px-2 py-1 text-xs text-ink-soft hover:bg-paper-mute disabled:opacity-40"
 												>Cancel</button
 											>
 										{:else}
@@ -346,7 +346,7 @@
 													tokenEditing = p.name
 													tokenInput = ''
 												}}
-												class="rounded-md border border-paper-edge px-2 py-1 text-[11px] text-ink-mute hover:border-accent hover:text-accent"
+												class="rounded-md border border-paper-edge px-2 py-1 text-xs text-ink-mute hover:border-accent hover:text-accent"
 												>Connect token</button
 											>
 										{/if}
@@ -361,7 +361,7 @@
 				</div>
 				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
 					<span class="i-solar-shield-check-bold-duotone mt-0.5 h-3.5 w-3.5 text-success"></span>
-					<span class="text-[11px] leading-relaxed text-ink-mute">
+					<span class="text-xs leading-relaxed text-ink-mute">
 						Remote providers authenticate with the org's own key, sealed in the vault and shown to
 						no one; local models need no key. Keys are write-only here — rotate replaces, revoke
 						removes.
@@ -404,10 +404,10 @@
 				<CardHead>
 					{#snippet left()}
 						<span class="flex items-center gap-2">
-							<span class="text-[11px] font-semibold uppercase tracking-wider text-ink-mute"
+							<span class="text-xs font-semibold uppercase tracking-wider text-ink-mute"
 								>API identities</span
 							>
-							<span class="font-mono text-[11px] text-ink-mute"
+							<span class="font-mono text-xs text-ink-mute"
 								>{keys.filter((k) => k.status === 'active').length} active</span
 							>
 						</span>
@@ -448,7 +448,7 @@
 									<Chip>{k.service_account_id ? 'service account' : 'API key'}</Chip>
 									<Chip>{scopeLabel(k.scope)}</Chip>
 								</div>
-								<div class="mt-1 font-mono text-[11px] text-ink-mute">
+								<div class="mt-1 font-mono text-xs text-ink-mute">
 									created {fmtDate(k.created_at)} · last used
 									{k.last_used_at ? fmtDate(k.last_used_at) : '—'}
 								</div>
@@ -461,7 +461,7 @@
 										disabled={busy === k.id}
 										aria-label={`Revoke API key ${k.prefix}`}
 										title="Revoke this key"
-										class="rounded-md border border-paper-edge px-2 py-1 text-[11px] text-ink-mute hover:border-danger hover:text-danger disabled:opacity-40"
+										class="rounded-md border border-paper-edge px-2 py-1 text-xs text-ink-mute hover:border-danger hover:text-danger disabled:opacity-40"
 										>{busy === k.id ? 'Revoking…' : 'Revoke'}</button
 									>
 								{/if}
@@ -479,7 +479,7 @@
 				</div>
 				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
 					<span class="i-solar-shield-check-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
-					<span class="text-[11px] leading-relaxed text-ink-mute">
+					<span class="text-xs leading-relaxed text-ink-mute">
 						Keys are shown once at creation, then stored only as an argon2id hash. A key carries no
 						budget — spend meters to the bound identity's node in the org tree, and every call is
 						audited.

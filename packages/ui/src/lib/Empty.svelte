@@ -15,5 +15,5 @@
 <div class="flex flex-col items-center justify-center gap-2 px-4 text-center {pad}">
 	<span class="{icon} h-7 w-7 text-ink-faint" aria-hidden="true"></span>
 	<span class="text-sm text-ink-mute">{message}</span>
-	{#if hint}<span class="text-[11px] text-ink-faint">{hint}</span>{/if}
+	{#if hint}<span class="text-xs text-ink-faint">{hint}</span>{/if}
 </div>

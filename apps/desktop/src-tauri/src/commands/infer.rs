@@ -78,6 +78,10 @@ pub async fn infer(
         auth: None,
         panel: None,
         consensus: None,
+        // Local plane: keep the prior walk-the-chain fallback behaviour; embedded local
+        // models take no per-call provider credentials.
+        allow_fallback: true,
+        credentials: Default::default(),
     };
 
     let start = std::time::Instant::now();

@@ -264,6 +264,30 @@ export const api = {
 		const { error } = await sb().auth.signInWithPassword({ email, password })
 		if (error) throw new Error(error.message)
 	},
+	// Passwordless magic link — also the register path: Supabase creates the user when
+	// new, and the core.assign_tenant_by_domain trigger auto-joins them by email domain.
+	// The emailed link lands back on /auth/callback (implicit flow → tokens in the URL,
+	// parsed by detectSessionInUrl).
+	signInWithMagicLink: async (email: string) => {
+		const { error } = await sb().auth.signInWithOtp({
+			email,
+			options: {
+				shouldCreateUser: true,
+				emailRedirectTo: `${window.location.origin}/auth/callback`
+			}
+		})
+		if (error) throw new Error(error.message)
+	},
+	// OAuth (GitHub v1). Convenience login; the same domain trigger applies on first
+	// signup. Best-effort tenant match — a personal GitHub email falls into the no-org
+	// path. Triggers a full-page redirect to the provider, then back to /auth/callback.
+	signInWithOAuth: async (provider: 'github') => {
+		const { error } = await sb().auth.signInWithOAuth({
+			provider,
+			options: { redirectTo: `${window.location.origin}/auth/callback` }
+		})
+		if (error) throw new Error(error.message)
+	},
 	signOut: () => sb().auth.signOut(),
 	hasSession: async () => !!(await sb().auth.getSession()).data.session,
 	// the signed-in user's shell identity — real email (from the session) + server-resolved

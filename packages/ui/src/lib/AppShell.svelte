@@ -128,7 +128,7 @@
 		<!-- Rail sidebar -->
 		<nav
 			aria-label="Primary"
-			class="flex flex-col overflow-y-auto border-r border-paper-edge bg-paper-soft px-3 py-4"
+			class="flex flex-col overflow-y-auto border-r border-paper-edge bg-paper px-3 py-4"
 		>
 			<!-- brand -->
 			<div class="flex items-center gap-2.5 px-1.5">
@@ -163,7 +163,7 @@
 							{@const active = isActive(it.href)}
 							<a
 								href={it.href}
-								class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors {active
+								class="flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors {active
 									? 'bg-paper-mute font-medium text-ink'
 									: 'text-ink-soft hover:bg-paper-mute/60 hover:text-ink'}"
 								aria-current={active ? 'page' : undefined}

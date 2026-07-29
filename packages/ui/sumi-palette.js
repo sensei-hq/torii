@@ -18,7 +18,7 @@ const kami = {
 	100: '0.975 0.008 85', // page bg
 	200: '0.955 0.010 85', // card bg (raised)
 	300: '0.920 0.012 85', // inset (sunken)
-	400: '0.850 0.010 70', // border / hairline
+	400: '0.880 0.015 85', // border / hairline (--paper-edge light; matches mockup zs.css)
 	500: '0.750 0.008 50', // faint text / placeholder
 	600: '0.580 0.010 50', // tertiary text (eyebrows, meta)
 	700: '0.380 0.012 50', // secondary text

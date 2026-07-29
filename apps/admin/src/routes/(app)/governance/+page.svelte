@@ -66,7 +66,9 @@
 		<div class="px-5">
 			<Card pad
 				><p class="text-sm text-danger">
-					{error}{error.includes('403') ? ' — needs the governance.manage / feature.manage capability.' : ''}
+					{error}{error.includes('403')
+						? ' — needs the governance.manage / feature.manage capability.'
+						: ''}
 				</p></Card
 			>
 		</div>
@@ -74,11 +76,15 @@
 		<div class="space-y-4 px-5 pb-6">
 			<div class="grid grid-cols-3 gap-4">
 				<Card pad>
-					<div class="text-[11px] font-semibold uppercase tracking-wider text-ink-mute">Features</div>
+					<div class="text-[11px] font-semibold uppercase tracking-wider text-ink-mute">
+						Features
+					</div>
 					<div class="font-heading text-2xl font-light text-ink">{features.length}</div>
 				</Card>
 				<Card pad>
-					<div class="text-[11px] font-semibold uppercase tracking-wider text-ink-mute">Overridden</div>
+					<div class="text-[11px] font-semibold uppercase tracking-wider text-ink-mute">
+						Overridden
+					</div>
 					<div class="font-heading text-2xl font-light text-ink">{overrides}</div>
 				</Card>
 				<Card pad>
@@ -94,7 +100,9 @@
 				<div>
 					{#each features as f (f.slug)}
 						{@const eff = effective(f)}
-						<div class="flex items-center gap-3 border-b border-paper-edge px-4 py-3 last:border-b-0">
+						<div
+							class="flex items-center gap-3 border-b border-paper-edge px-4 py-3 last:border-b-0"
+						>
 							<Glyph
 								icon={eff === 'locked'
 									? 'i-solar-lock-keyhole-minimalistic-bold-duotone'
@@ -123,7 +131,7 @@
 										aria-pressed={eff === s.v}
 										class="border-l border-paper-edge px-2.5 py-1 text-[11px] font-medium first:border-l-0 {eff ===
 										s.v
-											? 'bg-primary text-on-primary'
+											? 'bg-ink text-paper'
 											: 'text-ink-soft hover:bg-paper-mute'}">{s.label}</button
 									>
 								{/each}

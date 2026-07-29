@@ -164,6 +164,7 @@ export interface IssuedKey {
 export interface Member {
 	id: string
 	display_name: string | null
+	email: string | null
 	roles: string[]
 }
 

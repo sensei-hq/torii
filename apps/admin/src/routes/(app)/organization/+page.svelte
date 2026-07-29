@@ -205,7 +205,9 @@
 						>
 							<Glyph icon="i-solar-user-bold-duotone" tone="soft" />
 							<div class="min-w-0 flex-1">
-								<div class="truncate text-sm text-ink">{m.display_name ?? 'Unnamed'}</div>
+								<div class="truncate text-sm text-ink">
+									{m.display_name ?? m.email ?? 'Unnamed'}
+								</div>
 								<div class="font-mono text-[11px] text-ink-mute">{m.id.slice(0, 8)}</div>
 							</div>
 							<div class="flex flex-wrap items-center justify-end gap-1.5">

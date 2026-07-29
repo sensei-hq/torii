@@ -271,13 +271,14 @@ pub async fn get_org(
     };
     let members: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.display_name), '[]'::json) from ( \
-           select p.id, p.display_name, \
+           select p.id, p.display_name, u.email, \
                   coalesce(json_agg(r.key order by r.key) filter (where r.key is not null), '[]'::json) as roles \
              from core.profile_roles pr \
              join core.profiles p on p.id = pr.profile_id \
              join core.roles r on r.id = pr.role_id \
+             join auth.users u on u.id = p.id \
             where pr.tenant_id = $1 \
-            group by p.id, p.display_name) t",
+            group by p.id, p.display_name, u.email) t",
     )
     .bind(tenant)
     .fetch_one(&state.pool)

@@ -333,7 +333,7 @@
 							<div class="space-y-2">
 								{#each Object.entries(byDomain) as [domain, caps] (domain)}
 									<div>
-										<div class="text-[10px] font-semibold uppercase tracking-widest text-ink-mute">
+										<div class="text-xs font-semibold uppercase tracking-widest text-ink-mute">
 											{domain}
 										</div>
 										<div class="mt-1 flex flex-wrap gap-x-4 gap-y-1">
@@ -401,7 +401,7 @@
 								<tr class="bg-paper-mute/50">
 									<td
 										colspan={roles.length + 1}
-										class="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-ink-mute"
+										class="px-4 py-1.5 text-xs font-semibold uppercase tracking-widest text-ink-mute"
 										>{domain}</td
 									>
 								</tr>

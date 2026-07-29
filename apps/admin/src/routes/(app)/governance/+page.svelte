@@ -115,7 +115,7 @@
 									{#if f.policy_state}<Chip tone="accent">override</Chip>{/if}
 								</div>
 								{#if f.description}
-									<div class="mt-0.5 truncate text-[13px] text-ink-mute">{f.description}</div>
+									<div class="mt-0.5 truncate text-sm text-ink-mute">{f.description}</div>
 								{/if}
 							</div>
 							<!-- 4-state posture control -->

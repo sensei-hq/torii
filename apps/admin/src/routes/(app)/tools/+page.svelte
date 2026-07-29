@@ -176,7 +176,7 @@
 								<tr class="bg-paper-mute/50">
 									<td
 										colspan={roles.length + 1}
-										class="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-ink-mute"
+										class="px-4 py-1.5 text-xs font-semibold uppercase tracking-widest text-ink-mute"
 										>{grp.server.label || grp.server.name}</td
 									>
 								</tr>

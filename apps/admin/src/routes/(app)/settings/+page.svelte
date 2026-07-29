@@ -93,7 +93,7 @@
 					<Glyph icon={r.ic} size={34} tone={values[r.k] ? 'accent' : 'mute'} />
 					<div class="min-w-0 flex-1">
 						<div class="text-sm font-semibold text-ink">{r.t}</div>
-						<div class="mt-0.5 text-[13px] text-ink-mute">{r.d}</div>
+						<div class="mt-0.5 text-sm text-ink-mute">{r.d}</div>
 					</div>
 					<button
 						role="switch"

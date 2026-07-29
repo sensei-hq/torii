@@ -35,7 +35,7 @@
 
 	<span class="flex items-center gap-2" title={user?.role}>
 		<span
-			class="grid h-[22px] w-[22px] place-items-center rounded-full bg-accent-soft text-[9px] font-semibold text-accent"
+			class="grid h-[22px] w-[22px] place-items-center rounded-full bg-accent-soft text-xs font-semibold text-accent"
 			aria-hidden="true">{initial}</span
 		>
 		<span class="hidden whitespace-nowrap text-xs text-ink-soft sm:inline"

@@ -5,6 +5,8 @@
 	import { api } from '$lib/api'
 	import { looksLikeEmail, normalizeEmail } from '$lib/auth-flow'
 	import { BrandMark } from '@torii/ui'
+	// Single source of truth for the version chip — the app's package.json (tree-shaken to the string).
+	import { version } from '../../../package.json'
 
 	let email = $state('')
 	let password = $state('')
@@ -101,7 +103,7 @@
 				<span class="font-heading text-[28px] tracking-tight text-ink">Seiki</span>
 				<span
 					class="rounded-full border border-paper-edge px-2 py-0.5 font-mono text-[11px] text-ink-mute"
-					>v1.0</span
+					>v{version}</span
 				>
 			</span>
 			<div class="text-[11px] font-medium uppercase tracking-[0.14em] text-accent">

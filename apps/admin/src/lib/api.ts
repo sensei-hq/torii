@@ -365,6 +365,18 @@ export const api = {
 	// (403 if a requested capability exceeds your own).
 	createRole: (key: string, name: string, capabilities: string[]) =>
 		gwPost('/rpc/rbac/create-role', { key, name, capabilities }),
+	// Self-service org creation (tenant-less caller). Returns the new tenant id. Caller must
+	// refreshSession() afterwards so the JWT carries the new tenant_id/role_ids.
+	createOrg: (name: string) => gwPost<{ tenant_id: string }>('/rpc/orgs/create', { name }),
+	// Owner-only: hand ownership to another member.
+	transferOwnership: (profileId: string) =>
+		gwPost('/rpc/orgs/transfer-ownership', { profile_id: profileId }),
+	// Force a new access token so freshly-changed claims (tenant_id/role_ids/claims_version)
+	// take effect without a full sign-out.
+	refreshSession: async () => {
+		const { error } = await sb().auth.refreshSession()
+		if (error) throw new Error(error.message)
+	},
 	// workspace-default policy toggles.
 	settings: () => gwGet<{ settings: { setting_key: string; enabled: boolean }[] }>('/v1/settings'),
 	setSetting: (setting_key: string, enabled: boolean) =>

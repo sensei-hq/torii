@@ -212,8 +212,9 @@
 								></span>
 								<p class="text-sm text-ink">Check your inbox</p>
 								<p class="mt-1 text-sm leading-relaxed text-ink-mute">
-									We sent a sign-in link to <span class="font-medium text-ink">{email}</span>. Open
-									it on this device to continue.
+									We sent a sign-in link to <span class="font-medium text-ink"
+										>{normalizeEmail(email)}</span
+									>. Open it on this device to continue.
 								</p>
 								<button
 									type="button"

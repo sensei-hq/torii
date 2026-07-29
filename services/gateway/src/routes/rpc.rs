@@ -19,6 +19,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use sqlx::Acquire; // savepoint-per-attempt in orgs_create (nested `tx.begin()` → SAVEPOINT)
 use uuid::Uuid;
 
 use crate::{
@@ -1039,6 +1040,58 @@ pub struct CreateOrg {
     pub name: String,
 }
 
+/// Insert a tenant, retrying ONCE with a uuid-suffixed slug on a `core.tenants.slug`
+/// unique collision. Each attempt runs inside its own SAVEPOINT (a nested `tx.begin()`
+/// on an already-open transaction nests as `SAVEPOINT`): a unique violation aborts only
+/// the savepoint's subtransaction, and rolling it back un-poisons the outer `tx` so the
+/// retry — and the caller's remaining seeding on that same tx — can still run. WITHOUT
+/// the savepoint the collision would abort the whole tx, so the retry insert fails with
+/// SQLSTATE 25P02 (`in_failed_sql_transaction`) rather than a unique violation, turning
+/// the dedup into dead code (any slug collision → 500). Extracted so the regression is
+/// testable against the real code path (see `tests::orgs_create_seeds_and_dedups_slug`).
+async fn insert_tenant_dedup_slug(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    name: &str,
+    actor: &str,
+) -> Result<Uuid, sqlx::Error> {
+    let base = slugify(name);
+    let mut slug = base.clone();
+    let mut last_err: Option<sqlx::Error> = None;
+    for attempt in 0..2 {
+        let mut sp = tx.begin().await?; // SAVEPOINT on the outer tx
+        let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
+            "insert into core.tenants (name, slug, status, modified_by) \
+             values ($1, $2, 'trial', $3) returning id",
+        )
+        .bind(name)
+        .bind(&slug)
+        .bind(actor)
+        .fetch_one(&mut *sp)
+        .await;
+        match res {
+            Ok(id) => {
+                sp.commit().await?; // RELEASE SAVEPOINT — keep the row in the outer tx
+                return Ok(id);
+            }
+            Err(e)
+                if attempt == 0
+                    && e.as_database_error().is_some_and(|d| d.is_unique_violation()) =>
+            {
+                let _ = sp.rollback().await; // ROLLBACK TO SAVEPOINT — un-poison the outer tx
+                slug = format!("{base}-{}", &Uuid::new_v4().to_string()[..6]);
+                last_err = Some(e);
+            }
+            Err(e) => {
+                let _ = sp.rollback().await;
+                return Err(e);
+            }
+        }
+    }
+    // Both attempts collided (astronomically unlikely with a random suffix): surface the
+    // last unique violation rather than inventing a bespoke error.
+    Err(last_err.expect("retry loop always records the first attempt's error"))
+}
+
 /// `POST /rpc/orgs/create` — self-service org creation for a TENANT-LESS caller (no capability
 /// gate). One transaction: create the tenant, make the caller its `owner`, seed the fail-closed
 /// budget org-root, bump claims_version. Rejects a caller who already has a tenant.
@@ -1088,39 +1141,14 @@ pub async fn orgs_create(
         }
     };
 
-    let base = slugify(name);
-    let mut slug = base.clone();
-    let mut tenant_id: Option<Uuid> = None;
-    for attempt in 0..2 {
-        let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
-            "insert into core.tenants (name, slug, status, modified_by) \
-             values ($1, $2, 'trial', $3) returning id",
-        )
-        .bind(name)
-        .bind(&slug)
-        .bind(actor.to_string())
-        .fetch_one(&mut *tx)
-        .await;
-        match res {
-            Ok(id) => {
-                tenant_id = Some(id);
-                break;
-            }
-            Err(e)
-                if attempt == 0
-                    && e.as_database_error().is_some_and(|d| d.is_unique_violation()) =>
-            {
-                slug = format!("{base}-{}", &Uuid::new_v4().to_string()[..6]);
-            }
-            Err(e) => {
-                tracing::error!("orgs_create: insert tenant: {e}");
-                return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
-            }
+    // Slug-collision retry via a savepoint per attempt (see `insert_tenant_dedup_slug`),
+    // on the SAME outer tx as the seeding below.
+    let tenant = match insert_tenant_dedup_slug(&mut tx, name, &actor.to_string()).await {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!("orgs_create: insert tenant: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
         }
-    }
-    let tenant = match tenant_id {
-        Some(t) => t,
-        None => return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response(),
     };
 
     let steps: Result<(), sqlx::Error> = async {
@@ -1841,5 +1869,96 @@ mod tests {
 
         // cleanup: dropping the tenant cascades to its roles + grants.
         sqlx::query("delete from core.tenants where id=$1").bind(tenant).execute(&pool).await.unwrap();
+    }
+
+    /// `orgs_create`'s DB contract end-to-end: the seeding transaction and — the regression
+    /// lock — the slug-collision path. Exercises the REAL `super::insert_tenant_dedup_slug`
+    /// (the fixed savepoint-per-attempt retry) so a revert of the fix fails this test.
+    /// Asserts: (a) a name whose slug already exists gets a DISTINCT suffixed slug (not a 500);
+    /// (b) the outer tx stays usable so the caller becomes owner, the fail-closed budget org-root
+    /// is seeded, and claims_version is bumped; (c) the already-has-tenant guard would now trip.
+    /// Plus a negative control proving the un-savepointed retry poisons the tx with 25P02 — the
+    /// exact bug the savepoint fixes. HTTP-status assertions (401/400/409/200) via the axum
+    /// extractors are disproportionate to harness and are deferred to the Task 8 manual verify.
+    #[tokio::test]
+    #[ignore = "requires local Supabase (55322) with the M1 org-onboarding schema"]
+    async fn orgs_create_seeds_and_dedups_slug() {
+        let pool = pool().await;
+        let actor = Uuid::new_v4();
+        let name = "Acme, Inc.";
+        assert_eq!(super::slugify(name), "acme-inc"); // base slug under test
+
+        // Caller profile (FK target for profile_tenants + the claims_version bump).
+        sqlx::query("insert into core.profiles (id) values ($1)")
+            .bind(actor).execute(&pool).await.unwrap();
+        // A pre-existing org already owns the 'acme-inc' slug → forces a collision.
+        let pre = Uuid::new_v4();
+        sqlx::query("insert into core.tenants (id,name,slug,status,modified_by) values ($1,$2,'acme-inc','trial','test')")
+            .bind(pre).bind(name).execute(&pool).await.unwrap();
+        let owner_role: Uuid = sqlx::query_scalar(
+            "select id from core.roles where tenant_id is null and key='owner'")
+            .fetch_one(&pool).await.unwrap();
+
+        // --- The handler's seeding transaction (code under test) ---
+        let mut tx = pool.begin().await.unwrap();
+        // (regression) collision must be deduped via savepoint, NOT surfaced as an error.
+        let tenant = super::insert_tenant_dedup_slug(&mut tx, name, &actor.to_string()).await
+            .expect("slug collision must dedup, not error (savepoint must un-poison the tx)");
+        // The rest of the seeding must still succeed on the SAME (un-poisoned) outer tx.
+        sqlx::query("insert into core.profile_tenants (profile_id,tenant_id,assigned_by) values ($1,$2,'self_create')")
+            .bind(actor).bind(tenant).execute(&mut *tx).await.unwrap();
+        sqlx::query("insert into core.profile_roles (tenant_id,profile_id,role_id,assigned_by) values ($1,$2,$3,'self_create')")
+            .bind(tenant).bind(actor).bind(owner_role).execute(&mut *tx).await.unwrap();
+        sqlx::query("insert into public.budget_nodes (tenant_id,kind,name,cap_amount,enforcement,modified_by) values ($1,'org','Organization',null,'hard',$2)")
+            .bind(tenant).bind(actor.to_string()).execute(&mut *tx).await.unwrap();
+        sqlx::query("update core.profiles set claims_version = claims_version + 1 where id=$1")
+            .bind(actor).execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+
+        // (a) the new org got a distinct, base-preserving suffixed slug — not 'acme-inc'.
+        let slug: String = sqlx::query_scalar("select slug from core.tenants where id=$1")
+            .bind(tenant).fetch_one(&pool).await.unwrap();
+        assert_ne!(slug, "acme-inc", "collision must fall back to a suffixed slug");
+        assert!(slug.starts_with("acme-inc-"), "suffixed slug must keep the base; got {slug}");
+        // (b) caller is owner; fail-closed budget org-root exists; claims_version bumped 0→1.
+        let is_owner: bool = sqlx::query_scalar(
+            "select exists(select 1 from core.profile_roles where tenant_id=$1 and profile_id=$2 and role_id=$3)")
+            .bind(tenant).bind(actor).bind(owner_role).fetch_one(&pool).await.unwrap();
+        assert!(is_owner, "caller must hold the owner role");
+        let root_ok: bool = sqlx::query_scalar(
+            "select exists(select 1 from public.budget_nodes where tenant_id=$1 and kind='org' and cap_amount is null and enforcement='hard')")
+            .bind(tenant).fetch_one(&pool).await.unwrap();
+        assert!(root_ok, "fail-closed budget org-root must be seeded");
+        let cv: i64 = sqlx::query_scalar("select claims_version from core.profiles where id=$1")
+            .bind(actor).fetch_one(&pool).await.unwrap();
+        assert_eq!(cv, 1, "claims_version must be bumped");
+        // (c) the already-has-tenant guard (the 409 condition) now trips.
+        let has_tenant: bool = sqlx::query_scalar(
+            "select exists(select 1 from core.profile_tenants where profile_id=$1)")
+            .bind(actor).fetch_one(&pool).await.unwrap();
+        assert!(has_tenant, "caller now belongs to an org (a re-create would 409)");
+
+        // --- Negative control: WITHOUT a savepoint, the collision poisons the whole tx ---
+        let mut bad = pool.begin().await.unwrap();
+        let dup = sqlx::query("insert into core.tenants (name,slug,status,modified_by) values ('x','acme-inc','trial','t')")
+            .execute(&mut *bad).await;
+        assert!(dup.is_err(), "duplicate slug must violate the unique constraint");
+        // The tx is now aborted: the next statement fails with 25P02 (in_failed_sql_transaction),
+        // NOT a unique_violation — which is precisely why the naive same-tx retry 500'd.
+        let poisoned = sqlx::query("insert into core.tenants (name,slug,status,modified_by) values ('y','acme-inc-xyz','trial','t')")
+            .execute(&mut *bad).await;
+        let sqlstate = poisoned.as_ref().err()
+            .and_then(|e| e.as_database_error())
+            .and_then(|d| d.code())
+            .map(|c| c.to_string());
+        assert_eq!(sqlstate.as_deref(), Some("25P02"),
+            "an aborted tx poisons the retry — the bug the savepoint fixes");
+        let _ = bad.rollback().await;
+
+        // cleanup: delete the profile first (cascades memberships + role grants — profile_tenants
+        // FKs tenants ON DELETE RESTRICT), then the tenants (cascades budget_nodes).
+        sqlx::query("delete from core.profiles where id=$1").bind(actor).execute(&pool).await.unwrap();
+        sqlx::query("delete from core.tenants where id = any($1)")
+            .bind(vec![tenant, pre]).execute(&pool).await.unwrap();
     }
 }

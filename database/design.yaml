@@ -29,6 +29,9 @@ import:
     # no manual loader is needed. seed_rework seeds RBAC + budget data that isn't yet expressed
     # as staging import files (TODO: migrate to import files + procs, then drop this too).
     - import/seed_rework.sql
+    # M1: import_role_permissions() only ADDS (on conflict do nothing) — this deletes
+    # role.manage/apikey.manage from any admin default row provisioned before the M1 reservation.
+    - import/rework_admin_grants.sql
 dbml:
   exclude:
     schemas:

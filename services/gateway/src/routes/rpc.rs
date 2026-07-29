@@ -27,6 +27,40 @@ use crate::{
     state::SharedState,
 };
 
+/// URL-safe slug from a display name: lowercase, non-alphanumerics → single '-', trimmed.
+/// Empty input (or all-punctuation) → "org".
+fn slugify(name: &str) -> String {
+    let mut s = String::new();
+    let mut prev_dash = false;
+    for ch in name.trim().to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            s.push(ch);
+            prev_dash = false;
+        } else if !prev_dash && !s.is_empty() {
+            s.push('-');
+            prev_dash = true;
+        }
+    }
+    let s = s.trim_end_matches('-').to_string();
+    if s.is_empty() {
+        "org".to_string()
+    } else {
+        s
+    }
+}
+
+#[cfg(test)]
+mod slug_tests {
+    use super::slugify;
+    #[test]
+    fn slugifies() {
+        assert_eq!(slugify("Acme, Inc."), "acme-inc");
+        assert_eq!(slugify("  Big   Corp  "), "big-corp");
+        assert_eq!(slugify("!!!"), "org");
+        assert_eq!(slugify(""), "org");
+    }
+}
+
 /// Resolve capabilities + run the freshness gate, or return the mapped error
 /// response. Shared preamble for every privileged handler.
 async fn authorize(
@@ -998,6 +1032,268 @@ pub async fn spaces_create(
     }
     audit(&state, tenant, actor, "space.created", "space", Some(id)).await;
     (StatusCode::OK, Json(json!({ "id": id }))).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct CreateOrg {
+    pub name: String,
+}
+
+/// `POST /rpc/orgs/create` — self-service org creation for a TENANT-LESS caller (no capability
+/// gate). One transaction: create the tenant, make the caller its `owner`, seed the fail-closed
+/// budget org-root, bump claims_version. Rejects a caller who already has a tenant.
+pub async fn orgs_create(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<CreateOrg>,
+) -> Response {
+    let actor = match Uuid::parse_str(&claims.sub) {
+        Ok(a) => a,
+        Err(_) => return (StatusCode::UNAUTHORIZED, "bad subject").into_response(),
+    };
+    let name = body.name.trim();
+    if name.is_empty() {
+        return (StatusCode::BAD_REQUEST, "organization name is required").into_response();
+    }
+
+    let has_tenant: bool = sqlx::query_scalar(
+        "select exists(select 1 from core.profile_tenants where profile_id = $1)",
+    )
+    .bind(actor)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(true); // fail closed
+    if has_tenant {
+        return (StatusCode::CONFLICT, "you already belong to an organization").into_response();
+    }
+
+    let owner_role: Uuid = match sqlx::query_scalar(
+        "select id from core.roles where tenant_id is null and key = 'owner'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!("orgs_create: owner role lookup: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+        }
+    };
+
+    let mut tx = match state.pool.begin().await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("orgs_create: begin: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+        }
+    };
+
+    let base = slugify(name);
+    let mut slug = base.clone();
+    let mut tenant_id: Option<Uuid> = None;
+    for attempt in 0..2 {
+        let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
+            "insert into core.tenants (name, slug, status, modified_by) \
+             values ($1, $2, 'trial', $3) returning id",
+        )
+        .bind(name)
+        .bind(&slug)
+        .bind(actor.to_string())
+        .fetch_one(&mut *tx)
+        .await;
+        match res {
+            Ok(id) => {
+                tenant_id = Some(id);
+                break;
+            }
+            Err(e)
+                if attempt == 0
+                    && e.as_database_error().is_some_and(|d| d.is_unique_violation()) =>
+            {
+                slug = format!("{base}-{}", &Uuid::new_v4().to_string()[..6]);
+            }
+            Err(e) => {
+                tracing::error!("orgs_create: insert tenant: {e}");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+            }
+        }
+    }
+    let tenant = match tenant_id {
+        Some(t) => t,
+        None => return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response(),
+    };
+
+    let steps: Result<(), sqlx::Error> = async {
+        sqlx::query(
+            "insert into core.profile_tenants (profile_id, tenant_id, assigned_by) \
+             values ($1, $2, 'self_create')",
+        )
+        .bind(actor)
+        .bind(tenant)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "insert into core.profile_roles (tenant_id, profile_id, role_id, assigned_by) \
+             values ($1, $2, $3, 'self_create')",
+        )
+        .bind(tenant)
+        .bind(actor)
+        .bind(owner_role)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "insert into public.budget_nodes (tenant_id, kind, name, cap_amount, enforcement, modified_by) \
+             values ($1, 'org', 'Organization', null, 'hard', $2)",
+        )
+        .bind(tenant)
+        .bind(actor.to_string())
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("update core.profiles set claims_version = claims_version + 1 where id = $1")
+            .bind(actor)
+            .execute(&mut *tx)
+            .await?;
+        Ok(())
+    }
+    .await;
+    if let Err(e) = steps {
+        tracing::error!("orgs_create: seed tenant: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+    if let Err(e) = tx.commit().await {
+        tracing::error!("orgs_create: commit: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+
+    audit(&state, tenant, actor, "org.created", "tenant", Some(tenant)).await;
+    (StatusCode::OK, Json(json!({ "tenant_id": tenant }))).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct TransferOwnership {
+    pub profile_id: Uuid,
+}
+
+/// `POST /rpc/orgs/transfer-ownership` — OWNER-ONLY. Atomically demote the caller owner→admin
+/// and promote an active member→owner (demote-first for the one-owner trigger), bumping both
+/// claims_version.
+pub async fn orgs_transfer_ownership(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<TransferOwnership>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "tenant.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    let (owner_role, admin_role): (Uuid, Uuid) = match sqlx::query_as(
+        "select \
+           (select id from core.roles where tenant_id is null and key = 'owner'), \
+           (select id from core.roles where tenant_id is null and key = 'admin')",
+    )
+    .fetch_one(&state.pool)
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("transfer: role lookup: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+        }
+    };
+
+    let is_owner: bool = sqlx::query_scalar(
+        "select exists(select 1 from core.profile_roles \
+           where tenant_id = $1 and profile_id = $2 and role_id = $3)",
+    )
+    .bind(tenant)
+    .bind(actor)
+    .bind(owner_role)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(false);
+    if !is_owner {
+        return (StatusCode::FORBIDDEN, "only the owner can transfer ownership").into_response();
+    }
+    if body.profile_id == actor {
+        return (StatusCode::BAD_REQUEST, "you are already the owner").into_response();
+    }
+    let target_member: bool = sqlx::query_scalar(
+        "select exists(select 1 from core.profile_tenants \
+           where profile_id = $1 and tenant_id = $2 and status = 'active')",
+    )
+    .bind(body.profile_id)
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(false);
+    if !target_member {
+        return (StatusCode::NOT_FOUND, "target is not a member of this organization")
+            .into_response();
+    }
+
+    let mut tx = match state.pool.begin().await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("transfer: begin: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+        }
+    };
+    let swap: Result<(), sqlx::Error> = async {
+        sqlx::query(
+            "delete from core.profile_roles where tenant_id=$1 and profile_id=$2 and role_id=$3",
+        )
+        .bind(tenant)
+        .bind(actor)
+        .bind(owner_role)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "insert into core.profile_roles (tenant_id, profile_id, role_id, assigned_by) \
+             values ($1,$2,$3,'transfer') on conflict do nothing",
+        )
+        .bind(tenant)
+        .bind(actor)
+        .bind(admin_role)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "insert into core.profile_roles (tenant_id, profile_id, role_id, assigned_by) \
+             values ($1,$2,$3,'transfer') on conflict do nothing",
+        )
+        .bind(tenant)
+        .bind(body.profile_id)
+        .bind(owner_role)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "update core.profiles set claims_version = claims_version + 1 where id = any($1)",
+        )
+        .bind(vec![actor, body.profile_id])
+        .execute(&mut *tx)
+        .await?;
+        Ok(())
+    }
+    .await;
+    if let Err(e) = swap {
+        tracing::error!("transfer: swap: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+    if let Err(e) = tx.commit().await {
+        tracing::error!("transfer: commit: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+
+    audit(
+        &state,
+        tenant,
+        actor,
+        "org.ownership.transferred",
+        "profile",
+        Some(body.profile_id),
+    )
+    .await;
+    (StatusCode::OK, Json(json!({ "owner": body.profile_id }))).into_response()
 }
 
 /// Actor-bound audit helper (matches the RW8 with-check: actor_id = auth.uid()).

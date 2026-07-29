@@ -10,6 +10,9 @@
 	let roles = $state([])
 	/** @type {import('$lib/api').Capability[]} */
 	let capabilities = $state([])
+	/** the caller's own identity, for gating owner-only controls (e.g. transfer ownership) */
+	/** @type {import('$lib/api').WhoAmI | null} */
+	let me = $state(null)
 	let error = $state('')
 	let loading = $state(true)
 	let busy = $state('')
@@ -20,6 +23,7 @@
 			members = o.members
 			roles = o.roles
 			capabilities = o.capabilities
+			me = await api.whoami()
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e)
 		} finally {
@@ -67,8 +71,41 @@
 		}
 	}
 
+	/**
+	 * Transfer ownership to another member (owner-only). Bumps both users' claims_version;
+	 * since this demotes YOU, refresh the session and reload so the shell reflects the new caps.
+	 * @param {string} profileId
+	 */
+	async function transferOwnership(profileId) {
+		if (!profileId || busy) return
+		if (
+			!confirm(
+				'Transfer ownership? You will become an admin and can no longer manage roles, API keys, or org settings.'
+			)
+		)
+			return
+		busy = profileId
+		error = ''
+		try {
+			await api.transferOwnership(profileId)
+			await api.refreshSession()
+			window.location.assign('/organization')
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e)
+		} finally {
+			busy = ''
+		}
+	}
+
 	/** role key → id, for mapping a member's role chips (which carry keys) to unassign. */
 	const roleIdByKey = $derived(new Map(roles.map((r) => [r.key, r.id])))
+
+	// api.whoami().role is the raw Postgres JWT role claim ("authenticated"/"apikey"/"service")
+	// and NOT the app role — owner/admin/member live in profile_roles and are only exposed via
+	// each member's `roles` keys (same data the chips render from). So the caller's own role is
+	// looked up the same way as anyone else's: find their row in `members` by profile id.
+	const myRoles = $derived(members.find((m) => m.id === me?.sub)?.roles ?? [])
+	const isOwner = $derived(myRoles.includes('owner'))
 
 	/** roles a member does NOT already hold (candidates to assign) */
 	/** @param {import('$lib/api').Member} m */
@@ -204,6 +241,16 @@
 											<option value={r.id}>{r.name}</option>
 										{/each}
 									</select>
+								{/if}
+								{#if isOwner && m.id !== me?.sub && !m.roles.includes('owner')}
+									<button
+										type="button"
+										onclick={() => transferOwnership(m.id)}
+										disabled={busy === m.id}
+										class="rounded-md border border-paper-edge px-2 py-1 text-xs font-medium text-ink-mute hover:text-ink disabled:opacity-40"
+									>
+										Make owner
+									</button>
 								{/if}
 							</div>
 						</div>

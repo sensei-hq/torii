@@ -1,7 +1,9 @@
 # Seiki UI fidelity audit — app vs mockup
 
-> **Status:** in progress (living doc). Method + design-tokens + shell measured; 9 per-screen
-> catalogs pending. Fixes deferred until the catalog is complete (per the agreed plan).
+> **Status:** in progress (living doc). ✅ **Global foundation fixed** (per "fix foundation first"):
+> type scale fully on-grid, `--paper-edge` corrected, shell rail/nav aligned — each committed with a
+> regression guard. ⬜ Remaining: `--accent-soft` alpha token (deferred), then the 9 per-screen
+> catalogs (where half-step spacing + dimension brackets get snapped with per-screen re-measurement).
 
 ## Method (per `sensei/docs/spec/dojo-screens/SCREEN-BUILD-RUNBOOK.md`)
 **Verify by MEASUREMENT, not by eye** — the diffs that matter (13 vs 14px, weight 400 vs 500,
@@ -25,14 +27,16 @@ The scale comes from `@rokkit/unocss` `presetRokkit` (`packages/ui/uno.config.js
 — a named type scale (`text-xs`…`text-4xl`), a **4px spacing grid** (`p-*`/`gap-*` = N×4px), and radii
 stops. But the app **bypasses it with arbitrary bracket values — 83 occurrences in `apps/admin/src`** —
 which is the root of the "random inconsistent numbers":
-- ✅ **DONE (`6b76d52`): `text-[11px]` × 79 (63 admin + 16 ui) → `text-xs`.** Confirmed scale:
-  `text-xs`=12px, `text-sm`=14px. So eyebrows/meta snapped 11→12px (on-scale, per grid-over-pixel).
-- Remaining off-grid sizes: `text-[10px]`×5, `text-[13px]`×2 → nearest stop; `text-[28px]`×1 (a
-  heading) → a scale stop / `zs-h` role.
-- **~35 half-step spacings off the 4px grid** — `py-1.5`×13, `px-2.5`×7, `py-2.5`×4, `p-0.5`×3,
-  `gap-1.5`×3, `py-0.5`, `gap-0.5`, `gap-2.5` (all ±2px increments).
-- Arbitrary dimensions — `w-[18px]`/`h-[18px]` (icons → a size token), `w-[400px]`/`w-[460px]`/
-  `w-[1100px]` (layout max-widths).
+- ✅ **TYPE SCALE FULLY ON-GRID** (`6b76d52` + `8a9c638`). Confirmed live scale: `text-xs`=12 /
+  `text-sm`=14 / `text-base`=16 / `text-lg`=18 / `text-xl`=20 / `text-2xl`=24 / `text-3xl`=30
+  (no `2xs`/`md`/`4xl`). Snapped: `text-[11px]`×79→`text-xs`; then `[9px]`/`[10px]`→`text-xs`
+  (nothing below 12), `[13px]`→`text-sm`, `[17px]`→`text-lg`, `[28px]`→`text-3xl`. **0 off-grid
+  text sizes remain**, locked by `apps/admin/src/lib/grid-consistency.spec.ts`.
+- ⬜ **~35 half-step spacings** (`py-1.5`×16, `mt-0.5`×11, `px-2.5`×10, `py-2.5`×5, `p-1.5`×5,
+  `mb-1.5`×5 …) → 4px grid. **Deferred to the per-screen pass** — each is a ±2px VISUAL change that
+  needs re-measurement in context; a blind global sweep would shift layouts.
+- ⬜ **Arbitrary dimensions** — `w-[18px]`/`h-[18px]` (icons → size token), `h-/w-[22px]` (avatars),
+  `h-[42px]` (chrome bar), `w-[400/460/1100px]` (layout max-widths). Per-screen pass.
 
 **Fix (foundation — do BEFORE per-screen polish, else fixes just add more off-grid numbers):**
 1. Confirm presetRokkit's stops (fontSize + spacing + radii) = the single scale everything snaps to.
@@ -50,35 +54,32 @@ The Zen-Sumi system **is** ported — the app exposes every named token (`paper`
 `primary` + `soft`/`mute`/`edge`/`faint` variants) and the Fraunces / Inter / JetBrains fonts, and
 the **dark palette flips correctly** (`paper`→`0.170`, `ink`→`0.940`, `on-primary`→dark). Drifts:
 
-| Token | Mockup | App | Note |
+| Token | Mockup | App | Status |
 |---|---|---|---|
-| `--paper-edge` (light) | `oklch(0.880 0.015 85)` | `oklch(0.85 0.01 70)` | app edge is darker, lower-chroma, cooler hue (70 vs 85) — every hairline border is off |
-| `--accent-soft` (dark) | alpha accent `oklch(… / 0.12)` (runbook: alpha in **both** modes) | solid tint `oklch(0.940 0.040 35)` | app uses a solid light tint, not the mockup's translucent accent |
+| `--paper-edge` (light) | `oklch(0.880 0.015 85)` | ✅ **FIXED** (`ca912d8`): `kami.400`→`0.880 0.015 85` | was `0.85 0.01 70` (darker/cooler); verified baked into the build; dark = `sumi.400` unchanged. Guarded by `tokens.spec.svelte.js`. |
+| `--accent-soft` | alpha `oklch(0.580 0.150 35 / 0.12)` (both modes) | ⬜ **DEFERRED**: solid `shu.100` (`0.940 0.040 35`) | Mockup = accent @ 12% alpha; app derives a solid tint. NOT a stop remap — needs an explicit `overrides['accent-soft']` alpha value (verify presetRokkit's alpha-override syntax first). Low blast-radius (avatar chips + signin diagram). |
 
-*(Both are token-config fixes — global, do once, re-verify globally. Confirm the mockup values are
-the intended spec before changing.)*
+## Shell — rail + nav (`packages/ui/src/lib/AppShell.svelte`) — RE-MEASURED
+> The admin shell is **`AppShell.svelte`, NOT `NavRail.svelte`** (NavRail is unused by admin). A
+> live re-measure of the mockup's **inactive** nav items corrected the first-pass table: inactive =
+> `ink-soft` (0.38) / weight 400 / 13px — identical to the app. The earlier "ink / 500 / 0.22" was
+> the **active** item. So font-size / weight / inactive-color are NOT drifts.
 
-## Shell — rail + nav (measured, light)
-| Element · property | Mockup (spec) | App | Drift |
+| Element · property | Mockup | App | Verdict |
 |---|---|---|---|
-| Rail background | `oklch(0.975 0.008 85)` (**paper**) | `oklch(0.955 0.01 85)` (**paper-soft**) | rail a shade greyer |
-| Rail width | 248px | 240px | −8px |
-| Rail border-right | `oklch(0.88 0.015 85)` | `oklch(0.85 0.01 70)` | the `paper-edge` drift above |
-| Nav item font-size | 13px | 14px | +1px |
-| Nav item font-weight | 500 | 400 | lighter |
-| Nav item inactive color | `ink` (0.22) | `ink-soft` (0.38) | app greyer |
-| Nav item padding | 7px 12px | 6px 8px | tighter |
-| Nav item radius | 6px | 6px | ✅ |
-| Active pill bg / color / radius | `oklch(0.92 0.012 85)` / ink / 6px | **same** | ✅ |
+| Rail background | `paper` (0.975) | was `paper-soft` (0.955) | ✅ FIXED (`378f2fa`) → `bg-paper` |
+| Nav item padding | `7px 12px` (off-grid) | was `px-2 py-1.5` (8/6) | ✅ FIXED (`378f2fa`) → `px-3 py-2` (grid-snap) |
+| Nav item font-size | 13px (off-grid) | `text-sm` (14) | ✅ keep `text-sm` — grid stop over pixel-exact |
+| Nav weight / inactive color | 400 / ink-soft | 400 / ink-soft | ✅ already matches (was an active-item artifact) |
+| Active pill | `bg-paper-mute` (0.92) / ink / 6px | same | ✅ matches |
+| Rail width | 248px (off-grid) | 240 (`15rem`) | ✅ keep 240 — clean grid stop |
+| Rail border | `paper-edge` | fixed via the token above | ✅ |
 
-**Shell fixes (app `packages/ui` `NavRail` + rail container) — expressed on the grid:** nav items →
-the ~13px scale stop (`text-sm`, confirm the stop) + `font-medium` + `text-ink`, padding `px-3 py-2`
-(grid; snapped from the mockup's off-grid `7px`); rail bg `paper` (not `paper-soft`); rail width to a
-grid value (`w-60`=240 or `w-62`; the mockup's 248 is off-grid → pick the nearest stop); border via
-the corrected `paper-edge` token. No bracket values.
+Both fixes guarded by the extended `AppShell.spec.svelte.js`.
 
 **Pending in the shell:** the Chrome **header** (mockup Chrome isn't a `<header>` el — needs a
-targeted selector; app header is the 42px `bg-paper` bar with traffic-light dots + centered title).
+targeted selector; app header is the 42px `bg-paper` bar with traffic-light dots + centered title);
+plus the shell's own half-step spacings (`gap-2.5`, org-header `px-2.5 py-2`, `mb-1.5` labels) → per-screen pass.
 
 ## Per-screen catalog (pending)
 Each row: drive both to the screen (same mode), measure page-header (eyebrow/title/sub font+color),

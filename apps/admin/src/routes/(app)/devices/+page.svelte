@@ -87,7 +87,7 @@
 									<Chip tone={revoked ? 'danger' : 'success'}>{d.status}</Chip>
 									{#if d.owner}<Chip tone="mute">{d.owner}</Chip>{/if}
 								</div>
-								<div class="font-mono text-[11px] text-ink-mute">
+								<div class="font-mono text-xs text-ink-mute">
 									{d.platform ?? '—'}{d.app_version ? ` · v${d.app_version}` : ''}{d.config_version
 										? ` · cfg ${d.config_version}`
 										: ''} · seen {ago(d.last_seen_at)}
@@ -117,7 +117,7 @@
 				</div>
 				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
 					<span class="i-solar-shield-keyhole-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
-					<span class="text-[11px] leading-relaxed text-ink-mute">
+					<span class="text-xs leading-relaxed text-ink-mute">
 						Enforced server-side — the gateway checks device status on every request carrying an
 						<code class="font-mono">X-Torii-Device</code> header. Revocation takes effect on the very next call.
 					</span>

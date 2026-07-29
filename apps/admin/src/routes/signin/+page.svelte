@@ -102,11 +102,11 @@
 				<BrandMark size={32} />
 				<span class="font-heading text-[28px] tracking-tight text-ink">Seiki</span>
 				<span
-					class="rounded-full border border-paper-edge px-2 py-0.5 font-mono text-[11px] text-ink-mute"
+					class="rounded-full border border-paper-edge px-2 py-0.5 font-mono text-xs text-ink-mute"
 					>v{version}</span
 				>
 			</span>
-			<div class="text-[11px] font-medium uppercase tracking-[0.14em] text-accent">
+			<div class="text-xs font-medium uppercase tracking-[0.14em] text-accent">
 				Admin portal · define · manage · control · inspect
 			</div>
 		</header>
@@ -233,7 +233,7 @@
 							<form onsubmit={onFormSubmit} class="space-y-3">
 								<div>
 									<span
-										class="mb-1.5 block text-[11px] font-medium uppercase tracking-wider text-ink-mute"
+										class="mb-1.5 block text-xs font-medium uppercase tracking-wider text-ink-mute"
 										>Work email</span
 									>
 									<input
@@ -249,7 +249,7 @@
 								{#if showPassword}
 									<div>
 										<span
-											class="mb-1.5 block text-[11px] font-medium uppercase tracking-wider text-ink-mute"
+											class="mb-1.5 block text-xs font-medium uppercase tracking-wider text-ink-mute"
 											>Password</span
 										>
 										<input
@@ -325,7 +325,7 @@
 					</div>
 
 					<p
-						class="mt-4 flex items-center justify-center gap-1.5 text-center text-[11px] text-ink-faint"
+						class="mt-4 flex items-center justify-center gap-1.5 text-center text-xs text-ink-faint"
 					>
 						<span class="i-solar-shield-check-bold-duotone h-3 w-3"></span>
 						Passwordless by default · new work-email users are set up automatically

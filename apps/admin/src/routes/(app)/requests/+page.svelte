@@ -77,7 +77,7 @@
 					{#snippet right()}
 						<div class="flex items-center gap-3">
 							<div
-								class="inline-flex items-center gap-0.5 rounded-full border border-paper-edge p-0.5 text-[11px]"
+								class="inline-flex items-center gap-0.5 rounded-full border border-paper-edge p-0.5 text-xs"
 							>
 								{#each ['all', 'cloud', 'local'] as p (p)}
 									<button
@@ -88,7 +88,7 @@
 									>
 								{/each}
 							</div>
-							<span class="font-mono text-[11px] text-ink-mute"
+							<span class="font-mono text-xs text-ink-mute"
 								>{filteredRequests.length}/{requests.length}</span
 							>
 						</div>
@@ -97,7 +97,7 @@
 				<div class="overflow-auto">
 					<table class="w-full text-xs">
 						<thead
-							class="text-[11px] uppercase tracking-wider text-ink-mute [&_th]:px-4 [&_th]:py-2 [&_th]:text-left [&_th]:font-medium"
+							class="text-xs uppercase tracking-wider text-ink-mute [&_th]:px-4 [&_th]:py-2 [&_th]:text-left [&_th]:font-medium"
 						>
 							<tr class="border-b border-paper-edge">
 								<th>Time</th>
@@ -148,7 +148,7 @@
 				<div class="overflow-auto">
 					<table class="w-full text-xs">
 						<thead
-							class="text-[11px] uppercase tracking-wider text-ink-mute [&_th]:px-4 [&_th]:py-2 [&_th]:text-left [&_th]:font-medium"
+							class="text-xs uppercase tracking-wider text-ink-mute [&_th]:px-4 [&_th]:py-2 [&_th]:text-left [&_th]:font-medium"
 						>
 							<tr class="border-b border-paper-edge">
 								<th>Time</th>

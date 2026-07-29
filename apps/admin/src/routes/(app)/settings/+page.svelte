@@ -119,7 +119,7 @@
 			{/each}
 		</Card>
 
-		<p class="px-1 font-mono text-[11px] text-ink-faint">
+		<p class="px-1 font-mono text-xs text-ink-faint">
 			gateway · healthy · changes persist to the tenant workspace and are audited.
 		</p>
 	</div>

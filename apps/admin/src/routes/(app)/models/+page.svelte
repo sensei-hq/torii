@@ -71,15 +71,15 @@
 		<div class="space-y-4 px-5 pb-6">
 			<div class="grid grid-cols-3 gap-4">
 				<Card pad>
-					<div class="text-[11px] font-semibold uppercase tracking-wider text-ink-mute">Models</div>
+					<div class="text-xs font-semibold uppercase tracking-wider text-ink-mute">Models</div>
 					<div class="font-heading text-2xl font-light text-ink">{models.length}</div>
 				</Card>
 				<Card pad>
-					<div class="text-[11px] font-semibold uppercase tracking-wider text-ink-mute">Reachable</div>
+					<div class="text-xs font-semibold uppercase tracking-wider text-ink-mute">Reachable</div>
 					<div class="font-heading text-2xl font-light text-ink">{reachableCount}</div>
 				</Card>
 				<Card pad>
-					<div class="text-[11px] font-semibold uppercase tracking-wider text-ink-mute">Providers</div>
+					<div class="text-xs font-semibold uppercase tracking-wider text-ink-mute">Providers</div>
 					<div class="font-heading text-2xl font-light text-ink">{byProvider.length}</div>
 				</Card>
 			</div>
@@ -90,7 +90,7 @@
 					<div class="overflow-auto">
 						<table class="w-full text-xs">
 							<thead
-								class="text-[11px] uppercase tracking-wider text-ink-mute [&_th]:px-4 [&_th]:py-2 [&_th]:text-left [&_th]:font-medium"
+								class="text-xs uppercase tracking-wider text-ink-mute [&_th]:px-4 [&_th]:py-2 [&_th]:text-left [&_th]:font-medium"
 							>
 								<tr class="border-b border-paper-edge">
 									<th>Model</th>
@@ -120,7 +120,7 @@
 											<button
 												onclick={() => toggle(m)}
 												disabled={busy === m.full_name}
-												class="w-20 rounded-md border border-paper-edge px-2 py-1 text-[11px] font-medium text-ink-soft hover:bg-paper-mute disabled:opacity-40"
+												class="w-20 rounded-md border border-paper-edge px-2 py-1 text-xs font-medium text-ink-soft hover:bg-paper-mute disabled:opacity-40"
 												>{m.enabled ? 'Disable' : 'Enable'}</button
 											>
 										</td>

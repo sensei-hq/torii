@@ -85,7 +85,7 @@
 		</div>
 		<div class="flex items-center gap-1.5">
 			<span
-				class="inline-flex items-center gap-1.5 rounded-full border border-paper-edge px-2.5 py-1 text-[11px] text-ink-mute"
+				class="inline-flex items-center gap-1.5 rounded-full border border-paper-edge px-2.5 py-1 text-xs text-ink-mute"
 			>
 				<span class="i-solar-cpu-bold-duotone h-3 w-3"></span>Desktop app
 			</span>
@@ -110,7 +110,7 @@
 					class="grid h-[22px] w-[22px] place-items-center rounded-full bg-accent-soft text-[9px] font-semibold text-accent"
 					>{user.initial}</span
 				>
-				<span class="whitespace-nowrap text-[11px] text-ink-soft"
+				<span class="whitespace-nowrap text-xs text-ink-soft"
 				>{user.name}{user.role ? ` · ${user.role}` : ''}</span
 			>
 			</span>
@@ -146,7 +146,7 @@
 				>
 				<div class="min-w-0">
 					<div class="truncate text-sm font-semibold text-ink">{org.name}</div>
-					<div class="font-mono text-[11px] text-ink-mute">{org.sub}</div>
+					<div class="font-mono text-xs text-ink-mute">{org.sub}</div>
 				</div>
 			</div>
 
@@ -177,7 +177,7 @@
 								{#if it.live}
 									<span class="h-1.5 w-1.5 rounded-full bg-success"></span>
 								{:else if it.end}
-									<span class="font-mono text-[11px] text-ink-mute">{it.end}</span>
+									<span class="font-mono text-xs text-ink-mute">{it.end}</span>
 								{/if}
 							</a>
 						{/each}

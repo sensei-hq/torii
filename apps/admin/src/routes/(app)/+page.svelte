@@ -118,7 +118,7 @@
 								tone={budgetPct >= 90 ? 'danger' : budgetPct >= 70 ? 'accent' : 'ink'}
 								display={`${money(orgRoot.spent_amount)} / ${orgRoot.cap_amount == null ? '∞' : money(orgRoot.cap_amount)}`}
 							/>
-							<p class="mt-3 font-mono text-[11px] text-ink-mute">
+							<p class="mt-3 font-mono text-xs text-ink-mute">
 								{budgetPct}% of the org cap used across {nodes.length} budget node{nodes.length ===
 								1
 									? ''
@@ -142,7 +142,7 @@
 										<div class="flex-1">
 											<Meter value={m.calls} max={topModels[0].calls} tone="ink" />
 										</div>
-										<span class="w-10 text-right font-mono text-[11px] text-ink-mute"
+										<span class="w-10 text-right font-mono text-xs text-ink-mute"
 											>{m.calls}</span
 										>
 									</div>
@@ -163,10 +163,10 @@
 						<div
 							class="flex items-center gap-3 border-b border-paper-edge px-4 py-2.5 last:border-b-0"
 						>
-							<span class="w-12 font-mono text-[11px] text-ink-mute">{fmtTime(e.created_at)}</span>
+							<span class="w-12 font-mono text-xs text-ink-mute">{fmtTime(e.created_at)}</span>
 							<Chip>{e.action}</Chip>
 							<span class="flex-1 truncate text-sm text-ink-soft">{e.target_type ?? '—'}</span>
-							<span class="font-mono text-[11px] text-ink-mute"
+							<span class="font-mono text-xs text-ink-mute"
 								>{e.actor_id ? e.actor_id.slice(0, 8) : 'system'}</span
 							>
 						</div>

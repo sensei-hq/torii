@@ -103,7 +103,7 @@
 				>
 				<div class="min-w-0">
 					<div class="truncate text-sm font-semibold text-ink">{workspace.name}</div>
-					<div class="font-mono text-[11px] text-ink-mute">{workspace.sub}</div>
+					<div class="font-mono text-xs text-ink-mute">{workspace.sub}</div>
 				</div>
 			</div>
 

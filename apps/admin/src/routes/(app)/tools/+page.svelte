@@ -114,7 +114,7 @@
 									<Chip tone="mute">{s.transport}</Chip>
 									<Chip tone={s.scope === 'platform' ? 'accent' : 'mute'}>{s.scope}</Chip>
 								</div>
-								<div class="font-mono text-[11px] text-ink-mute">{s.name}</div>
+								<div class="font-mono text-xs text-ink-mute">{s.name}</div>
 							</div>
 							<button
 								role="switch"
@@ -145,7 +145,7 @@
 				</div>
 				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
 					<span class="i-solar-info-circle-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
-					<span class="text-[11px] leading-relaxed text-ink-mute">
+					<span class="text-xs leading-relaxed text-ink-mute">
 						<b>stdio</b> servers run inside the desktop app (on-device, no egress). <b>http/sse</b>
 						servers are shared and proxied by the gateway. (Register + refresh-tools are a fast-follow.)
 					</span>
@@ -160,12 +160,12 @@
 						<thead>
 							<tr class="border-b border-paper-edge">
 								<th
-									class="px-4 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-ink-mute"
+									class="px-4 py-2 text-left text-xs font-medium uppercase tracking-wider text-ink-mute"
 									>Tool</th
 								>
 								{#each roles as r (r.id)}
 									<th
-										class="px-2 py-2 text-center text-[11px] font-medium text-ink-soft"
+										class="px-2 py-2 text-center text-xs font-medium text-ink-soft"
 										title={r.name}>{r.key}</th
 									>
 								{/each}
@@ -208,7 +208,7 @@
 								{/each}
 								{#if grp.tools.length === 0}
 									<tr class="border-b border-paper-edge last:border-b-0">
-										<td colspan={roles.length + 1} class="px-4 py-1.5 text-[11px] text-ink-faint"
+										<td colspan={roles.length + 1} class="px-4 py-1.5 text-xs text-ink-faint"
 											>No tools discovered yet.</td
 										>
 									</tr>
@@ -219,7 +219,7 @@
 				</div>
 				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
 					<span class="i-solar-shield-keyhole-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
-					<span class="text-[11px] leading-relaxed text-ink-mute">
+					<span class="text-xs leading-relaxed text-ink-mute">
 						Default-deny — a role may call only the tools granted here (the role default). Per-space
 						tightening (a space can remove, never add) is a fast-follow. Enforced server-side.
 					</span>

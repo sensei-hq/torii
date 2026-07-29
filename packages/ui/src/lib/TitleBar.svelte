@@ -21,7 +21,7 @@
 	<button
 		type="button"
 		onclick={() => onsearch?.()}
-		class="inline-flex items-center gap-1.5 rounded-md border border-paper-edge px-2 py-1 text-[11px] text-ink-mute hover:bg-paper-mute"
+		class="inline-flex items-center gap-1.5 rounded-md border border-paper-edge px-2 py-1 text-xs text-ink-mute hover:bg-paper-mute"
 		aria-label="Search"
 	>
 		<span class="i-solar-magnifer-bold-duotone h-3.5 w-3.5" aria-hidden="true"></span>
@@ -38,7 +38,7 @@
 			class="grid h-[22px] w-[22px] place-items-center rounded-full bg-accent-soft text-[9px] font-semibold text-accent"
 			aria-hidden="true">{initial}</span
 		>
-		<span class="hidden whitespace-nowrap text-[11px] text-ink-soft sm:inline"
+		<span class="hidden whitespace-nowrap text-xs text-ink-soft sm:inline"
 			>{user?.name} · {user?.role}</span
 		>
 	</span>

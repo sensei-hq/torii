@@ -85,7 +85,7 @@
 								class:opacity-40={!s.is_active}
 							>
 								<span
-									class="grid h-6 w-6 flex-shrink-0 place-items-center rounded-full bg-paper-mute font-mono text-[11px] text-ink-mute"
+									class="grid h-6 w-6 flex-shrink-0 place-items-center rounded-full bg-paper-mute font-mono text-xs text-ink-mute"
 									>{s.sequence_order}</span
 								>
 								<span class="font-mono text-sm text-ink-soft">{s.router}</span>
@@ -95,7 +95,7 @@
 								<button
 									onclick={() => toggle(s)}
 									disabled={busy === s.id}
-									class="w-20 rounded-md border border-paper-edge px-2 py-1 text-[11px] font-medium text-ink-soft hover:bg-paper-mute disabled:opacity-40"
+									class="w-20 rounded-md border border-paper-edge px-2 py-1 text-xs font-medium text-ink-soft hover:bg-paper-mute disabled:opacity-40"
 									>{s.is_active ? 'Disable' : 'Enable'}</button
 								>
 							</div>

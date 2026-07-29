@@ -25,8 +25,10 @@ The scale comes from `@rokkit/unocss` `presetRokkit` (`packages/ui/uno.config.js
 — a named type scale (`text-xs`…`text-4xl`), a **4px spacing grid** (`p-*`/`gap-*` = N×4px), and radii
 stops. But the app **bypasses it with arbitrary bracket values — 83 occurrences in `apps/admin/src`** —
 which is the root of the "random inconsistent numbers":
-- **`text-[11px]` × 63** (+ `text-[10px]`×5, `text-[13px]`×2, `text-[28px]`×1) — hard-coded px instead
-  of a scale stop / named role (`text-xs`, `zs-eyebrow`, `zs-meta`).
+- ✅ **DONE (`6b76d52`): `text-[11px]` × 79 (63 admin + 16 ui) → `text-xs`.** Confirmed scale:
+  `text-xs`=12px, `text-sm`=14px. So eyebrows/meta snapped 11→12px (on-scale, per grid-over-pixel).
+- Remaining off-grid sizes: `text-[10px]`×5, `text-[13px]`×2 → nearest stop; `text-[28px]`×1 (a
+  heading) → a scale stop / `zs-h` role.
 - **~35 half-step spacings off the 4px grid** — `py-1.5`×13, `px-2.5`×7, `py-2.5`×4, `p-0.5`×3,
   `gap-1.5`×3, `py-0.5`, `gap-0.5`, `gap-2.5` (all ±2px increments).
 - Arbitrary dimensions — `w-[18px]`/`h-[18px]` (icons → a size token), `w-[400px]`/`w-[460px]`/

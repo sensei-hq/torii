@@ -270,6 +270,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/rbac/assign-role", post(routes::rpc::rbac_assign_role))
         .route("/rbac/unassign-role", post(routes::rpc::rbac_unassign_role))
         .route("/rbac/create-role", post(routes::rpc::rbac_create_role))
+        .route("/orgs/create", post(routes::rpc::orgs_create))
+        .route(
+            "/orgs/transfer-ownership",
+            post(routes::rpc::orgs_transfer_ownership),
+        )
         .route(
             "/governance/set-feature",
             post(routes::rpc::governance_set_feature),

@@ -10,7 +10,7 @@
 ## Bun workspaces: packages/* apps/*
 ## Cargo workspace: Cargo.toml at monorepo root → target/ at monorepo root
 
-.PHONY: install build test check lint e2e clean clean-cache clean-all help \
+.PHONY: install build test check lint e2e clean clean-cache clean-all help bump \
         gateway-build gateway-service gateway-restart gateway-stop gateway-logs gateway-status
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -104,6 +104,43 @@ gateway-logs: ## Tail the gateway log
 gateway-status: ## Gateway service state + health
 	-@launchctl print $(GW_DOMAIN)/$(GW_LABEL) 2>/dev/null | grep -E "state = |pid = " | head -2 || echo "service not installed"
 	-@curl -s --max-time 3 -o /dev/null -w "health: %{http_code}\n" http://127.0.0.1:8787/health || echo "health: down"
+
+# ── Version bump ──────────────────────────────────────────────────────────────
+# VERSION is the single source of truth. `make bump v=patch|minor|major|<X.Y.Z>`
+# updates VERSION + every JS package.json + every Rust crate Cargo.toml + the
+# Tauri conf in lockstep, refreshes Cargo.lock, then commits + tags. Push and the
+# develop→main merge (which trigger the Cloudflare + Fly deploys) stay manual.
+#   make bump v=patch   0.1.0 → 0.1.1     make bump v=minor   0.1.0 → 0.2.0
+#   make bump v=major   0.1.0 → 1.0.0     make bump v=0.5.0   explicit
+BUMP_JSON  := package.json apps/admin/package.json apps/desktop/package.json \
+              packages/core/package.json packages/ui/package.json \
+              apps/desktop/src-tauri/tauri.conf.json
+BUMP_CARGO := services/gateway/Cargo.toml apps/desktop/src-tauri/Cargo.toml
+
+bump: ## Bump VERSION + all package.json / Cargo.toml / tauri.conf in lockstep, commit + tag
+	@if [ -z "$(v)" ]; then echo "Usage: make bump v=patch|minor|major|<version>"; exit 1; fi
+	$(eval _v := $(shell \
+	  cur=$$(cat VERSION); \
+	  if [ "$(v)" = "patch" ]; then echo "$$cur" | awk -F. '{printf "%s.%s.%s", $$1, $$2, $$3+1}'; \
+	  elif [ "$(v)" = "minor" ]; then echo "$$cur" | awk -F. '{printf "%s.%s.0", $$1, $$2+1}'; \
+	  elif [ "$(v)" = "major" ]; then echo "$$cur" | awk -F. '{printf "%s.0.0", $$1+1}'; \
+	  else echo "$(v)"; fi))
+	@if git tag -l "v$(_v)" | grep -q .; then echo "Error: tag v$(_v) already exists (current $$(cat VERSION))."; exit 1; fi
+	@cur=$$(cat VERSION); \
+	  if [ "$$(printf '%s\n%s' "$$cur" "$(_v)" | sort -V | tail -1)" = "$$cur" ] && [ "$$cur" != "$(_v)" ]; then echo "Error: refusing to bump down ($$cur -> $(_v))"; exit 1; fi; \
+	  if [ "$$cur" = "$(_v)" ]; then echo "Error: $(_v) is already the current version"; exit 1; fi
+	@echo "Bumping $$(cat VERSION) -> $(_v)"
+	@echo "$(_v)" > VERSION
+	@for f in $(BUMP_JSON); do sed -i '' 's/"version": "[^"]*"/"version": "$(_v)"/' "$$f"; done
+	@for f in $(BUMP_CARGO); do sed -i '' "s/^version = \"[^\"]*\"/version = \"$(_v)\"/" "$$f"; done
+	@# Refresh Cargo.lock member versions via the deploy crate only — scoped to torii-gateway so a
+	@# pre-existing compile error elsewhere in the workspace (e.g. the desktop app) can't block a bump.
+	@cargo check -p torii-gateway --offline --quiet 2>/dev/null || cargo check -p torii-gateway --quiet
+	@git add VERSION $(BUMP_JSON) $(BUMP_CARGO)
+	-@git add Cargo.lock 2>/dev/null || true
+	@git commit -m "chore: bump to v$(_v)"
+	@git tag "v$(_v)"
+	@echo "Committed + tagged v$(_v). To release: git push origin HEAD && git push origin v$(_v), then merge develop->main (triggers the CF + Fly deploys)."
 
 # ── Clean / Disk management ───────────────────────────────────────────────────
 

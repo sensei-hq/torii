@@ -25,20 +25,24 @@ begin
 end $$;
 
 begin;
+  insert into core.tenants (id, name, slug, status, modified_by)
+    values ('bbbbbbbb-0000-0000-0000-000000000000', 'M1 Test Org', 'm1-test-org', 'trial', 't')
+    on conflict (id) do nothing;
   insert into core.profiles (id) values
     ('aaaaaaaa-0000-0000-0000-000000000001'),
     ('aaaaaaaa-0000-0000-0000-000000000002') on conflict do nothing;
   insert into core.profile_tenants (profile_id, tenant_id, assigned_by) values
-    ('aaaaaaaa-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000000','t')
-    on conflict do nothing;
+    ('aaaaaaaa-0000-0000-0000-000000000001', 'bbbbbbbb-0000-0000-0000-000000000000', 't'),
+    ('aaaaaaaa-0000-0000-0000-000000000002', 'bbbbbbbb-0000-0000-0000-000000000000', 't')
+    on conflict (profile_id) do nothing;
   do $$
   declare owner_id uuid := (select id from core.roles where tenant_id is null and key='owner');
   begin
     insert into core.profile_roles(tenant_id, profile_id, role_id, assigned_by)
-      values ('00000000-0000-0000-0000-000000000000','aaaaaaaa-0000-0000-0000-000000000001',owner_id,'t');
+      values ('bbbbbbbb-0000-0000-0000-000000000000','aaaaaaaa-0000-0000-0000-000000000001',owner_id,'t');
     begin
       insert into core.profile_roles(tenant_id, profile_id, role_id, assigned_by)
-        values ('00000000-0000-0000-0000-000000000000','aaaaaaaa-0000-0000-0000-000000000002',owner_id,'t');
+        values ('bbbbbbbb-0000-0000-0000-000000000000','aaaaaaaa-0000-0000-0000-000000000002',owner_id,'t');
       raise exception 'FAIL singularity: a tenant accepted a SECOND owner';
     exception when unique_violation then null; end;
   end $$;

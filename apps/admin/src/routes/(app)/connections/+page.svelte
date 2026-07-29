@@ -303,7 +303,7 @@
 									<div
 										class="flex items-center gap-2 border-t border-dashed border-paper-edge pt-2"
 									>
-										<span class="text-[10px] font-semibold uppercase tracking-wider text-ink-mute"
+										<span class="text-xs font-semibold uppercase tracking-wider text-ink-mute"
 											>OAuth</span
 										>
 										{#if p.oauth_connected}

@@ -100,7 +100,7 @@
 		>
 			<span class="flex items-center gap-3">
 				<BrandMark size={32} />
-				<span class="font-heading text-[28px] tracking-tight text-ink">Seiki</span>
+				<span class="font-heading text-3xl tracking-tight text-ink">Seiki</span>
 				<span
 					class="rounded-full border border-paper-edge px-2 py-0.5 font-mono text-xs text-ink-mute"
 					>v{version}</span
@@ -301,7 +301,7 @@
 
 							<div class="my-4 flex items-center gap-3">
 								<span class="h-px flex-1 bg-paper-edge"></span>
-								<span class="font-mono text-[10px] uppercase tracking-wider text-ink-mute">or</span>
+								<span class="font-mono text-xs uppercase tracking-wider text-ink-mute">or</span>
 								<span class="h-px flex-1 bg-paper-edge"></span>
 							</div>
 

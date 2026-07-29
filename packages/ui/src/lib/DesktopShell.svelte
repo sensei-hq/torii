@@ -90,7 +90,7 @@
 			<!-- brand -->
 			<div class="flex items-center gap-2.5 px-1.5">
 				<BrandMark size={22} />
-				<span class="font-heading text-[17px] tracking-tight text-ink">{brand}</span>
+				<span class="font-heading text-lg tracking-tight text-ink">{brand}</span>
 			</div>
 
 			<!-- active workspace -->
@@ -111,7 +111,7 @@
 			{#each NAV as group (group.label)}
 				<div class="mt-5">
 					<div
-						class="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint"
+						class="mb-1.5 px-2 text-xs font-semibold uppercase tracking-[0.14em] text-ink-faint"
 					>
 						{group.label}
 					</div>

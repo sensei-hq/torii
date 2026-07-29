@@ -107,7 +107,7 @@
 			<span class="mx-1 h-4 w-px bg-paper-edge"></span>
 			<span class="flex items-center gap-2" title={user.role}>
 				<span
-					class="grid h-[22px] w-[22px] place-items-center rounded-full bg-accent-soft text-[9px] font-semibold text-accent"
+					class="grid h-[22px] w-[22px] place-items-center rounded-full bg-accent-soft text-xs font-semibold text-accent"
 					>{user.initial}</span
 				>
 				<span class="whitespace-nowrap text-xs text-ink-soft"
@@ -133,7 +133,7 @@
 			<!-- brand -->
 			<div class="flex items-center gap-2.5 px-1.5">
 				<BrandMark size={22} />
-				<span class="font-heading text-[17px] tracking-tight text-ink">{brand}</span>
+				<span class="font-heading text-lg tracking-tight text-ink">{brand}</span>
 			</div>
 
 			<!-- org header -->
@@ -154,7 +154,7 @@
 			{#each NAV as group (group.label)}
 				<div class="mt-5">
 					<div
-						class="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint"
+						class="mb-1.5 px-2 text-xs font-semibold uppercase tracking-[0.14em] text-ink-faint"
 					>
 						{group.label}
 					</div>
@@ -185,7 +185,7 @@
 				</div>
 			{/each}
 			<span class="flex-1"></span>
-			<div class="px-2 font-mono text-[10px] text-ink-faint">gateway · healthy · {app}</div>
+			<div class="px-2 font-mono text-xs text-ink-faint">gateway · healthy · {app}</div>
 		</nav>
 
 		<!-- main content -->

@@ -4,7 +4,7 @@
 	let { eyebrow = '', title = '', sub = '', actions } = $props()
 </script>
 
-<div class="flex items-start justify-between gap-4 px-5 pb-3 pt-5">
+<div class="flex items-start justify-between gap-4 px-6 pb-3 pt-6 lg:px-12">
 	<div class="min-w-0">
 		{#if eyebrow}
 			<div class="mb-0.5 text-xs font-medium uppercase tracking-widest text-ink-mute">

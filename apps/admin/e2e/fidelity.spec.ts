@@ -77,6 +77,24 @@ async function measureBox(page: Page, a: Anchor): Promise<Box> {
 	}, a)
 }
 
+/** Padding (top + left) of the nearest bottom-bordered strip above the anchor — i.e. a card-head. */
+async function measureHeadPad(page: Page, a: Anchor): Promise<string> {
+	return page.evaluate((anchor) => {
+		let el: Element | null = null
+		const needle = (anchor.text || '').toLowerCase()
+		const hit = (s: string) => (anchor.mode === 'contains' ? s.includes(needle) : s === needle)
+		for (const e of document.querySelectorAll('body *')) {
+			const t = (e.textContent || '').trim().toLowerCase()
+			if (hit(t) && ![...e.children].some((c) => hit((c.textContent || '').trim().toLowerCase())))
+				el = e
+		}
+		while (el && parseFloat(getComputedStyle(el).borderBottomWidth) === 0) el = el.parentElement
+		if (!el) return ''
+		const c = getComputedStyle(el)
+		return `${c.paddingTop} ${c.paddingLeft}`
+	}, a)
+}
+
 /** Pin the app to LIGHT mode (its default is dark; the mock is light) so colours are
  * compared in the same mode — the runbook's "match modes" rule. Detects dark via the h1
  * text lightness (light text = dark mode) and clicks the theme toggle. */
@@ -205,5 +223,40 @@ test.describe('fidelity — computed typography matches the mock', () => {
 		await mockCtx.close()
 
 		expect(drift, `spacing/radius drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
+	})
+
+	test('Overview: card-head + page padding match the mock', async ({ browser }) => {
+		const appCtx = await browser.newContext({ colorScheme: 'light' })
+		const app = await appCtx.newPage()
+		await signIn(app)
+		await ensureLight(app)
+		const mockCtx = await browser.newContext({ colorScheme: 'light' })
+		const mock = await mockCtx.newPage()
+		await enterMock(mock)
+
+		const drift: string[] = []
+		// card-head strip padding (mock card-hd = 16px 24px; app had a tighter px-4 py-2.5)
+		const aHead = await measureHeadPad(app, { text: 'execution plane', mode: 'exact' })
+		const mHead = await measureHeadPad(mock, { text: 'execution plane · 24h', mode: 'exact' })
+		if (aHead !== mHead) drift.push(`card-head padding: app ${aHead} ≠ mock ${mHead}`)
+
+		// page content side padding (mock .view-pad = 24px; app had px-5 = 20px)
+		const sidePad = (page: Page) =>
+			page.evaluate(() => {
+				const wrap = [...(document.querySelector('main')?.children || [])].find((d) =>
+					/space-y/.test(d.className)
+				)
+				const el = wrap || document.querySelector('.view-pad')
+				return el ? getComputedStyle(el).paddingLeft : ''
+			})
+		const aSide = await sidePad(app)
+		const mSide = await sidePad(mock)
+		if (aSide !== mSide) drift.push(`page side padding: app ${aSide} ≠ mock ${mSide}`)
+
+		await appCtx.close()
+		await mockCtx.close()
+		expect(drift, `card-head / page padding drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual(
+			[]
+		)
 	})
 })

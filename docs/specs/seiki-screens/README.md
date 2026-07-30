@@ -138,15 +138,20 @@ Magic-link (primary) + password + **GitHub OAuth**, with a real `auth/callback` 
    route → Alerts → Templates.
 5. Billing (plan/invoices) last — gated on the payment-provider decision.
 
-## Open questions for Jerry
-- **Pre-release scope line:** which of Spaces & KB / Templates / Alerts / full API-keys route are
-  in scope pre-v1, and which stay honest-empty? Billing needs a payment-provider decision or an
-  explicit "defer".
-- **MCP enforcement:** when do we close the stored-not-enforced gap — is it a v1 blocker?
-- **Schema builds now vs defer:** per-call routing trace · model tier/price/quality · Device fields ·
-  IdP/SCIM · templates · spaces KB config · alert rules.
-- **Governance surface:** rebuild all ~10 mock cards, or is "Feature governance + Settings toggles"
-  the intended v1 governance scope?
+## Open questions — RESOLVED 2026-07-29
+Cross-checked against `DECISIONS.md` + `plans/roadmap.md`: most were **already ratified** — the
+STUB/PARTIAL/MISSING states are unbuilt later phases (P7–P13), not undecided scope. Rulings:
+- **Scope line:** Spaces & KB, Templates, Alerts, Governance's editor cards, and the API-keys surface
+  are **all v1** (DECISIONS §3a/§4/§6, roadmap P7/P8) — pending *phases*, not open decisions.
+  **Billing/monetization (invoices/seats/pricing/payment) = deferred to v1.x/launch** (DECISIONS §10.1).
+- **MCP "enforcement":** not a live gap — tool-calling is P11 (unbuilt), resolver pre-built. Fix the
+  premature admin label; P11 wires it (DECISIONS §10.4).
+- **Schema:** already built in F1-rework/P3 (115 entities). Only GH-5 full ledger-attribution columns
+  remain as a known follow-up.
+- **Governance cards:** all v1, built in W1/P8 (DECISIONS §4/§6).
+- **API-keys placement:** → the **Organization** screen; move out of Connections (DECISIONS §1.2/§10.3).
+
+See **DECISIONS §10** for the authoritative rulings. **Next focus: C5 RAG + document center (P7).**
 
 ## Related
 - Visual/grid pass: [`../../design/fidelity-audit.md`](../../design/fidelity-audit.md)

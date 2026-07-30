@@ -171,3 +171,37 @@ Docs: `docs/ops/supabase-configuration.md`, `docs/ops/deployment.md`. Config:
 `apps/admin/wrangler.jsonc`, `services/gateway/{Dockerfile,fly.toml}`. **Prod build:** the
 `sensei-gateway` git dep is pinned to `tag = "v0.4.6"`; the Dockerfile strips the dev
 `[patch]` (local sibling repo) so it builds from the tag.
+
+## 10. Amendments — 2026-07-29 (screen-audit reconciliation)
+
+Ruled by Jerry after the build-vs-mock screen audit (`specs/{seiki,torii}-screens/README.md`). The
+audit confirmed **most "open questions" were already settled** here + in `plans/roadmap.md` — the
+STUB/PARTIAL/MISSING screen states are **unbuilt later phases (P7–P13), not undecided scope**. Five
+genuinely-open / deviation items resolved:
+
+1. **Billing / monetization = v1.x fast-follow (NOT v1).** The budget-hierarchy tree (hard
+   reserve→commit + increase-requests) is v1 and built. The **commercial** layer — invoices,
+   seats-as-licenses, pricing tiers, payment provider (Stripe et al.) — is **deferred to launch /
+   v1.x**, gated on the W5/P14 pricing decision. The Budgets & billing screen shows the budget tree
+   only + an honest "plans & invoices at launch" note. No billing schema / payment integration in v1.
+2. **Torii desktop auth = reconcile to magic-link + OAuth.** The desktop's client-only email+password
+   is a P1a skeleton shortcut, NOT the ratified design. Reconcile to **magic-link (primary) + GitHub
+   OAuth** via the `torii://` deep link (§9), password secondary — mirroring Seiki. Scheduled into the
+   auth-polish work (Torii WS-5); not a v1-ship blocker on its own.
+3. **API keys / service accounts = the Organization screen** (confirms §1.2; overrides the mockup's
+   separate `view-apikeys.jsx`). The build placed "API identities" inside Connections — **move it to
+   Organization** (identity + roles + keys in one home); Connections stays pure outbound provider
+   credentials.
+4. **Tools & MCP "Enforced server-side" label = honesty fix now.** Tool-calling + enforcement is
+   X1/**P11 (unbuilt)**; `chat.rs` invokes no tools → **no live bypass** (the audit's "security gap"
+   framing is downgraded). The allow-list resolver is pre-built + tested (default-deny,
+   `tests/tools.sql`). Action: reword the admin label to *"allow-list saved · enforced at tool-call
+   time (ships with the Tools runtime)"*; keep the config screen; **P11 must wire the existing
+   resolver into the tool-call path** (roadmap note).
+5. **Next build focus = C5 RAG + document center (P7).** Confirmed next major phase per the roadmap —
+   the flagship data-intelligence surface and the shared unblock for Torii Library/Ask/Playground
+   retrieval (P9) and Seiki Spaces & KB (P8). Precede it with the small reconcile batch (items 3+4 +
+   the billing note + a Torii-auth ticket).
+
+*(Doc note: `BUILD-PROGRESS.md` is stale — it lists the W1 admin portal as "next" though it is
+substantially built with real endpoints; reconcile when convenient.)*

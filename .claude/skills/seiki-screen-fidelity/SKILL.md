@@ -21,7 +21,8 @@ The Zen-Sumi design system matches the mock's `zs.css`. If a value looks off it'
 | Radius                           | `packages/ui/type-scale.js` `borderRadius` | sm 4 · `rounded` 6 · `rounded-lg` **10** · full                                |
 | Card rhythm                      | components + page wrapper                  | card padding **24px** (`p-6`), inter-card gap **24px** (`space-y-6`)           |
 | Title (PageHeader h1)            | `PageHeader.svelte`                        | `font-heading text-2xl font-normal` (28px / **400**, Fraunces)                 |
-| Eyebrow / stat label / card head | `PageHeader`/`CardHead`/`Stat`             | `text-xs font-medium uppercase tracking-[0.18em]` (11px / **500** / 1.98px)    |
+| Eyebrow / stat label / card head | `PageHeader`/`CardHead`/`Stat`             | `text-xs font-medium uppercase tracking-widest` (11px / **500** / 1.98px)      |
+| Tracking (letter-spacing)        | `packages/ui/type-scale.js` `letterSpacing` | `tracking-widest` = 0.18em (eyebrows) — semantic, never `tracking-[0.18em]`   |
 | Stat number                      | `Stat.svelte`                              | `font-heading text-3xl font-light` (40px / **300**, Fraunces)                  |
 | Status tone                      | per component                              | progress/dots use `bg-success`/`bg-warning` (green/amber), NOT `bg-accent`     |
 | Colors                           | `rokkit.config.js` + `sumi-palette.js`     | ink 0.22 · ink-mute 0.58 · paper 0.975 · paper-edge 0.88 · accent 0.58/0.15/35 |
@@ -52,6 +53,8 @@ Config changes (`type-scale.js`, `uno.config.js`, `rokkit.config.js`) need a `vi
 | Progress bars/dots vermillion              | Mock uses status tones — `bg-success` when done, `bg-warning` while incomplete.                                                                                                |
 | Runes `*-state.svelte.ts` won't test       | admin `vitest.config.js` needs the `svelte()` plugin + `*.spec.svelte.ts` in `include`.                                                                                        |
 | Card too tight                             | padding `p-6` (24), gap `space-y-6` (24), radius `rounded-lg` (10) — not p-4/space-y-4/8px.                                                                                    |
+| Spacing "big diff" but utilities look right | Restart `vite dev` — type/radius/tracking are config (not hot-reloaded); a stale server shows old spacing. NEVER author with `var(--space-*)` (broken shim); use `p-*`/`m-*`. |
+| Dark-mode drift (borders too bright, icon tones off) | Harness pins LIGHT — it can't see dark drift. Match modes in BOTH: the dark `--paper-edge` (`sumi.400`) + accent-soft/icon tones must match the mock's dark render. Extend the harness to dark. |
 
 ## Files
 

@@ -122,16 +122,16 @@ Real: email+password → `session.signInWithPassword` (client-only Supabase sess
 4. **WS-4** local-model management (independent; can slot in anytime a desktop push is wanted).
 5. **WS-5** Settings + Signin + shell polish.
 
-## Open questions for Jerry
-- **RAG scope for v1:** is the Library document center + Ask/Playground retrieval in scope pre-v1,
-  or does Torii ship as a "gateway chat client" first and RAG follows? (This is the single biggest
-  scope call.)
-- **Workspace model:** the mock assumes multi-workspace switching; the app is single-tenant-per-user
-  today. Reconcile — do we build the workspace/space model now?
-- **Torii auth:** adopt OAuth + magic-link to match Seiki, or keep the client-only password session?
-  Keep the "Open Seiki" cross-link?
-- **Local-model management:** build the download/remove/set-default Tauri commands for v1, or stay
-  read-only?
+## Open questions — RESOLVED 2026-07-29
+Cross-checked against `DECISIONS.md` + `plans/roadmap.md`:
+- **RAG in v1?** **YES** — ratified (DECISIONS §3a; C5/P7 + W2/P9). Library/Ask/Playground retrieval
+  are pending *phases*, not open scope. This is the confirmed **next focus (P7)**.
+- **Workspace/space model?** **YES, v1** — spaces + classification ACL (DECISIONS §3/§3a; P7–P9).
+- **Torii auth:** reconcile the client-only-password deviation to **magic-link + GitHub OAuth** via
+  `torii://` (DECISIONS §9/§10.2), password secondary — scheduled into auth-polish (WS-5).
+- **Local-model management:** **v1** — D2-full, roadmap P10 (download/remove/set-default + device HW/fit).
+
+See **DECISIONS §10** for the authoritative rulings.
 
 ## Related
 - Seiki (admin web) companion audit: [`../seiki-screens/README.md`](../seiki-screens/README.md)

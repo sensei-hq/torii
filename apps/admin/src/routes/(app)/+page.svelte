@@ -158,11 +158,13 @@
 	</PageHeader>
 
 	{#if loading}
-		<p class="px-5 text-sm text-ink-mute">Loading…</p>
+		<p class="px-6 text-sm text-ink-mute">Loading…</p>
 	{:else if error}
-		<div class="px-5"><Card pad><p class="text-sm text-accent">{error}</p></Card></div>
+		<div class="px-6"><Card pad><p class="text-sm text-accent">{error}</p></Card></div>
 	{:else}
-		<div class="space-y-6 px-5 pb-6">
+		<!-- page padding matches the mock's responsive .view-pad: 24px sides ≤lg, 48px sides ≥lg (>1080),
+		 responsive bottom. Uses UnoCSS lg: media modifiers rather than fixed values. -->
+		<div class="space-y-6 px-6 pb-10 lg:px-12 lg:pb-12">
 			<!-- hero insight — the single most salient fact today, derived from the reads -->
 			<Card class="flex items-start gap-4 p-6">
 				<span

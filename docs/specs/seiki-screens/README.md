@@ -45,11 +45,11 @@ inference path (`chat.rs`) never consults them — grants are **stored-but-not-e
 | Devices | Tenant | PARTIAL | real fleet list + revoke; no enroll flow, summary tiles, exec/sync/device-key columns |
 | Models | Gateway | PARTIAL | real catalog + enable/disable; no add/edit/refresh, tier/price/quality/latency, per-space scoping |
 | Routing | Gateway | PARTIAL | real chains + step enable/disable; no reorder/edit, routing-policy, provider-health, assignments, simulate |
-| Connections | Gateway | PARTIAL | real BYOK vault + OAuth + API-identities (exceeds mock); no custom-router, scope, custody, key health/expiry |
+| Connections | Gateway | PARTIAL | real BYOK vault + OAuth (exceeds mock; API-identities moved to Organization per §10.3); no custom-router, scope, custody, key health/expiry |
 | Tools & MCP | Gateway | ⚠ PARTIAL | config CRUD real + persisted **but allow-lists NOT enforced at inference**; no register-server, per-space tightening |
 | Spaces & KB | Gateway | **MISSING** | no route/nav/endpoint — only a bare `/rpc/spaces/create` primitive exists |
 | Templates | Gateway | **MISSING** | no route, no nav, no endpoint anywhere |
-| API keys | Gateway | PARTIAL | "API identities" built *inside* Connections; no dedicated route/nav, no rotate, no spend/rate/budget-node metering |
+| API keys | Gateway | PARTIAL | "API identities" now on the **Organization** screen (§10.3); no rotate, no spend/rate/budget-node metering |
 | Governance | Govern | PARTIAL | only the "Feature governance" card is built + wired; ~10 other mock cards absent (see below) |
 | Features | Govern | PARTIAL | = Governance's 4-state control at **workspace scope only**; no space/role scope switcher, grouping, owner/surface metadata |
 | Budgets & billing | Govern | PARTIAL | budget tree + increase-requests real + editable; **all billing** (plan/seats/invoices/pricing/cost-breakdown) absent |
@@ -84,7 +84,7 @@ Real: catalog + per-tenant enable/disable → `GET /v1/models` (`config.models`+
 Real: chains + per-step enable/disable → `get_routing` (`fallback_chains`+`fallback_chain_models`) and `setRoutingStep` (`UPDATE is_active`). Missing: step **reorder/add/edit**, **routing-policy** card (retries/backoff/timeout/region/health-interval), **provider-health**, **chain-assignments** (per space/role), and the **simulate-outage** panel. No backing endpoint for policy/health/assignments.
 
 ### Connections — PARTIAL (exceeds mock)
-Real, vault-backed: router connect/rotate/revoke + Anthropic **OAuth** + an **API-identities** block, all sealed into the real `sensei-vault` (`PostgresVaultStore` + Supabase-Vault KEK) via `connections_connect`/`connections_oauth_connect`. Missing: **add custom** OpenAI-compatible router, per-router **scope** (spaces/roles), **custody** toggle (on-device vs gateway), key **health/expiry**. (Masked-key preview intentionally dropped — keys are write-only.)
+Real, vault-backed: router connect/rotate/revoke + Anthropic **OAuth**, all sealed into the real `sensei-vault` (`PostgresVaultStore` + Supabase-Vault KEK) via `connections_connect`/`connections_oauth_connect`. The **API-identities** block moved to the Organization screen (§10.3) — Connections is now pure outbound provider credentials. Missing: **add custom** OpenAI-compatible router, per-router **scope** (spaces/roles), **custody** toggle (on-device vs gateway), key **health/expiry**. (Masked-key preview intentionally dropped — keys are write-only.)
 
 ### Tools & MCP — ⚠ PARTIAL (stored-not-enforced)
 Real config: server list + tools×roles allow-list matrix → `get_tools` (`mcp_servers`/`tenant_mcp_servers`/`mcp_server_tools`/`tool_allow_lists`) with `mcp_set_enabled`/`mcp_set_tool_grant` writes. **⚠ `chat.rs` has zero MCP references** — allow-lists are persisted but never consulted at inference. Also missing: **Register-server**, per-**space** tightening, url/note/tools-count/exec-badge detail.
@@ -95,8 +95,8 @@ The admin/space RAG-defaults screen behind Torii's Library/Playground: per-space
 ### Templates — MISSING
 A shared, versioned prompt/template library (scoped private/space/tenant) powering Ask's "Draft" and Workflows. **No route, no nav, no `templates` table, no endpoint.**
 
-### API keys — PARTIAL (buried in Connections)
-The mock's "API identities" (scoped tenant keys + service accounts, each metered to a budget node, no per-key budget). Built as a card inside `connections/+page.svelte` — issue reveal-once (`issueApiKey`), masked list, revoke. Missing: dedicated **route + nav entry**, per-key **rotate**, per-identity **spend/rate/budget-node** metering, and a scoped "New identity" flow (built issue takes only a name).
+### API keys — PARTIAL (on the Organization screen)
+The mock's "API identities" (scoped tenant keys + service accounts, each metered to a budget node, no per-key budget). Now a card inside `organization/+page.svelte` (moved from Connections per §10.3 — identity + roles + keys in one home) — issue reveal-once (`issueApiKey`), masked list, revoke. Missing: per-key **rotate**, per-identity **spend/rate/budget-node** metering, and a scoped "New identity" flow (built issue takes only a name).
 
 ### Governance — PARTIAL (1 of ~11 cards)
 Built + wired: **Feature governance** only → `get_governance` (`config.features`+`feature_policies`) + `set-feature` 4-state RPC, with 3 summary tiles. Missing (all mock cards): policy-enforcement/blocks feedback loop, **masking-policy editor**, redaction rules, safe-term allow-list, classification scheme, retention/legal-hold, ownership-by-space, effective-policy-per-member, device fleet, audit + SIEM toggle. *(Masking is enforced on the chat hot path — but its editor UI lives only in the mock; the runtime toggle is on Settings.)*
@@ -149,7 +149,7 @@ STUB/PARTIAL/MISSING states are unbuilt later phases (P7–P13), not undecided s
 - **Schema:** already built in F1-rework/P3 (115 entities). Only GH-5 full ledger-attribution columns
   remain as a known follow-up.
 - **Governance cards:** all v1, built in W1/P8 (DECISIONS §4/§6).
-- **API-keys placement:** → the **Organization** screen; move out of Connections (DECISIONS §1.2/§10.3).
+- **API-keys placement:** ✅ DONE — API identities now live on the **Organization** screen; Connections is pure provider credentials (DECISIONS §1.2/§10.3).
 
 See **DECISIONS §10** for the authoritative rulings. **Next focus: C5 RAG + document center (P7).**
 

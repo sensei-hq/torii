@@ -158,9 +158,9 @@
 	{:else if error}
 		<div class="px-5"><Card pad><p class="text-sm text-accent">{error}</p></Card></div>
 	{:else}
-		<div class="space-y-4 px-5 pb-6">
+		<div class="space-y-6 px-5 pb-6">
 			<!-- hero insight — the single most salient fact today, derived from the reads -->
-			<Card class="flex items-start gap-4 p-5">
+			<Card class="flex items-start gap-4 p-6">
 				<span
 					class="grid h-14 w-14 shrink-0 place-items-center rounded-lg border border-paper-edge {heroTone.box}"
 				>
@@ -286,9 +286,10 @@
 								<span class="font-heading text-2xl font-light leading-none text-ink">{s.stat}</span>
 								<span class="font-mono text-xs text-ink-mute">{s.unit}</span>
 							</div>
+							<!-- status-tone progress (mock: --success when done, --warning while incomplete) -->
 							<div class="h-1.5 overflow-hidden rounded-full bg-paper-mute">
 								<div
-									class="h-full {s.done ? 'bg-success' : 'bg-accent'}"
+									class="h-full {s.done ? 'bg-success' : 'bg-warning'}"
 									style="width:{s.pct}%"
 								></div>
 							</div>

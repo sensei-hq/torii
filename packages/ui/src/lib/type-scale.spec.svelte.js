@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { fontSize, borderRadius } from '../../type-scale.js'
+import { fontSize, borderRadius, letterSpacing } from '../../type-scale.js'
 
 // Guards the design-system FOUNDATION at the unit level: the type + radius scale must equal the
 // mockup's zs.css (measured live via getComputedStyle on 2026-07-30, docs/mockups). A scale
@@ -27,5 +27,10 @@ describe('Zen-Sumi type + radius scale = the mock', () => {
 	test('radius stops match the mock (lg = 10px, not presetRokkit 8px)', () => {
 		for (const [k, px] of Object.entries(MOCK_RADIUS))
 			expect(borderRadius[k], `rounded-${k}`).toBe(px)
+	})
+
+	test('tracking-widest = the mock eyebrow spacing (0.18em) so components stay semantic', () => {
+		// eyebrows use `tracking-widest`, never an arbitrary `tracking-[0.18em]`
+		expect(letterSpacing.widest).toBe('0.18em')
 	})
 })

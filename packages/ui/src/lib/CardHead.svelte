@@ -11,7 +11,7 @@
 	{:else}
 		<span class="flex items-center gap-2">
 			{#if icon}<span class="{icon} h-3.5 w-3.5 text-ink-soft"></span>{/if}
-			<span class="text-xs font-medium uppercase tracking-[0.18em] text-ink-mute">{title}</span>
+			<span class="text-xs font-medium uppercase tracking-widest text-ink-mute">{title}</span>
 		</span>
 	{/if}
 	{#if right}

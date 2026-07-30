@@ -37,6 +37,26 @@ async function gwGet<T>(path: string): Promise<T> {
 	return res.json() as Promise<T>
 }
 
+// Privileged writes go through C1 `/rpc/*` ONLY (never a direct PostgREST write). The gateway
+// re-checks the capability + tenant isolation server-side — UI gating is advisory (spec §5).
+async function gwPost<T>(path: string, body: unknown): Promise<T> {
+	const token = session.accessToken
+	const res = await fetch(`${GATEWAY_URL}${path}`, {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+			...(token ? { authorization: `Bearer ${token}` } : {})
+		},
+		body: JSON.stringify(body)
+	})
+	if (res.status === 401) {
+		await onUnauthorized()
+		throw new Error('session expired — signing you in again')
+	}
+	if (!res.ok) throw new Error(`${path} → ${res.status}: ${await res.text().catch(() => '')}`)
+	return res.json() as Promise<T>
+}
+
 export interface RequestRow {
 	id: string
 	chain_id: string | null
@@ -63,6 +83,18 @@ export interface BudgetNode {
 	period: string
 }
 
+/** A member's pending/approved/denied budget-increase request (from `budget_requests`). */
+export interface BudgetRequest {
+	id: string
+	node_id: string
+	requested_by: string | null
+	/** the absolute new ceiling the member asked an admin for. */
+	requested_cap: number
+	reason: string | null
+	status: string
+	created_at: string
+}
+
 export interface WhoAmI {
 	sub: string
 	tenant_id: string | null
@@ -81,8 +113,18 @@ export interface AvailableModel {
 
 export const api = {
 	requests: (limit = 50) => gwGet<{ requests: RequestRow[] }>(`/v1/requests?limit=${limit}`),
-	budgets: () => gwGet<{ nodes: BudgetNode[]; requests: unknown[] }>('/v1/budgets'),
+	// the member's budget ceiling + cascade tree and their own pending increase requests.
+	budgets: () => gwGet<{ nodes: BudgetNode[]; requests: BudgetRequest[] }>('/v1/budgets'),
 	whoami: () => gwGet<WhoAmI>('/v1/whoami'),
 	// the cloud chat models the member is allowed to call — powers Compare's cloud columns.
-	availableModels: () => gwGet<{ models: AvailableModel[] }>('/v1/models/available')
+	availableModels: () => gwGet<{ models: AvailableModel[] }>('/v1/models/available'),
+	// Ask an admin to raise the cap on a budget node — records a PENDING budget_requests row
+	// (capability `budget.request`); it changes no cap itself (an admin approve does). The
+	// gateway 404s if the node isn't in the caller's tenant. `requested_cap` is absolute.
+	requestBudgetIncrease: (node_id: string, requested_cap: number, reason?: string) =>
+		gwPost<{ id: string; status: string }>('/rpc/budgets/request', {
+			node_id,
+			requested_cap,
+			reason
+		})
 }

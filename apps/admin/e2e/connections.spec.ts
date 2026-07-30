@@ -40,7 +40,7 @@ test.describe('connections — BYOK connect / revoke', () => {
 		// Leave and return (client-side) — the screen re-fetches connected state from the
 		// gateway, proving it comes from the vault-backed read model, not client memory.
 		await page.getByRole('link', { name: /overview/i }).click()
-		await expect(page.getByRole('heading', { name: /daily briefing/i })).toBeVisible()
+		await expect(page.getByRole('heading', { name: /good (morning|afternoon|evening)/i })).toBeVisible()
 		await page.getByRole('link', { name: /^connections$/i }).click()
 		await expect(card().getByText(/^connected$/i)).toBeVisible({ timeout: 10_000 })
 

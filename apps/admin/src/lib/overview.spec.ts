@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'vitest'
 import {
+	avgLatencySec,
 	costTrend,
+	dateEyebrow,
+	displayName,
 	execPlaneSplit,
+	greeting,
 	heroInsight,
 	money,
 	setupSpine,
@@ -344,5 +348,32 @@ describe('heroInsight', () => {
 		expect(h.tone).toBe('ink')
 		expect(h.figure).toBe('2 calls')
 		expect(h.actionRoute).toBe('/requests')
+	})
+})
+
+// ── header helpers (match the mock's "Wed · 22 Apr · last 24h" / "Good morning, Aiko.") ──
+describe('header helpers', () => {
+	test('greeting is time-of-day bucketed', () => {
+		const at = (h: number) => greeting(new Date(2026, 3, 22, h))
+		expect(at(8)).toBe('Good morning')
+		expect(at(13)).toBe('Good afternoon')
+		expect(at(20)).toBe('Good evening')
+	})
+
+	test('displayName takes the first token of the email local-part, title-cased', () => {
+		expect(displayName('jerry.thomas@x.co')).toBe('Jerry')
+		expect(displayName('owner2@strategos.local')).toBe('Owner2')
+		expect(displayName('')).toBe('')
+		expect(displayName(null)).toBe('')
+	})
+
+	test('dateEyebrow renders "<Wd> · <D> <Mon> · last 24h"', () => {
+		// 2026-04-22 is a Wednesday
+		expect(dateEyebrow(new Date(2026, 3, 22, 9))).toBe('Wed · 22 Apr · last 24h')
+	})
+
+	test('avgLatencySec means duration_ms → seconds, 0 when none', () => {
+		expect(avgLatencySec([row({ duration_ms: 1000 }), row({ duration_ms: 2000 })])).toBe(1.5)
+		expect(avgLatencySec([])).toBe(0)
 	})
 })

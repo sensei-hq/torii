@@ -9,7 +9,11 @@
 		trendSummary,
 		setupSpine,
 		heroInsight,
-		money
+		money,
+		greeting,
+		displayName,
+		dateEyebrow,
+		avgLatencySec
 	} from '$lib/overview'
 
 	/** @type {import('$lib/api').RequestRow[]} */
@@ -26,16 +30,19 @@
 	let steps = $state([])
 	let error = $state('')
 	let loading = $state(true)
+	/** signed-in user's email → the header greeting name (mock: "Good morning, Aiko."). */
+	let email = $state('')
 
 	onMount(async () => {
 		try {
-			const [r, b, a, c, m, rt] = await Promise.all([
+			const [r, b, a, c, m, rt, id] = await Promise.all([
 				api.requests(200),
 				api.budgets(),
 				api.audit(8),
 				api.connections(),
 				api.models(),
-				api.routing()
+				api.routing(),
+				api.identity()
 			])
 			requests = r.requests
 			nodes = b.nodes
@@ -43,12 +50,25 @@
 			providers = c.providers
 			models = m.models
 			steps = rt.steps
+			email = id.email ?? ''
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e)
 		} finally {
 			loading = false
 		}
 	})
+
+	// header, matching the mock: date eyebrow + time-of-day greeting with the real name.
+	const name = $derived(displayName(email))
+	const title = $derived(name ? `${greeting()}, ${name}.` : `${greeting()}.`)
+	const avgLatency = $derived(avgLatencySec(requests))
+	// "today" = spend recorded on the current UTC calendar day (mock tile: "Spend · today").
+	const todayKey = new Date().toISOString().slice(0, 10)
+	const spendToday = $derived(
+		requests
+			.filter((r) => (r.recorded_at ?? '').slice(0, 10) === todayKey)
+			.reduce((s, r) => s + Number(r.cost_usd || 0), 0)
+	)
 
 	// ── headline aggregates — all computed from the real ledger, no mock data ──
 	const spend = $derived(requests.reduce((s, r) => s + Number(r.cost_usd || 0), 0))
@@ -114,11 +134,24 @@
 </script>
 
 <AppShell app="admin" title="Overview">
-	<PageHeader
-		eyebrow="Overview"
-		title="Daily briefing"
-		sub="The org's gateway at a glance — spend, execution plane, setup coverage, and the cost trend."
-	/>
+	<PageHeader eyebrow={dateEyebrow()} {title}>
+		{#snippet actions()}
+			{#if !error && !loading}
+				<span
+					class="inline-flex items-center gap-1 rounded-full border border-success/30 bg-success-soft px-2.5 py-1 text-xs font-medium text-success"
+				>
+					<span class="i-solar-check-circle-bold-duotone h-3.5 w-3.5"></span> gateway healthy
+				</span>
+			{/if}
+			<a
+				href={resolve('/requests')}
+				class="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-on-primary transition-opacity hover:opacity-90"
+			>
+				Open playground
+				<span class="i-solar-alt-arrow-right-bold-duotone h-3.5 w-3.5"></span>
+			</a>
+		{/snippet}
+	</PageHeader>
 
 	{#if loading}
 		<p class="px-5 text-sm text-ink-mute">Loading…</p>
@@ -148,25 +181,26 @@
 				>
 			</Card>
 
-			<!-- headline stats, all from the live ledger -->
+			<!-- headline stats (mock: Spend·today / Calls served / Fallbacks / Avg latency), all live.
+			 Fallbacks needs the per-call routing trace (Pass 2) — On-device stands in until then. -->
 			<div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
-				<Stat label="Requests" value={requests.length} hint="inference calls recorded" />
 				<Stat
-					label="Spend"
-					value={money(spend)}
-					hint={`${tokens.toLocaleString()} tokens metered`}
+					label="Spend · today"
+					value={money(spendToday)}
+					hint={`${money(spend)} all-time · ${tokens.toLocaleString()} tokens`}
+				/>
+				<Stat label="Calls served" value={requests.length} hint="inference calls recorded" />
+				<Stat
+					label="Avg latency"
+					value={avgLatency || '—'}
+					unit={avgLatency ? 's' : ''}
+					hint="mean over recorded calls"
 				/>
 				<Stat
 					label="On-device"
 					value={`${plane.localPct}%`}
 					tone="accent"
 					hint="ran on the local plane"
-				/>
-				<Stat
-					label="Routers"
-					value={connected}
-					unit={`/ ${providers.length}`}
-					hint="credentialed & reachable"
 				/>
 			</div>
 
@@ -389,6 +423,30 @@
 					</div>
 				</Card>
 			</div>
+
+			<!-- "Jump back in" quick actions (mock's closing section) — real in-app destinations. -->
+			<section>
+				<h2 class="mb-3 font-heading text-lg font-semibold text-ink">Jump back in</h2>
+				<div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+					{#each [{ ic: 'i-solar-clipboard-list-bold-duotone', t: 'Inspect recent calls', s: 'live ledger · audit trail', route: '/requests' }, { ic: 'i-solar-key-bold-duotone', t: 'Manage credentials', s: `${connected} of ${providers.length} routers connected`, route: '/connections' }, { ic: 'i-solar-wallet-2-bold-duotone', t: 'Review budgets', s: `${budgetPct}% of the org cap used`, route: '/billing' }] as a (a.route)}
+						<a
+							href={resolve(a.route)}
+							class="flex items-center gap-3 rounded-lg border border-paper-edge bg-paper p-4 transition-colors hover:bg-paper-mute/40"
+						>
+							<span
+								class="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-paper-edge bg-paper-mute"
+							>
+								<span class="{a.ic} h-[18px] w-[18px] text-ink-soft"></span>
+							</span>
+							<span class="min-w-0 flex-1">
+								<span class="block text-sm font-semibold text-ink">{a.t}</span>
+								<span class="mt-0.5 block font-mono text-xs text-ink-mute">{a.s}</span>
+							</span>
+							<span class="i-solar-alt-arrow-right-bold-duotone h-3.5 w-3.5 text-ink-faint"></span>
+						</a>
+					{/each}
+				</div>
+			</section>
 		</div>
 	{/if}
 </AppShell>

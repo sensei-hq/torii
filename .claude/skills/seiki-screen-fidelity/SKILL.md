@@ -15,17 +15,17 @@ description: Use when building, correcting, or reviewing a torii/seiki app scree
 
 The Zen-Sumi design system matches the mock's `zs.css`. If a value looks off it's a **usage** bug (wrong utility/token), not a config gap. Foundation lives in `packages/ui`:
 
-| Concern                          | Where                                      | Mock value (measured live)                                                     |
-| -------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------ |
-| Type scale                       | `packages/ui/type-scale.js` `fontSize`     | 11 / 13 / 15 / 17 / 22 / 28 / 40 / 56 (xs→4xl)                                 |
-| Radius                           | `packages/ui/type-scale.js` `borderRadius` | sm 4 · `rounded` 6 · `rounded-lg` **10** · full                                |
-| Card rhythm                      | components + page wrapper                  | card padding **24px** (`p-6`), inter-card gap **24px** (`space-y-6`)           |
-| Title (PageHeader h1)            | `PageHeader.svelte`                        | `font-heading text-2xl font-normal` (28px / **400**, Fraunces)                 |
-| Eyebrow / stat label / card head | `PageHeader`/`CardHead`/`Stat`             | `text-xs font-medium uppercase tracking-widest` (11px / **500** / 1.98px)      |
-| Tracking (letter-spacing)        | `packages/ui/type-scale.js` `letterSpacing` | `tracking-widest` = 0.18em (eyebrows) — semantic, never `tracking-[0.18em]`   |
-| Stat number                      | `Stat.svelte`                              | `font-heading text-3xl font-light` (40px / **300**, Fraunces)                  |
-| Status tone                      | per component                              | progress/dots use `bg-success`/`bg-warning` (green/amber), NOT `bg-accent`     |
-| Colors                           | `rokkit.config.js` + `sumi-palette.js`     | ink 0.22 · ink-mute 0.58 · paper 0.975 · paper-edge 0.88 · accent 0.58/0.15/35 |
+| Concern                          | Where                                       | Mock value (measured live)                                                     |
+| -------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------ |
+| Type scale                       | `packages/ui/type-scale.js` `fontSize`      | 11 / 13 / 15 / 17 / 22 / 28 / 40 / 56 (xs→4xl)                                 |
+| Radius                           | `packages/ui/type-scale.js` `borderRadius`  | sm 4 · `rounded` 6 · `rounded-lg` **10** · full                                |
+| Card rhythm                      | components + page wrapper                   | card padding **24px** (`p-6`), inter-card gap **24px** (`space-y-6`)           |
+| Title (PageHeader h1)            | `PageHeader.svelte`                         | `font-heading text-2xl font-normal` (28px / **400**, Fraunces)                 |
+| Eyebrow / stat label / card head | `PageHeader`/`CardHead`/`Stat`              | `text-xs font-medium uppercase tracking-widest` (11px / **500** / 1.98px)      |
+| Tracking (letter-spacing)        | `packages/ui/type-scale.js` `letterSpacing` | `tracking-widest` = 0.18em (eyebrows) — semantic, never `tracking-[0.18em]`    |
+| Stat number                      | `Stat.svelte`                               | `font-heading text-3xl font-light` (40px / **300**, Fraunces)                  |
+| Status tone                      | per component                               | progress/dots use `bg-success`/`bg-warning` (green/amber), NOT `bg-accent`     |
+| Colors                           | `rokkit.config.js` + `sumi-palette.js`      | ink 0.22 · ink-mute 0.58 · paper 0.975 · paper-edge 0.88 · accent 0.58/0.15/35 |
 
 Config changes (`type-scale.js`, `uno.config.js`, `rokkit.config.js`) need a `vite dev` restart; `.svelte`/CSS hot-reload.
 
@@ -45,16 +45,17 @@ Config changes (`type-scale.js`, `uno.config.js`, `rokkit.config.js`) need a `vi
 
 ## Gotchas (each cost a rework cycle — check them)
 
-| Symptom                                    | Cause / fix                                                                                                                                                                    |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| App "uses thicker fonts", sizes a step off | App inherited presetRokkit's 12-based scale + 600 weights; foundation now overrides — verify `type-scale.js` is wired in the app's `uno.config.js`.                            |
-| "Text colors don't match"                  | Almost always **mode** (app defaults **dark**, mock is **light**) or heavy weight — not the tokens (they match). Harness pins light via `ensureLight` + `colorScheme:'light'`. |
-| Primary button invisible / no fill         | `@unocss/reset` must be `@import ... layer(base)` in `packages/ui/src/app.css`; unlayered, its `[type="submit"]` reset ties `.bg-primary` and wins.                            |
-| Progress bars/dots vermillion              | Mock uses status tones — `bg-success` when done, `bg-warning` while incomplete.                                                                                                |
-| Runes `*-state.svelte.ts` won't test       | admin `vitest.config.js` needs the `svelte()` plugin + `*.spec.svelte.ts` in `include`.                                                                                        |
-| Card too tight                             | padding `p-6` (24), gap `space-y-6` (24), radius `rounded-lg` (10) — not p-4/space-y-4/8px.                                                                                    |
-| Spacing "big diff" but utilities look right | Restart `vite dev` — type/radius/tracking are config (not hot-reloaded); a stale server shows old spacing. NEVER author with `var(--space-*)` (broken shim); use `p-*`/`m-*`. |
-| Dark-mode drift (borders too bright, icon tones off) | Harness pins LIGHT — it can't see dark drift. Match modes in BOTH: the dark `--paper-edge` (`sumi.400`) + accent-soft/icon tones must match the mock's dark render. Extend the harness to dark. |
+| Symptom                                                 | Cause / fix                                                                                                                                                                                                                      |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App "uses thicker fonts", sizes a step off              | App inherited presetRokkit's 12-based scale + 600 weights; foundation now overrides — verify `type-scale.js` is wired in the app's `uno.config.js`.                                                                              |
+| "Text colors don't match"                               | Almost always **mode** (app defaults **dark**, mock is **light**) or heavy weight — not the tokens (they match). Harness pins light via `ensureLight` + `colorScheme:'light'`.                                                   |
+| Primary button invisible / no fill                      | `@unocss/reset` must be `@import ... layer(base)` in `packages/ui/src/app.css`; unlayered, its `[type="submit"]` reset ties `.bg-primary` and wins.                                                                              |
+| Progress bars/dots vermillion                           | Mock uses status tones — `bg-success` when done, `bg-warning` while incomplete.                                                                                                                                                  |
+| Runes `*-state.svelte.ts` won't test                    | admin `vitest.config.js` needs the `svelte()` plugin + `*.spec.svelte.ts` in `include`.                                                                                                                                          |
+| Card too tight                                          | padding `p-6` (24), gap `space-y-6` (24), radius `rounded-lg` (10) — not p-4/space-y-4/8px.                                                                                                                                      |
+| Spacing "big diff" but utilities look right             | Restart `vite dev` — type/radius/tracking are config (not hot-reloaded); a stale server shows old spacing. NEVER author with `var(--space-*)` (broken shim); use `p-*`/`m-*`.                                                    |
+| Config/palette change STILL not showing after a restart | Vite cached the uno.config/preset chain — `rm -rf node_modules/.vite apps/*/node_modules/.vite apps/*/.svelte-kit` then restart. A plain restart is NOT enough for `sumi-palette.js`/`rokkit.config.js`/`type-scale.js` changes. |
+| Dark-mode drift (borders too bright, icon tones off)    | Harness pins LIGHT — it can't see dark drift. Match modes in BOTH: the dark `--paper-edge` (`sumi.400`) + accent-soft/icon tones must match the mock's dark render. Extend the harness to dark.                                  |
 
 ## Files
 

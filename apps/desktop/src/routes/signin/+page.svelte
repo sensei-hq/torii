@@ -68,8 +68,8 @@
 			<!-- left: routing graphic + value props -->
 			<section class="sgn-intro">
 				<p class="text-sm text-ink-soft mb-5" style="max-width:460px">
-					Torii routes every request across Anthropic, Google, OpenAI and your local models —
-					then keeps spend, access and answer quality under one roof.
+					Torii routes every request across Anthropic, Google, OpenAI and your local models — then
+					keeps spend, access and answer quality under one roof.
 				</p>
 
 				<div class="rounded border border-paper-edge bg-paper-soft p-5">

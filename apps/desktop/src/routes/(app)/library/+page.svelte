@@ -15,9 +15,9 @@
 				<div>
 					<p class="text-sm font-medium text-ink">Document workspace — coming soon</p>
 					<p class="mt-1 text-[13px] text-ink-mute">
-						Collections, versions & lineage, an extracted-asset browser (markdown / tables / images),
-						ingestion status, and a preview pane. Secrets and PII are redacted at rest before
-						embedding.
+						Collections, versions & lineage, an extracted-asset browser (markdown / tables /
+						images), ingestion status, and a preview pane. Secrets and PII are redacted at rest
+						before embedding.
 					</p>
 				</div>
 			</div>

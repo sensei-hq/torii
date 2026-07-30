@@ -17,9 +17,10 @@ const MOCK = 'http://localhost:8890/Seiki.html'
 
 /** How to find one element: a CSS selector, or a text needle matched exact/contains. */
 type Anchor = { selector?: string; text?: string; mode?: 'exact' | 'contains' }
-type Style = { fs: string; fw: string; ff: string; found: boolean }
+type Style = { fs: string; fw: string; ff: string; color: string; found: boolean }
+type Box = { pad: string; mt: string; radius: string; found: boolean }
 
-/** Measure computed typography of the anchored element (deepest text match, or selector). */
+/** Measure computed typography + color of the anchored element (deepest text match, or selector). */
 async function measure(page: Page, a: Anchor): Promise<Style> {
 	return page.evaluate((anchor) => {
 		let el: Element | null = null
@@ -34,15 +35,63 @@ async function measure(page: Page, a: Anchor): Promise<Style> {
 					el = e
 			}
 		}
-		if (!el) return { fs: '', fw: '', ff: '', found: false }
+		if (!el) return { fs: '', fw: '', ff: '', color: '', found: false }
 		const c = getComputedStyle(el)
 		const ff = c.fontFamily
 			.split(',')[0]
 			.replace(/['"]/g, '')
 			.replace(/ Variable$/, '')
 			.trim() // "Fraunces Variable" → "Fraunces" to match the mock's family
-		return { fs: c.fontSize, fw: c.fontWeight, ff, found: true }
+		return { fs: c.fontSize, fw: c.fontWeight, ff, color: c.color, found: true }
 	}, a)
+}
+
+/** Measure the box (padding-top, margin-top, radius) of the nearest CARD ancestor of the anchor. */
+async function measureBox(page: Page, a: Anchor): Promise<Box> {
+	return page.evaluate((anchor) => {
+		let el: Element | null = null
+		if (anchor.selector) {
+			el = document.querySelector(anchor.selector)
+		} else {
+			const needle = (anchor.text || '').toLowerCase()
+			const hit = (s: string) => (anchor.mode === 'contains' ? s.includes(needle) : s === needle)
+			for (const e of document.querySelectorAll('body *')) {
+				const t = (e.textContent || '').trim().toLowerCase()
+				if (hit(t) && ![...e.children].some((c) => hit((c.textContent || '').trim().toLowerCase())))
+					el = e
+			}
+		}
+		// climb to the nearest rounded, bordered/filled ancestor — the card
+		while (el) {
+			const c = getComputedStyle(el)
+			if (
+				parseFloat(c.borderTopLeftRadius) >= 8 &&
+				(parseFloat(c.borderTopWidth) > 0 || c.backgroundColor !== 'rgba(0, 0, 0, 0)')
+			)
+				break
+			el = el.parentElement
+		}
+		if (!el) return { pad: '', mt: '', radius: '', found: false }
+		const c = getComputedStyle(el)
+		return { pad: c.paddingTop, mt: c.marginTop, radius: c.borderTopLeftRadius, found: true }
+	}, a)
+}
+
+/** Pin the app to LIGHT mode (its default is dark; the mock is light) so colours are
+ * compared in the same mode — the runbook's "match modes" rule. Detects dark via the h1
+ * text lightness (light text = dark mode) and clicks the theme toggle. */
+async function ensureLight(page: Page): Promise<void> {
+	const h1Lightness = () =>
+		page.evaluate(() => {
+			const el = document.querySelector('main h1')
+			const col = el ? getComputedStyle(el).color : ''
+			const m = col.match(/oklch\(([\d.]+)/)
+			return m ? parseFloat(m[1]) : 0
+		})
+	if ((await h1Lightness()) > 0.5) {
+		await page.getByRole('button', { name: /toggle light or dark/i }).click()
+		await expect.poll(h1Lightness, { timeout: 5000 }).toBeLessThan(0.5)
+	}
 }
 
 /** Sign into the mockup (persona → magic link) and wait for its Overview to render. */
@@ -57,20 +106,41 @@ async function enterMock(page: Page): Promise<void> {
 type Role = { role: string; app: Anchor; mock: Anchor }
 
 const OVERVIEW: Role[] = [
-	{ role: 'page title (h1)', app: { selector: 'main h1' }, mock: { text: 'good morning', mode: 'contains' } },
-	{ role: 'date eyebrow', app: { text: 'last 24h', mode: 'contains' }, mock: { text: 'last 24h', mode: 'contains' } },
-	{ role: 'stat label', app: { text: 'spend · today', mode: 'exact' }, mock: { text: 'spend · today', mode: 'exact' } },
-	{ role: 'card head eyebrow', app: { text: 'execution plane', mode: 'exact' }, mock: { text: 'execution plane · 24h', mode: 'exact' } },
-	{ role: 'setup step title', app: { text: 'connect routers', mode: 'exact' }, mock: { text: 'connect routers', mode: 'exact' } }
+	{
+		role: 'page title (h1)',
+		app: { selector: 'main h1' },
+		mock: { text: 'good morning', mode: 'contains' }
+	},
+	{
+		role: 'date eyebrow',
+		app: { text: 'last 24h', mode: 'contains' },
+		mock: { text: 'last 24h', mode: 'contains' }
+	},
+	{
+		role: 'stat label',
+		app: { text: 'spend · today', mode: 'exact' },
+		mock: { text: 'spend · today', mode: 'exact' }
+	},
+	{
+		role: 'card head eyebrow',
+		app: { text: 'execution plane', mode: 'exact' },
+		mock: { text: 'execution plane · 24h', mode: 'exact' }
+	},
+	{
+		role: 'setup step title',
+		app: { text: 'connect routers', mode: 'exact' },
+		mock: { text: 'connect routers', mode: 'exact' }
+	}
 ]
 
 test.describe('fidelity — computed typography matches the mock', () => {
 	test('Overview: every role matches font size / weight / family', async ({ browser }) => {
-		const appCtx = await browser.newContext()
+		const appCtx = await browser.newContext({ colorScheme: 'light' })
 		const app = await appCtx.newPage()
 		await signIn(app) // lands on the Overview
+		await ensureLight(app)
 
-		const mockCtx = await browser.newContext()
+		const mockCtx = await browser.newContext({ colorScheme: 'light' })
 		const mock = await mockCtx.newPage()
 		await enterMock(mock)
 
@@ -80,12 +150,55 @@ test.describe('fidelity — computed typography matches the mock', () => {
 			const m = await measure(mock, r.mock)
 			if (!a.found) drift.push(`${r.role}: not found in app`)
 			else if (!m.found) drift.push(`${r.role}: not found in mock`)
-			else if (a.fs !== m.fs || a.fw !== m.fw || a.ff !== m.ff)
-				drift.push(`${r.role}: app ${a.fs}/${a.fw}/${a.ff} ≠ mock ${m.fs}/${m.fw}/${m.ff}`)
+			else if (a.fs !== m.fs || a.fw !== m.fw || a.ff !== m.ff || a.color !== m.color)
+				drift.push(
+					`${r.role}: app ${a.fs}/${a.fw}/${a.ff}/${a.color} ≠ mock ${m.fs}/${m.fw}/${m.ff}/${m.color}`
+				)
 		}
 		await appCtx.close()
 		await mockCtx.close()
 
-		expect(drift, `typography drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
+		expect(drift, `typography/color drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
+	})
+
+	// Card padding, inter-card gap, and radius — the Zen-Sumi rhythm (mock uses 24px / 10px).
+	const SPACING: Role[] = [
+		{
+			role: 'stat tile (padding + radius)',
+			app: { text: 'spend · today', mode: 'exact' },
+			mock: { text: 'spend · today', mode: 'exact' }
+		},
+		{
+			role: 'card (inter-card gap + radius)',
+			app: { text: 'execution plane', mode: 'exact' },
+			mock: { text: 'execution plane · 24h', mode: 'exact' }
+		}
+	]
+
+	test('Overview: card padding / gap / radius match the mock', async ({ browser }) => {
+		const appCtx = await browser.newContext({ colorScheme: 'light' })
+		const app = await appCtx.newPage()
+		await signIn(app)
+		await ensureLight(app)
+		const mockCtx = await browser.newContext({ colorScheme: 'light' })
+		const mock = await mockCtx.newPage()
+		await enterMock(mock)
+
+		const drift: string[] = []
+		for (const r of SPACING) {
+			const a = await measureBox(app, r.app)
+			const m = await measureBox(mock, r.mock)
+			if (!a.found || !m.found) drift.push(`${r.role}: card not found`)
+			// stat tile: compare padding + radius; mid card: compare margin-top (gap) + radius
+			else if (r.role.includes('stat')) {
+				if (a.pad !== m.pad || a.radius !== m.radius)
+					drift.push(`${r.role}: app pad ${a.pad} r ${a.radius} ≠ mock pad ${m.pad} r ${m.radius}`)
+			} else if (a.mt !== m.mt || a.radius !== m.radius)
+				drift.push(`${r.role}: app gap ${a.mt} r ${a.radius} ≠ mock gap ${m.mt} r ${m.radius}`)
+		}
+		await appCtx.close()
+		await mockCtx.close()
+
+		expect(drift, `spacing/radius drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
 	})
 })

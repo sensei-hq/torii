@@ -22,14 +22,26 @@
   body {
     @apply flex h-full w-full flex-col;
     /* base UI face = Inter; headings opt into Fraunces via font-heading, code via font-mono */
-    font-family: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-family:
+      'Inter Variable',
+      'Inter',
+      system-ui,
+      -apple-system,
+      'Segoe UI',
+      sans-serif;
     /* named-token `@apply bg-paper` can't match body when data-mode is on it — use the var */
     background: var(--paper);
     color: var(--ink);
   }
   app {
     @apply h-full w-full;
-    font-family: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-family:
+      'Inter Variable',
+      'Inter',
+      system-ui,
+      -apple-system,
+      'Segoe UI',
+      sans-serif;
     background: var(--paper);
     color: var(--ink);
   }
@@ -41,5 +53,6 @@
   font-family: 'Fraunces Variable', 'Fraunces', 'Iowan Old Style', Georgia, serif;
 }
 .font-mono {
-  font-family: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family:
+    'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 }

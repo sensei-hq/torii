@@ -1,7 +1,7 @@
 import { defineConfig } from 'unocss'
 import { presetRokkit } from '@rokkit/unocss'
 import config from './rokkit.config.js'
-import { fontSize } from './type-scale.js'
+import { fontSize, borderRadius } from './type-scale.js'
 
-// Type scale overridden to the mockup's zs.css scale (11-based; display grows to 40/56).
-export default defineConfig({ presets: [presetRokkit(config)], theme: { fontSize } })
+// Type scale + radii overridden to the mockup's zs.css (11-based type; radius-lg 10px).
+export default defineConfig({ presets: [presetRokkit(config)], theme: { fontSize, borderRadius } })

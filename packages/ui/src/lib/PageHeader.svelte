@@ -7,11 +7,11 @@
 <div class="flex items-start justify-between gap-4 px-5 pb-3 pt-5">
 	<div class="min-w-0">
 		{#if eyebrow}
-			<div class="mb-0.5 text-xs font-semibold uppercase tracking-wider text-ink-mute">
+			<div class="mb-0.5 text-xs font-medium uppercase tracking-[0.18em] text-ink-mute">
 				{eyebrow}
 			</div>
 		{/if}
-		<h1 class="font-heading text-xl font-semibold tracking-tight text-ink">{title}</h1>
+		<h1 class="font-heading text-2xl font-normal tracking-tight text-ink">{title}</h1>
 		{#if sub}
 			<p class="mt-1 max-w-xl text-sm text-ink-soft">{sub}</p>
 		{/if}

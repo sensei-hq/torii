@@ -10,6 +10,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
 import { GATEWAY_URL, SUPABASE_ANON_KEY, SUPABASE_URL } from './env'
+import { setFeaturePayload, WORKSPACE_SCOPE, type FeatureScope } from './governance'
 import { meaningfulRole } from './identity'
 
 // A browser Supabase client purely to read the persisted session's access token —
@@ -349,14 +350,11 @@ export const api = {
 	oauthConnectConnection: (router: string, token: string) =>
 		gwPost('/rpc/connections/oauth-connect', { router, token }),
 	oauthRevokeConnection: (router: string) => gwPost('/rpc/connections/oauth-revoke', { router }),
-	// set a feature's workspace-scope governance posture (4-state).
-	setFeature: (feature_key: string, state: FeatureState) =>
-		gwPost('/rpc/governance/set-feature', {
-			feature_key,
-			scope_type: 'workspace',
-			scope_id: null,
-			state
-		}),
+	// set a feature's governance posture (4-state) for a scope. Scope defaults to the
+	// workspace default (scope_id null); pass a `role`/`space` scope to target it instead —
+	// the gateway resolves precedence workspace → space → role → user server-side (C4 §4.2).
+	setFeature: (feature_key: string, state: FeatureState, scope: FeatureScope = WORKSPACE_SCOPE) =>
+		gwPost('/rpc/governance/set-feature', setFeaturePayload(feature_key, state, scope)),
 	// enable/disable a fallback-chain step (the gateway skips inactive steps).
 	setRoutingStep: (id: string, is_active: boolean) =>
 		gwPost('/rpc/routing/set-step-active', { id, is_active }),

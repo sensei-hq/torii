@@ -1,22 +1,12 @@
 <script>
 	import { onMount } from 'svelte'
-	import { AppShell, PageHeader, Card, CardHead, Glyph, Chip, Async, Empty } from '@torii/ui'
+	import { AppShell, PageHeader, Card, CardHead, Glyph, Chip, Async } from '@torii/ui'
 	import { api } from '$lib/api'
 
 	/** @type {import('$lib/api').Provider[]} */
 	let providers = $state([])
-	/** @type {import('$lib/api').ApiKey[]} */
-	let keys = $state([])
 	let error = $state('')
 	let loading = $state(true)
-
-	// reveal-once state — the raw secret is held only in memory, shown once, then cleared.
-	let name = $state('')
-	let issuing = $state(false)
-	let busy = $state('') // id of the key currently being revoked
-	/** @type {import('$lib/api').IssuedKey | null} */
-	let revealed = $state(null)
-	let copied = $state(false)
 
 	// BYOK connect/rotate — the pasted secret lives only in `keyInput` (a password field),
 	// is sent write-only to the vault, and is cleared the moment the call returns.
@@ -39,9 +29,8 @@
 
 	async function load() {
 		try {
-			const [c, k] = await Promise.all([api.connections(), api.apikeys()])
+			const c = await api.connections()
 			providers = c.providers
-			keys = k.keys
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e)
 		} finally {
@@ -49,38 +38,6 @@
 		}
 	}
 	onMount(load)
-
-	async function issue() {
-		if (issuing) return
-		issuing = true
-		error = ''
-		copied = false
-		try {
-			revealed = await api.issueApiKey(name.trim() || undefined)
-			name = ''
-			await load() // refresh the masked list; the raw key stays only in `revealed`
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e)
-		} finally {
-			issuing = false
-		}
-	}
-
-	/** Revoke a key — it stops authenticating immediately. Irreversible (re-issue a new one).
-	 * @param {string} id */
-	async function revoke(id) {
-		if (busy) return
-		busy = id
-		error = ''
-		try {
-			await api.revokeApiKey(id)
-			await load()
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e)
-		} finally {
-			busy = ''
-		}
-	}
 
 	/** Seal a pasted key into the vault. Connect and rotate are the same server-side
 	 * upsert — pick the endpoint by current state so the audit action is right.
@@ -154,16 +111,6 @@
 		}
 	}
 
-	async function copyKey() {
-		if (!revealed) return
-		try {
-			await navigator.clipboard.writeText(revealed.key)
-			copied = true
-		} catch {
-			copied = false
-		}
-	}
-
 	/** @param {string} host */
 	const providerIcon = (host) =>
 		/ollama|localhost|127\.0\.0\.1/.test(host)
@@ -179,15 +126,13 @@
 	}
 	/** @param {string} iso */
 	const fmtDate = (iso) => new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' })
-	/** @param {unknown} scope */
-	const scopeLabel = (scope) => (Array.isArray(scope) ? scope.join(' · ') : 'inference')
 </script>
 
 <AppShell app="admin" title="Connections">
 	<PageHeader
 		eyebrow="Connections"
 		title="Provider connections"
-		sub="The gateway routes every call through the org's own credentials — members never see them. Below, issue scoped API identities for the org's own apps; each key meters against its identity's budget node and is shown exactly once."
+		sub="Outbound provider credentials — the gateway routes every call through the org's own keys, sealed in the vault so members never see them. Manage API identities for the org's own apps on the Organization screen."
 	/>
 
 	{#if loading}
@@ -365,124 +310,6 @@
 						Remote providers authenticate with the org's own key, sealed in the vault and shown to
 						no one; local models need no key. Keys are write-only here — rotate replaces, revoke
 						removes.
-					</span>
-				</div>
-			</Card>
-
-			<!-- Reveal-once banner: the raw secret, shown exactly once, then unrecoverable. -->
-			{#if revealed}
-				<Card pad class="border-accent bg-accent-soft">
-					<div class="flex items-start gap-3">
-						<span class="i-solar-key-bold-duotone mt-0.5 h-4 w-4 text-accent"></span>
-						<div class="min-w-0 flex-1">
-							<p class="text-sm font-medium text-ink">
-								Copy this key now — it will not be shown again.
-							</p>
-							<div class="mt-2 flex items-center gap-2">
-								<code
-									class="flex-1 select-all overflow-x-auto whitespace-nowrap rounded-md border border-paper-edge bg-paper px-2.5 py-1.5 font-mono text-xs text-ink"
-									>{revealed.key}</code
-								>
-								<button
-									onclick={copyKey}
-									class="rounded-md bg-ink px-3 py-1.5 text-xs font-medium text-paper hover:opacity-90"
-									>{copied ? 'Copied' : 'Copy'}</button
-								>
-								<button
-									onclick={() => (revealed = null)}
-									class="rounded-md border border-paper-edge px-3 py-1.5 text-xs text-ink-soft hover:bg-paper-mute"
-									>Dismiss</button
-								>
-							</div>
-						</div>
-					</div>
-				</Card>
-			{/if}
-
-			<!-- API identities — issue reveal-once, list masked. -->
-			<Card flush>
-				<CardHead>
-					{#snippet left()}
-						<span class="flex items-center gap-2">
-							<span class="text-xs font-semibold uppercase tracking-wider text-ink-mute"
-								>API identities</span
-							>
-							<span class="font-mono text-xs text-ink-mute"
-								>{keys.filter((k) => k.status === 'active').length} active</span
-							>
-						</span>
-					{/snippet}
-					{#snippet right()}
-						<div class="flex items-center gap-2">
-							<input
-								bind:value={name}
-								aria-label="API key name"
-								placeholder="key name (e.g. ingest-worker)"
-								class="w-48 rounded-md border border-paper-edge bg-paper px-2.5 py-1 font-mono text-xs text-ink placeholder:text-ink-mute"
-								onkeydown={(e) => e.key === 'Enter' && issue()}
-							/>
-							<button
-								onclick={issue}
-								disabled={issuing}
-								class="rounded-md bg-primary px-3 py-1 text-xs font-medium text-on-primary disabled:opacity-40"
-								>{issuing ? 'Issuing…' : 'Issue key'}</button
-							>
-						</div>
-					{/snippet}
-				</CardHead>
-				<div>
-					{#each keys as k (k.id)}
-						<div
-							class="flex items-center gap-3 border-b border-paper-edge px-4 py-3 last:border-b-0"
-							class:opacity-55={k.status === 'revoked'}
-						>
-							<Glyph
-								icon={k.service_account_id
-									? 'i-solar-server-bold-duotone'
-									: 'i-solar-key-bold-duotone'}
-								tone="soft"
-							/>
-							<div class="min-w-0 flex-1">
-								<div class="flex flex-wrap items-center gap-2">
-									<span class="font-mono text-sm text-ink">{k.prefix}…</span>
-									<Chip>{k.service_account_id ? 'service account' : 'API key'}</Chip>
-									<Chip>{scopeLabel(k.scope)}</Chip>
-								</div>
-								<div class="mt-1 font-mono text-xs text-ink-mute">
-									created {fmtDate(k.created_at)} · last used
-									{k.last_used_at ? fmtDate(k.last_used_at) : '—'}
-								</div>
-							</div>
-							<div class="flex flex-shrink-0 items-center gap-2">
-								<Chip tone={k.status === 'active' ? 'success' : 'warning'}>{k.status}</Chip>
-								{#if k.status === 'active'}
-									<button
-										onclick={() => revoke(k.id)}
-										disabled={busy === k.id}
-										aria-label={`Revoke API key ${k.prefix}`}
-										title="Revoke this key"
-										class="rounded-md border border-paper-edge px-2 py-1 text-xs text-ink-mute hover:border-danger hover:text-danger disabled:opacity-40"
-										>{busy === k.id ? 'Revoking…' : 'Revoke'}</button
-									>
-								{/if}
-							</div>
-						</div>
-					{/each}
-					{#if keys.length === 0}
-						<Empty
-							icon="i-solar-key-bold-duotone"
-							message="No API identities yet"
-							hint="Issue one above."
-							pad="py-8"
-						/>
-					{/if}
-				</div>
-				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
-					<span class="i-solar-shield-check-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
-					<span class="text-xs leading-relaxed text-ink-mute">
-						Keys are shown once at creation, then stored only as an argon2id hash. A key carries no
-						budget — spend meters to the bound identity's node in the org tree, and every call is
-						audited.
 					</span>
 				</div>
 			</Card>

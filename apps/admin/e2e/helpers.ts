@@ -10,7 +10,17 @@ export const CREDS = {
 export async function signIn(page: Page): Promise<void> {
 	await page.goto('/signin')
 	await page.locator('input[type="email"]').fill(CREDS.email)
-	await page.locator('input[type="password"]').fill(CREDS.password)
+	// Sign-in is magic-link-primary; reveal the secondary password path for the seed login.
+	// The toggle click can race SvelteKit hydration (handler not yet attached → click lost), so
+	// retry the reveal until the password field actually renders. Guarded on visibility so a
+	// late-registering click can't toggle it back off.
+	const toggle = page.getByRole('button', { name: /sign in with a password/i })
+	const password = page.locator('input[type="password"]')
+	await expect(async () => {
+		if (!(await password.isVisible())) await toggle.click()
+		await expect(password).toBeVisible({ timeout: 1000 })
+	}).toPass({ timeout: 15_000 })
+	await password.fill(CREDS.password)
 	await page.getByRole('button', { name: /^sign in$/i }).click()
 	await expect(page).toHaveURL(/\/$/, { timeout: 15_000 })
 	await expect(page.locator('[data-app-shell]')).toBeVisible({ timeout: 15_000 })

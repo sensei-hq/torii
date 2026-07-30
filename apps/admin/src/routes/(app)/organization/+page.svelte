@@ -13,16 +13,28 @@
 	/** the caller's own identity, for gating owner-only controls (e.g. transfer ownership) */
 	/** @type {import('$lib/api').WhoAmI | null} */
 	let me = $state(null)
+	/** @type {import('$lib/api').ApiKey[]} */
+	let keys = $state([])
 	let error = $state('')
 	let loading = $state(true)
 	let busy = $state('')
 
+	// API-identity issuance — reveal-once. The raw secret is held only in memory, shown once,
+	// then cleared. Own `keyName`/`keyBusy` so key ops never disable the member/role controls.
+	let keyName = $state('')
+	let issuing = $state(false)
+	let keyBusy = $state('') // id of the key currently being revoked
+	/** @type {import('$lib/api').IssuedKey | null} */
+	let revealed = $state(null)
+	let copied = $state(false)
+
 	async function load() {
 		try {
-			const o = await api.org()
+			const [o, k] = await Promise.all([api.org(), api.apikeys()])
 			members = o.members
 			roles = o.roles
 			capabilities = o.capabilities
+			keys = k.keys
 			me = await api.whoami()
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e)
@@ -31,6 +43,54 @@
 		}
 	}
 	onMount(load)
+
+	/** Issue a scoped API identity — the raw key is returned once, kept only in `revealed`. */
+	async function issue() {
+		if (issuing) return
+		issuing = true
+		error = ''
+		copied = false
+		try {
+			revealed = await api.issueApiKey(keyName.trim() || undefined)
+			keyName = ''
+			await load() // refresh the masked list; the raw key stays only in `revealed`
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e)
+		} finally {
+			issuing = false
+		}
+	}
+
+	/** Revoke a key — it stops authenticating immediately. Irreversible (re-issue a new one).
+	 * @param {string} id */
+	async function revoke(id) {
+		if (keyBusy) return
+		keyBusy = id
+		error = ''
+		try {
+			await api.revokeApiKey(id)
+			await load()
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e)
+		} finally {
+			keyBusy = ''
+		}
+	}
+
+	async function copyKey() {
+		if (!revealed) return
+		try {
+			await navigator.clipboard.writeText(revealed.key)
+			copied = true
+		} catch {
+			copied = false
+		}
+	}
+
+	/** @param {string} iso */
+	const fmtDate = (iso) => new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' })
+	/** @param {unknown} scope */
+	const scopeLabel = (scope) => (Array.isArray(scope) ? scope.join(' · ') : 'inference')
 
 	/**
 	 * Assign a role to a member via the committed /rpc/rbac/assign-role. NOTE: this bumps the
@@ -178,7 +238,7 @@
 	<PageHeader
 		eyebrow="Organization"
 		title="People & access"
-		sub="Members and their roles, and the authoritative role × capability matrix. Effective access is the union of a member's roles — resolved server-side by the gateway, never trusted from the token."
+		sub="Members and their roles, the API identities that stand in for the org's own apps, and the authoritative role × capability matrix. Effective access is the union of a member's roles — resolved server-side by the gateway, never trusted from the token."
 	/>
 
 	{#if loading}
@@ -269,6 +329,124 @@
 				</div>
 			</Card>
 
+			<!-- Reveal-once banner: the raw secret, shown exactly once, then unrecoverable. -->
+			{#if revealed}
+				<Card pad class="border-accent bg-accent-soft">
+					<div class="flex items-start gap-3">
+						<span class="i-solar-key-bold-duotone mt-0.5 h-4 w-4 text-accent"></span>
+						<div class="min-w-0 flex-1">
+							<p class="text-sm font-medium text-ink">
+								Copy this key now — it will not be shown again.
+							</p>
+							<div class="mt-2 flex items-center gap-2">
+								<code
+									class="flex-1 select-all overflow-x-auto whitespace-nowrap rounded-md border border-paper-edge bg-paper px-2.5 py-1.5 font-mono text-xs text-ink"
+									>{revealed.key}</code
+								>
+								<button
+									onclick={copyKey}
+									class="rounded-md bg-ink px-3 py-1.5 text-xs font-medium text-paper hover:opacity-90"
+									>{copied ? 'Copied' : 'Copy'}</button
+								>
+								<button
+									onclick={() => (revealed = null)}
+									class="rounded-md border border-paper-edge px-3 py-1.5 text-xs text-ink-soft hover:bg-paper-mute"
+									>Dismiss</button
+								>
+							</div>
+						</div>
+					</div>
+				</Card>
+			{/if}
+
+			<!-- API identities — non-human principals for the org's own apps. Issue reveal-once, list masked. -->
+			<Card flush>
+				<CardHead>
+					{#snippet left()}
+						<span class="flex items-center gap-2">
+							<span class="text-xs font-semibold uppercase tracking-wider text-ink-mute"
+								>API identities</span
+							>
+							<span class="font-mono text-xs text-ink-mute"
+								>{keys.filter((k) => k.status === 'active').length} active</span
+							>
+						</span>
+					{/snippet}
+					{#snippet right()}
+						<div class="flex items-center gap-2">
+							<input
+								bind:value={keyName}
+								aria-label="API key name"
+								placeholder="key name (e.g. ingest-worker)"
+								class="w-48 rounded-md border border-paper-edge bg-paper px-2.5 py-1 font-mono text-xs text-ink placeholder:text-ink-mute"
+								onkeydown={(e) => e.key === 'Enter' && issue()}
+							/>
+							<button
+								onclick={issue}
+								disabled={issuing}
+								class="rounded-md bg-primary px-3 py-1 text-xs font-medium text-on-primary disabled:opacity-40"
+								>{issuing ? 'Issuing…' : 'Issue key'}</button
+							>
+						</div>
+					{/snippet}
+				</CardHead>
+				<div>
+					{#each keys as k (k.id)}
+						<div
+							class="flex items-center gap-3 border-b border-paper-edge px-4 py-3 last:border-b-0"
+							class:opacity-55={k.status === 'revoked'}
+						>
+							<Glyph
+								icon={k.service_account_id
+									? 'i-solar-server-bold-duotone'
+									: 'i-solar-key-bold-duotone'}
+								tone="soft"
+							/>
+							<div class="min-w-0 flex-1">
+								<div class="flex flex-wrap items-center gap-2">
+									<span class="font-mono text-sm text-ink">{k.prefix}…</span>
+									<Chip>{k.service_account_id ? 'service account' : 'API key'}</Chip>
+									<Chip>{scopeLabel(k.scope)}</Chip>
+								</div>
+								<div class="mt-1 font-mono text-xs text-ink-mute">
+									created {fmtDate(k.created_at)} · last used
+									{k.last_used_at ? fmtDate(k.last_used_at) : '—'}
+								</div>
+							</div>
+							<div class="flex flex-shrink-0 items-center gap-2">
+								<Chip tone={k.status === 'active' ? 'success' : 'warning'}>{k.status}</Chip>
+								{#if k.status === 'active'}
+									<button
+										onclick={() => revoke(k.id)}
+										disabled={keyBusy === k.id}
+										aria-label={`Revoke API key ${k.prefix}`}
+										title="Revoke this key"
+										class="rounded-md border border-paper-edge px-2 py-1 text-xs text-ink-mute hover:border-danger hover:text-danger disabled:opacity-40"
+										>{keyBusy === k.id ? 'Revoking…' : 'Revoke'}</button
+									>
+								{/if}
+							</div>
+						</div>
+					{/each}
+					{#if keys.length === 0}
+						<Empty
+							icon="i-solar-key-bold-duotone"
+							message="No API identities yet"
+							hint="Issue one above."
+							pad="py-8"
+						/>
+					{/if}
+				</div>
+				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
+					<span class="i-solar-shield-check-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
+					<span class="text-xs leading-relaxed text-ink-mute">
+						Keys are shown once at creation, then stored only as an argon2id hash. A key carries no
+						budget — spend meters to the bound identity's node in the org tree, and every call is
+						audited.
+					</span>
+				</div>
+			</Card>
+
 			<!-- roles overview -->
 			<Card flush>
 				<CardHead title="Roles" meta={`${roles.length}`} />
@@ -301,9 +479,8 @@
 							<h3 class="text-sm font-semibold text-ink">
 								New custom role <span class="font-normal text-ink-mute">from {sourceName}</span>
 							</h3>
-							<button
-								onclick={() => (dupOpen = false)}
-								class="text-xs text-ink-mute hover:text-ink">Cancel</button
+							<button onclick={() => (dupOpen = false)} class="text-xs text-ink-mute hover:text-ink"
+								>Cancel</button
 							>
 						</div>
 						<div class="flex flex-wrap gap-3">

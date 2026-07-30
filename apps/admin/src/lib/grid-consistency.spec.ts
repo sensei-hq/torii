@@ -4,11 +4,12 @@ import { dirname, join, relative, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 // Foundation guard for the Zen-Sumi grid (see docs/design/fidelity-audit.md).
-// The type scale comes from presetRokkit (text-xs=12 / text-sm=14 / text-base=16 /
-// text-lg=18 / text-xl=20 / text-2xl=24 / text-3xl=30). Components must use those
-// named stops — never an arbitrary `text-[Npx]`, which is the "random inconsistent
-// numbers" the grid work removed. This test fails the build if a raw px text size
-// creeps back in, across both the deployed admin app and the shared UI kit.
+// The type scale is set in packages/ui/type-scale.js to the mockup's zs.css scale
+// (text-xs=11 / sm=13 / base=15 / lg=17 / xl=22 / 2xl=28 / 3xl=40 / 4xl=56 — measured
+// live vs the mock 2026-07-30). Components must use those named stops — never an
+// arbitrary `text-[Npx]`, which is the "random inconsistent numbers" the grid work
+// removed. This test fails the build if a raw px text size creeps back in, across both
+// the deployed admin app and the shared UI kit.
 //
 // Scope note: only TEXT sizes are guarded here. Off-grid spacing (`py-1.5`…) and
 // arbitrary dimensions (`w-[18px]`…) are handled in the per-screen catalog pass and

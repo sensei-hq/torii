@@ -11,7 +11,8 @@
     },
     "./app.css": "./src/app.css",
     "./uno.config": "./uno.config.js",
-    "./rokkit.config": "./rokkit.config.js"
+    "./rokkit.config": "./rokkit.config.js",
+    "./type-scale": "./type-scale.js"
   },
   "scripts": {
     "test": "vitest run",

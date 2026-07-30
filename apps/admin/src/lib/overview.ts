@@ -191,7 +191,11 @@ export function setupSpine(
 			unit: `/ ${providers.length} routers`,
 			pct: connPct,
 			done: providers.length > 0 && needKey === 0,
-			sub: needKey ? `${needKey} need a key` : providers.length ? 'all routers reachable' : 'no routers yet'
+			sub: needKey
+				? `${needKey} need a key`
+				: providers.length
+					? 'all routers reachable'
+					: 'no routers yet'
 		},
 		{
 			key: 'register',

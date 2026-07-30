@@ -30,8 +30,18 @@ describe('scopeOptions', () => {
 			role({ id: 'r-viewer', name: 'Viewer' })
 		])
 		expect(opts).toHaveLength(3)
-		expect(opts[1]).toMatchObject({ key: 'role:r-owner', type: 'role', id: 'r-owner', label: 'Owner' })
-		expect(opts[2]).toMatchObject({ key: 'role:r-viewer', type: 'role', id: 'r-viewer', label: 'Viewer' })
+		expect(opts[1]).toMatchObject({
+			key: 'role:r-owner',
+			type: 'role',
+			id: 'r-owner',
+			label: 'Owner'
+		})
+		expect(opts[2]).toMatchObject({
+			key: 'role:r-viewer',
+			type: 'role',
+			id: 'r-viewer',
+			label: 'Viewer'
+		})
 	})
 
 	test('keys are unique + stable for #each keying', () => {
@@ -67,7 +77,9 @@ describe('setFeaturePayload', () => {
 	})
 
 	test('a space scope is carried too (backend accepts it; UI enumeration pending a spaces read)', () => {
-		expect(setFeaturePayload('citations', 'default-off', { type: 'space', id: 's-leasing' })).toEqual({
+		expect(
+			setFeaturePayload('citations', 'default-off', { type: 'space', id: 's-leasing' })
+		).toEqual({
 			feature_key: 'citations',
 			scope_type: 'space',
 			scope_id: 's-leasing',

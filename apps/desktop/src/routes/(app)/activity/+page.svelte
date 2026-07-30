@@ -120,13 +120,17 @@
 					<div class="grid gap-0 md:grid-cols-2">
 						<!-- the chain of caps you inherit from: org → dept → you -->
 						<div class="space-y-4 border-b border-paper-edge p-5 md:border-b-0 md:border-r">
-							<p class="text-xs uppercase tracking-wider text-ink-mute">The budget you cascade from</p>
+							<p class="text-xs uppercase tracking-wider text-ink-mute">
+								The budget you cascade from
+							</p>
 							{#each activity.cascade as n, i (n.id)}
 								{@const last = i === activity.cascade.length - 1}
 								<div style="padding-left:{i * 16}px">
 									<div class="mb-1 flex items-center gap-2">
 										<span
-											class="{nodeIcon(n.kind)} h-3.5 w-3.5 {last ? 'text-accent' : 'text-ink-mute'}"
+											class="{nodeIcon(n.kind)} h-3.5 w-3.5 {last
+												? 'text-accent'
+												: 'text-ink-mute'}"
 										></span>
 										<span class="text-sm {last ? 'font-semibold text-ink' : 'text-ink-soft'}"
 											>{n.name}</span
@@ -201,7 +205,8 @@
 										{activity.reqBusy ? 'Sending…' : 'Send to admin'}
 									</button>
 									<span class="font-mono text-xs text-ink-mute">
-										{money(activity.base)} → <b class="text-ink-soft">{money(activity.requestedCap)}</b>
+										{money(activity.base)} →
+										<b class="text-ink-soft">{money(activity.requestedCap)}</b>
 									</span>
 								</div>
 								{#if activity.reqError}
@@ -217,7 +222,8 @@
 									<div class="space-y-1.5">
 										{#each activity.pending as p (p.id)}
 											<div class="flex items-center gap-2 text-xs">
-												<span class="i-solar-hourglass-line-duotone h-3.5 w-3.5 text-warning"></span>
+												<span class="i-solar-hourglass-line-duotone h-3.5 w-3.5 text-warning"
+												></span>
 												<span class="font-mono text-ink-soft">{money(p.requested_cap)}</span>
 												<span class="flex-1 truncate text-ink-mute">{p.reason ?? '—'}</span>
 												<Chip tone="warning">{p.status}</Chip>

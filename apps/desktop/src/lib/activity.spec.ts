@@ -127,9 +127,9 @@ describe('matchesRequest', () => {
 	})
 
 	test('needle and plane are ANDed — a text match on the wrong plane is filtered out', () => {
-		expect(matchesRequest(row({ model: 'opus', execution_location: 'cloud' }), 'opus', 'local')).toBe(
-			false
-		)
+		expect(
+			matchesRequest(row({ model: 'opus', execution_location: 'cloud' }), 'opus', 'local')
+		).toBe(false)
 	})
 })
 
@@ -139,7 +139,9 @@ describe('toCsv', () => {
 		const csv = toCsv([row(), row({ id: 'r2' })])
 		const lines = csv.split('\r\n')
 		expect(lines).toHaveLength(3) // header + 2 rows
-		expect(lines[0]).toBe('Time,Model,Adapter,Plane,Input tokens,Output tokens,Cost USD,Duration ms,Status,ID')
+		expect(lines[0]).toBe(
+			'Time,Model,Adapter,Plane,Input tokens,Output tokens,Cost USD,Duration ms,Status,ID'
+		)
 	})
 
 	test('carries the fields the export consumer needs (model, cost, id) verbatim', () => {

@@ -51,6 +51,11 @@ export function setFeaturePayload(
 	feature_key: string,
 	state: FeatureState,
 	scope: FeatureScope = WORKSPACE_SCOPE
-): { feature_key: string; scope_type: FeatureScopeType; scope_id: string | null; state: FeatureState } {
+): {
+	feature_key: string
+	scope_type: FeatureScopeType
+	scope_id: string | null
+	state: FeatureState
+} {
 	return { feature_key, scope_type: scope.type, scope_id: scope.id, state }
 }

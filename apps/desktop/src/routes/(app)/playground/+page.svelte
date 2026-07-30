@@ -176,11 +176,19 @@
 							{#if playground.judgeError}
 								<p class="text-sm text-danger">{playground.judgeError}</p>
 							{:else if playground.judging}
-								<p class="text-sm text-ink-mute italic">Scoring the answer via the gateway judge…</p>
+								<p class="text-sm text-ink-mute italic">
+									Scoring the answer via the gateway judge…
+								</p>
 							{:else}
 								{@const v = judgeVerdict(playground.judgeScore)}
 								<div class="max-w-[260px]">
-									<Meter label="Judge score" value={v.pct} max={100} display={v.display} tone={v.tone} />
+									<Meter
+										label="Judge score"
+										value={v.pct}
+										max={100}
+										display={v.display}
+										tone={v.tone}
+									/>
 								</div>
 								<p class="mt-2 text-sm text-ink-soft">{v.label}</p>
 							{/if}
@@ -196,7 +204,9 @@
 							)}</pre>
 					{/if}
 				{:else}
-					<p class="text-sm text-ink-mute">Run a prompt to see the answer, its meters, and the trace here.</p>
+					<p class="text-sm text-ink-mute">
+						Run a prompt to see the answer, its meters, and the trace here.
+					</p>
 				{/if}
 			</div>
 		</Card>

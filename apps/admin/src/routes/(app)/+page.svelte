@@ -1,5 +1,6 @@
 <script>
 	import { onMount } from 'svelte'
+	import { resolve } from '$app/paths'
 	import { AppShell, PageHeader, Card, CardHead, Stat, Meter, Chip } from '@torii/ui'
 	import { api } from '$lib/api'
 	import {
@@ -68,9 +69,7 @@
 	const trend = $derived(costTrend(requests, 14))
 	const tsum = $derived(trendSummary(trend))
 	const setup = $derived(setupSpine(providers, models, steps))
-	const hero = $derived(
-		heroInsight({ requests, plane, spend, orgRoot, budgetPct, setup })
-	)
+	const hero = $derived(heroInsight({ requests, plane, spend, orgRoot, budgetPct, setup }))
 	const heroTone = $derived(
 		hero.tone === 'danger'
 			? { box: 'bg-danger-soft', icon: 'text-danger' }
@@ -143,7 +142,7 @@
 					<p class="mt-1 max-w-2xl text-sm text-ink-soft">{hero.detail}</p>
 				</div>
 				<a
-					href={hero.actionRoute}
+					href={resolve(hero.actionRoute)}
 					class="shrink-0 rounded-md border border-paper-edge bg-paper px-3 py-1.5 text-sm text-ink transition-colors hover:bg-paper-mute"
 					>{hero.actionLabel}</a
 				>
@@ -208,7 +207,9 @@
 							{/if}
 						</div>
 					{:else}
-						<p class="text-sm text-ink-mute">No requests yet — the plane split appears as calls flow.</p>
+						<p class="text-sm text-ink-mute">
+							No requests yet — the plane split appears as calls flow.
+						</p>
 					{/if}
 				</div>
 			</Card>
@@ -231,7 +232,7 @@
 				<div class="grid grid-cols-1 sm:grid-cols-3">
 					{#each setup as s, i (s.key)}
 						<a
-							href={s.route}
+							href={resolve(s.route)}
 							class="flex flex-col gap-2.5 p-5 transition-colors hover:bg-paper-mute/40 {i > 0
 								? 'border-t border-paper-edge sm:border-l sm:border-t-0'
 								: ''}"
@@ -244,7 +245,8 @@
 								<span class="{s.icon} h-3.5 w-3.5 text-ink-soft"></span>
 								<span class="text-sm font-semibold text-ink">{s.title}</span>
 								<span class="flex-1"></span>
-								<span class="i-solar-alt-arrow-right-bold-duotone h-3.5 w-3.5 text-ink-faint"></span>
+								<span class="i-solar-alt-arrow-right-bold-duotone h-3.5 w-3.5 text-ink-faint"
+								></span>
 							</div>
 							<div class="flex items-baseline gap-1">
 								<span class="font-heading text-2xl font-light leading-none text-ink">{s.stat}</span>

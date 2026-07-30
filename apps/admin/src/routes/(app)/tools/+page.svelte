@@ -221,7 +221,8 @@
 					<span class="i-solar-shield-keyhole-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
 					<span class="text-xs leading-relaxed text-ink-mute">
 						Default-deny — a role may call only the tools granted here (the role default). Per-space
-						tightening (a space can remove, never add) is a fast-follow. Enforced server-side.
+						tightening (a space can remove, never add) is a fast-follow. Allow-lists are saved now;
+						the gateway enforces them at tool-call time once the Tools runtime ships.
 					</span>
 				</div>
 			</Card>

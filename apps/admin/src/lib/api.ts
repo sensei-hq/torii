@@ -322,6 +322,15 @@ export const api = {
 	routing: () => gwGet<{ steps: RoutingStep[] }>('/v1/routing'),
 	governance: () => gwGet<{ features: Feature[] }>('/v1/governance'),
 	// writes — /rpc/* only:
+	// Ask an admin to raise the cap on a budget node — records a PENDING budget_requests
+	// row (capability `budget.request`); it changes no cap itself (approve does). The
+	// gateway 404s if the node isn't in the caller's tenant. `requested_cap` is absolute.
+	requestBudgetIncrease: (node_id: string, requested_cap: number, reason?: string) =>
+		gwPost<{ id: string; status: string }>('/rpc/budgets/request', {
+			node_id,
+			requested_cap,
+			reason
+		}),
 	approveBudgetRequest: (id: string) => gwPost('/rpc/budgets/approve-request', { id }),
 	denyBudgetRequest: (id: string) => gwPost('/rpc/budgets/deny-request', { id }),
 	upsertBudgetNode: (node: Record<string, unknown>) => gwPost('/rpc/budgets/upsert-node', node),

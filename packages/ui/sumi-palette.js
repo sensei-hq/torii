@@ -82,7 +82,7 @@ const sumi = {
 	100: '0.210 0.012 50', // card bg (dark)
 	200: '0.250 0.012 50', // inset (dark)
 	300: '0.320 0.012 50',
-	400: '0.420 0.010 50', // border (dark)
+	400: '0.300 0.010 50', // border (dark; --paper-edge) — subtle hairline just above paper-mute, matches mockup zs.css [data-theme=dark]
 	500: '0.570 0.010 50',
 	600: '0.420 0.012 85', // ink-faint (dark)
 	700: '0.600 0.010 85', // ink-mute (dark)

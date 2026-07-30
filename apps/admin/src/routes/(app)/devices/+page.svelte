@@ -25,7 +25,11 @@
 	/** @param {import('$lib/api').Device} d */
 	async function revoke(d) {
 		if (busy) return
-		if (!confirm(`Revoke ${d.name}? Its next request is denied immediately, even with a live session.`))
+		if (
+			!confirm(
+				`Revoke ${d.name}? Its next request is denied immediately, even with a live session.`
+			)
+		)
 			return
 		busy = d.id
 		error = ''
@@ -64,7 +68,9 @@
 			{#if error}
 				<Card pad
 					><p class="text-sm text-danger" role="alert">
-						{error}{error.includes('403') ? ' — needs the device.manage capability (owner/admin).' : ''}
+						{error}{error.includes('403')
+							? ' — needs the device.manage capability (owner/admin).'
+							: ''}
 					</p></Card
 				>
 			{/if}
@@ -78,9 +84,7 @@
 							class="flex items-center gap-3 border-b border-paper-edge px-4 py-3 last:border-b-0"
 							class:opacity-55={revoked}
 						>
-							<span
-								class="i-solar-laptop-bold-duotone h-5 w-5 flex-shrink-0 text-ink-mute"
-							></span>
+							<span class="i-solar-laptop-bold-duotone h-5 w-5 flex-shrink-0 text-ink-mute"></span>
 							<div class="min-w-0 flex-1">
 								<div class="flex flex-wrap items-center gap-2">
 									<span class="text-sm text-ink">{d.name}</span>
@@ -119,7 +123,8 @@
 					<span class="i-solar-shield-keyhole-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
 					<span class="text-xs leading-relaxed text-ink-mute">
 						Enforced server-side — the gateway checks device status on every request carrying an
-						<code class="font-mono">X-Torii-Device</code> header. Revocation takes effect on the very next call.
+						<code class="font-mono">X-Torii-Device</code> header. Revocation takes effect on the very
+						next call.
 					</span>
 				</div>
 			</Card>

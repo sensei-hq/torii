@@ -190,7 +190,9 @@
 			</Card>
 
 			<!-- Commercial billing (plans / seats / invoices / payment) is v1.x — DECISIONS §10.1. -->
-			<div class="flex items-start gap-2 rounded-lg border border-dashed border-paper-edge px-4 py-3">
+			<div
+				class="flex items-start gap-2 rounded-lg border border-dashed border-paper-edge px-4 py-3"
+			>
 				<span class="i-solar-info-circle-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
 				<span class="text-xs leading-relaxed text-ink-mute">
 					This screen is spend governance — the budget tree and increase requests. Plans, seats and

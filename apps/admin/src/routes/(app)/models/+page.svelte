@@ -63,7 +63,9 @@
 		<div class="px-5">
 			<Card pad
 				><p class="text-sm text-danger">
-					{error}{error.includes('403') ? ' — needs the model.manage capability (owner/admin).' : ''}
+					{error}{error.includes('403')
+						? ' — needs the model.manage capability (owner/admin).'
+						: ''}
 				</p></Card
 			>
 		</div>

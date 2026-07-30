@@ -89,7 +89,8 @@
 									>{s.sequence_order}</span
 								>
 								<span class="font-mono text-sm text-ink-soft">{s.router}</span>
-								<span class="i-solar-alt-arrow-right-bold-duotone h-3.5 w-3.5 text-ink-faint"></span>
+								<span class="i-solar-alt-arrow-right-bold-duotone h-3.5 w-3.5 text-ink-faint"
+								></span>
 								<span class="flex-1 font-mono text-sm text-ink">{s.model}</span>
 								<Chip tone={planeTone(s.plane)}>{s.plane}</Chip>
 								<button

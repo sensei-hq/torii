@@ -1,9 +1,17 @@
 <script>
+	import { onMount } from 'svelte'
 	import { ask } from '$lib/ask.svelte.js'
-	import { ExecBadge } from '@torii/ui'
+	import { LATENCY_MAX_MS, fmtLatency, latencyTone, routingReason } from '$lib/ask'
+	import { ExecBadge, Meter } from '@torii/ui'
 	import { session } from '@torii/core'
 
 	let draft = $state('')
+
+	// Load seam: the models the member may pin (cloud + on-device). Degrades internally, so a
+	// failure just leaves the picker with "Auto" — fire-and-forget, never blocks the screen.
+	onMount(() => {
+		ask.load()
+	})
 
 	function submit() {
 		const t = draft.trim()
@@ -28,31 +36,50 @@
 			<p class="text-xs uppercase tracking-wide text-ink-mute">Ask</p>
 			<h1 class="text-lg font-medium text-ink">Ask your workspace</h1>
 		</div>
-		<!-- D3 split-plane selector: choose where this Ask runs -->
-		<div
-			data-plane-toggle
-			class="inline-flex items-center gap-0.5 rounded-full border border-paper-edge p-0.5 text-xs"
-		>
-			<button
-				type="button"
-				data-plane="local"
-				onclick={() => ask.setPlane('local')}
-				class={ask.plane === 'local'
-					? 'inline-flex items-center gap-1 rounded-full bg-paper-soft px-2.5 py-1 font-medium text-accent'
-					: 'inline-flex items-center gap-1 px-2.5 py-1 text-ink-mute'}
+		<div class="flex items-center gap-3">
+			<!-- pinned-model control: pin the answering model (opts.model) or let the plane
+			     auto-route. Options are scoped to the current plane so a pin is always runnable. -->
+			<label class="flex items-center gap-1.5 text-xs text-ink-mute">
+				<span class="i-solar-pin-bold-duotone h-3.5 w-3.5 text-accent"></span>
+				<select
+					data-pin-model
+					aria-label="Pinned model"
+					bind:value={ask.model}
+					class="rounded border border-paper-edge bg-paper-soft px-2 py-1 text-xs text-ink focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+				>
+					<option value="">Auto · gateway chooses</option>
+					{#each ask.pinnable as m (m.id)}
+						<option value={m.id}>{m.name}</option>
+					{/each}
+				</select>
+			</label>
+
+			<!-- D3 split-plane selector: choose where this Ask runs -->
+			<div
+				data-plane-toggle
+				class="inline-flex items-center gap-0.5 rounded-full border border-paper-edge p-0.5 text-xs"
 			>
-				<span class="i-solar-cpu-bold-duotone h-3 w-3"></span>Local
-			</button>
-			<button
-				type="button"
-				data-plane="cloud"
-				onclick={() => ask.setPlane('cloud')}
-				class={ask.plane === 'cloud'
-					? 'inline-flex items-center gap-1 rounded-full bg-paper-soft px-2.5 py-1 font-medium text-accent'
-					: 'inline-flex items-center gap-1 px-2.5 py-1 text-ink-mute'}
-			>
-				<span class="i-solar-server-minimalistic-bold-duotone h-3 w-3"></span>Cloud
-			</button>
+				<button
+					type="button"
+					data-plane="local"
+					onclick={() => ask.setPlane('local')}
+					class={ask.plane === 'local'
+						? 'inline-flex items-center gap-1 rounded-full bg-paper-soft px-2.5 py-1 font-medium text-accent'
+						: 'inline-flex items-center gap-1 px-2.5 py-1 text-ink-mute'}
+				>
+					<span class="i-solar-cpu-bold-duotone h-3 w-3"></span>Local
+				</button>
+				<button
+					type="button"
+					data-plane="cloud"
+					onclick={() => ask.setPlane('cloud')}
+					class={ask.plane === 'cloud'
+						? 'inline-flex items-center gap-1 rounded-full bg-paper-soft px-2.5 py-1 font-medium text-accent'
+						: 'inline-flex items-center gap-1 px-2.5 py-1 text-ink-mute'}
+				>
+					<span class="i-solar-server-minimalistic-bold-duotone h-3 w-3"></span>Cloud
+				</button>
+			</div>
 		</div>
 	</header>
 
@@ -90,6 +117,27 @@
 								<span>$0</span>
 							{/if}
 						</div>
+
+						{#if turn.exec != null}
+							<!-- routing-reason: which plane/model answered and why (client-side legibility) -->
+							<p data-routing-reason class="mt-2 text-xs leading-relaxed text-ink-soft">
+								{routingReason({
+									plane: turn.exec.plane,
+									pinned: turn.pinned ?? false,
+									model: turn.exec.model
+								})}
+							</p>
+							<!-- latency meter: the real round-trip duration of this answer -->
+							<div data-latency class="mt-2 max-w-[220px]">
+								<Meter
+									label="Latency"
+									value={turn.exec.duration_ms}
+									max={LATENCY_MAX_MS}
+									display={fmtLatency(turn.exec.duration_ms)}
+									tone={latencyTone(turn.exec.duration_ms)}
+								/>
+							</div>
+						{/if}
 					</div>
 				</div>
 			{/if}

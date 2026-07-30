@@ -1,11 +1,15 @@
 <script>
 	import { onMount } from 'svelte'
-	import { AppShell, PageHeader, Card, CardHead, Meter, Chip, Async } from '@torii/ui'
+	import { AppShell, PageHeader, Card, CardHead, Meter, Chip, Async, Empty } from '@torii/ui'
 	import { api } from '$lib/api'
+	import { costBreakdown } from '$lib/billing'
 
 	let nodes = $state([])
 	let requests = $state([])
+	/** @type {import('$lib/api').RequestRow[]} — the inference ledger, aggregated for the cost breakdown */
+	let ledger = $state([])
 	let error = $state('')
+	let ledgerError = $state('')
 	let loading = $state(true)
 	let busy = $state('')
 	let editing = $state('') // node id being edited
@@ -21,8 +25,20 @@
 		} finally {
 			loading = false
 		}
+		// The cost breakdown reads the inference ledger (/v1/requests) — a different capability
+		// from budget.read. A denial (or a tenant with no traffic yet) must NOT blank the budget
+		// governance above, so it loads independently into its own error slot.
+		try {
+			const r = await api.requests(200)
+			ledger = r.requests
+		} catch (e) {
+			ledgerError = e instanceof Error ? e.message : String(e)
+		}
 	}
 	onMount(load)
+
+	// Provider/model spend aggregated from the real ledger, richest first.
+	const breakdown = $derived(costBreakdown(ledger))
 
 	/**
 	 * @param {string} id
@@ -186,6 +202,77 @@
 							>
 						</div>
 					{/each}
+				{/if}
+			</Card>
+
+			<!-- Cost breakdown: real metered spend aggregated by provider (adapter) and model from
+			     the inference ledger. This is the metering half of "billing" that IS built. -->
+			<Card flush>
+				<CardHead title="Cost breakdown" icon="i-solar-chart-2-bold-duotone">
+					{#snippet right()}
+						<span class="font-mono text-xs text-ink-mute">
+							{money(breakdown.total)} metered · {breakdown.calls} call{breakdown.calls === 1
+								? ''
+								: 's'}
+						</span>
+					{/snippet}
+				</CardHead>
+				{#if ledgerError}
+					<p class="px-4 py-4 text-sm text-ink-mute">Ledger unavailable — {ledgerError}</p>
+				{:else if breakdown.calls === 0}
+					<Empty
+						icon="i-solar-chart-2-bold-duotone"
+						message="No metered calls yet — provider and model spend will break down here as traffic flows through the gateway."
+						pad="py-8"
+					/>
+				{:else}
+					<div class="grid gap-0 md:grid-cols-2">
+						<!-- by provider (the routing adapter) -->
+						<div class="space-y-3 border-b border-paper-edge p-5 md:border-b-0 md:border-r">
+							<p class="text-xs uppercase tracking-wider text-ink-mute">By provider</p>
+							{#each breakdown.providers as p (p.provider)}
+								<div class="flex items-center gap-3">
+									<span class="h-2 w-2 shrink-0 rounded-full bg-ink-mute"></span>
+									<span class="w-28 truncate text-sm capitalize text-ink" title={p.provider}
+										>{p.provider}</span
+									>
+									<div class="flex-1">
+										<Meter
+											value={p.cost}
+											max={breakdown.total || 1}
+											tone={p.pct >= 50 ? 'accent' : 'ink'}
+										/>
+									</div>
+									<span
+										class="w-24 text-right font-mono text-xs {p.cost === 0
+											? 'text-success'
+											: 'text-ink-mute'}">{p.cost === 0 ? 'free' : money(p.cost)} · {p.pct}%</span
+									>
+								</div>
+							{/each}
+						</div>
+
+						<!-- by model -->
+						<div class="space-y-3 p-5">
+							<p class="text-xs uppercase tracking-wider text-ink-mute">By model</p>
+							{#each breakdown.models as m (m.provider + ' ' + m.model)}
+								<div class="flex items-center gap-3">
+									<span class="h-2 w-2 shrink-0 rounded-full bg-ink-mute"></span>
+									<span class="w-32 truncate font-mono text-sm text-ink" title={m.model}
+										>{m.model}</span
+									>
+									<div class="flex-1">
+										<Meter value={m.cost} max={breakdown.total || 1} />
+									</div>
+									<span
+										class="w-16 text-right font-mono text-xs {m.cost === 0
+											? 'text-success'
+											: 'text-ink-mute'}">{m.cost === 0 ? 'free' : money(m.cost)}</span
+									>
+								</div>
+							{/each}
+						</div>
+					</div>
 				{/if}
 			</Card>
 

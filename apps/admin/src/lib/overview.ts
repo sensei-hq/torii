@@ -9,6 +9,36 @@ export function money(n: number): string {
 	return '$' + (Number.isFinite(n) ? n : 0).toFixed(2)
 }
 
+// ── header (matches the mock's "Wed · 22 Apr · last 24h" / "Good morning, Aiko.") ──
+/** Time-of-day greeting. Pure (takes the clock) so it's unit-testable. */
+export function greeting(now: Date = new Date()): string {
+	const h = now.getHours()
+	if (h < 12) return 'Good morning'
+	if (h < 18) return 'Good afternoon'
+	return 'Good evening'
+}
+
+/** A short first name from an email local-part, e.g. `jerry.thomas@x` → `Jerry` (`''` if none). */
+export function displayName(email: string | null | undefined): string {
+	const local = (email ?? '').split('@')[0] ?? ''
+	const first = local.split(/[._-]+/).filter(Boolean)[0] ?? ''
+	return first ? first.charAt(0).toUpperCase() + first.slice(1) : ''
+}
+
+/** Header eyebrow like the mock's `Wed · 22 Apr · last 24h`. */
+export function dateEyebrow(now: Date = new Date()): string {
+	const wd = now.toLocaleDateString('en-US', { weekday: 'short' })
+	const mon = now.toLocaleDateString('en-US', { month: 'short' })
+	return `${wd} · ${now.getDate()} ${mon} · last 24h`
+}
+
+/** Mean request latency in seconds over recorded calls (0 when none), for the stat row. */
+export function avgLatencySec(requests: RequestRow[]): number {
+	const dur = requests.map((r) => r.duration_ms).filter((d) => Number.isFinite(d))
+	if (!dur.length) return 0
+	return Math.round((dur.reduce((s, d) => s + d, 0) / dur.length / 1000) * 10) / 10
+}
+
 // ── execution plane: on-device (local) vs via-gateway (cloud) ────────────────
 export interface ExecPlaneSplit {
 	/** calls that ran on the local plane (`execution_location === 'local'`). */

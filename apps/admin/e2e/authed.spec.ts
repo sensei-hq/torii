@@ -9,7 +9,7 @@ test.describe('authenticated admin', () => {
 	})
 
 	test('Overview renders live aggregates + real identity', async ({ page }) => {
-		await expect(page.getByRole('heading', { name: /daily briefing/i })).toBeVisible()
+		await expect(page.getByRole('heading', { name: /good (morning|afternoon|evening)/i })).toBeVisible()
 		// the top bar shows the real signed-in identity + a sign-out control
 		await expect(page.getByText(/@/).first()).toBeVisible()
 		await expect(page.getByRole('button', { name: /sign out/i })).toBeVisible()
@@ -51,7 +51,7 @@ test.describe('authenticated admin', () => {
 
 		// leave + return (client-side) → the screen re-fetches from the gateway
 		await page.getByRole('link', { name: /overview/i }).click()
-		await expect(page.getByRole('heading', { name: /daily briefing/i })).toBeVisible()
+		await expect(page.getByRole('heading', { name: /good (morning|afternoon|evening)/i })).toBeVisible()
 		await page.getByRole('link', { name: /^settings$/i }).click()
 		await expect(toggle()).toBeEnabled({ timeout: 10_000 })
 		await expect(toggle()).toHaveAttribute('aria-checked', String(!before))

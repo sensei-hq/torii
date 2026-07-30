@@ -83,7 +83,9 @@
 		{#if error}
 			<Card pad
 				><p class="text-sm text-danger">
-					{error}{error.includes('403') ? ' — needs the tenant.manage capability (owner/admin).' : ''}
+					{error}{error.includes('403')
+						? ' — needs the tenant.manage capability (owner/admin).'
+						: ''}
 				</p></Card
 			>
 		{/if}

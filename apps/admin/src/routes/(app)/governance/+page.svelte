@@ -76,15 +76,11 @@
 		<div class="space-y-4 px-5 pb-6">
 			<div class="grid grid-cols-3 gap-4">
 				<Card pad>
-					<div class="text-xs font-semibold uppercase tracking-wider text-ink-mute">
-						Features
-					</div>
+					<div class="text-xs font-semibold uppercase tracking-wider text-ink-mute">Features</div>
 					<div class="font-heading text-2xl font-light text-ink">{features.length}</div>
 				</Card>
 				<Card pad>
-					<div class="text-xs font-semibold uppercase tracking-wider text-ink-mute">
-						Overridden
-					</div>
+					<div class="text-xs font-semibold uppercase tracking-wider text-ink-mute">Overridden</div>
 					<div class="font-heading text-2xl font-light text-ink">{overrides}</div>
 				</Card>
 				<Card pad>

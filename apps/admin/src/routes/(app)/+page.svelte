@@ -142,9 +142,7 @@
 										<div class="flex-1">
 											<Meter value={m.calls} max={topModels[0].calls} tone="ink" />
 										</div>
-										<span class="w-10 text-right font-mono text-xs text-ink-mute"
-											>{m.calls}</span
-										>
+										<span class="w-10 text-right font-mono text-xs text-ink-mute">{m.calls}</span>
 									</div>
 								{/each}
 							</div>

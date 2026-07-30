@@ -1,6 +1,7 @@
 <script>
 	import { setContext, onMount } from 'svelte'
 	import { goto } from '$app/navigation'
+	import { resolve } from '$app/paths'
 	import { api } from '$lib/api'
 
 	let { children } = $props()
@@ -28,15 +29,14 @@
 		// managed entirely by api.ts's supabase-js client; the server hooks.server.js
 		// kavach handle enforces route rules — no client kavach instance is needed here.)
 		if (!(await api.hasSession())) {
-			goto('/signin')
+			goto(resolve('/signin'))
 			return
 		}
 		ready = true
 		// Best-effort real identity — the shell renders regardless of this resolving.
 		try {
 			const { email, role, org } = await api.identity()
-			if (email)
-				shell.user = { name: email, initial: email[0].toUpperCase(), role: role ?? '' }
+			if (email) shell.user = { name: email, initial: email[0].toUpperCase(), role: role ?? '' }
 			if (org) shell.org = { mark: org[0].toUpperCase(), name: org, sub: 'organization' }
 		} catch {
 			/* shell falls back to a neutral label */

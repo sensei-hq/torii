@@ -40,9 +40,15 @@ describe('Zen-Sumi grid consistency', () => {
 			for (const file of walk(root)) {
 				const src = readFileSync(file, 'utf8')
 				const hits = src.match(OFF_GRID_TEXT)
-				if (hits) offenders.push(`${relative(resolve(here, '../../../..'), file)}: ${[...new Set(hits)].join(', ')}`)
+				if (hits)
+					offenders.push(
+						`${relative(resolve(here, '../../../..'), file)}: ${[...new Set(hits)].join(', ')}`
+					)
 			}
 		}
-		expect(offenders, `off-grid text sizes found — snap to a presetRokkit stop:\n${offenders.join('\n')}`).toEqual([])
+		expect(
+			offenders,
+			`off-grid text sizes found — snap to a presetRokkit stop:\n${offenders.join('\n')}`
+		).toEqual([])
 	})
 })

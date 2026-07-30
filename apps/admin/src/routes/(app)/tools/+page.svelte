@@ -89,7 +89,9 @@
 			{#if error}
 				<Card pad
 					><p class="text-sm text-danger" role="alert">
-						{error}{error.includes('403') ? ' — needs the mcp.manage capability (owner/admin).' : ''}
+						{error}{error.includes('403')
+							? ' — needs the mcp.manage capability (owner/admin).'
+							: ''}
 					</p></Card
 				>
 			{/if}
@@ -164,9 +166,8 @@
 									>Tool</th
 								>
 								{#each roles as r (r.id)}
-									<th
-										class="px-2 py-2 text-center text-xs font-medium text-ink-soft"
-										title={r.name}>{r.key}</th
+									<th class="px-2 py-2 text-center text-xs font-medium text-ink-soft" title={r.name}
+										>{r.key}</th
 									>
 								{/each}
 							</tr>

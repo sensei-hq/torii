@@ -25,7 +25,7 @@ describe('Stat', () => {
 		const label = container.querySelector('.uppercase')
 		expect(label?.className).toContain('text-xs')
 		expect(label?.className).toContain('font-medium')
-		expect(label?.className).toContain('tracking-[0.18em]')
+		expect(label?.className).toContain('tracking-widest')
 		expect(label?.className).not.toContain('font-semibold')
 	})
 
@@ -64,7 +64,7 @@ describe('PageHeader', () => {
 		const { container } = render(PageHeader, { props })
 		const eyebrow = container.querySelector('.uppercase')
 		expect(eyebrow?.className).toContain('font-medium')
-		expect(eyebrow?.className).toContain('tracking-[0.18em]')
+		expect(eyebrow?.className).toContain('tracking-widest')
 	})
 
 	test('markup snapshot', () => {
@@ -78,7 +78,7 @@ describe('CardHead', () => {
 		const { container } = render(CardHead, { props: { title: 'Execution plane' } })
 		const eyebrow = container.querySelector('.uppercase')
 		expect(eyebrow?.className).toContain('font-medium')
-		expect(eyebrow?.className).toContain('tracking-[0.18em]')
+		expect(eyebrow?.className).toContain('tracking-widest')
 		expect(eyebrow?.className).not.toContain('font-semibold')
 	})
 

@@ -21,3 +21,14 @@ export const borderRadius = {
 	lg: '10px',
 	full: '9999px'
 }
+
+// Letter-spacing — so eyebrows use the semantic `tracking-widest`, never an arbitrary
+// `tracking-[0.18em]`. `widest` = the mock's measured eyebrow tracking (1.98px @ 11px = 0.18em);
+// `tight` = the mock's display-title tracking (~-0.02em).
+export const letterSpacing = {
+	tight: '-0.02em',
+	normal: '0',
+	wide: '0.05em',
+	wider: '0.1em',
+	widest: '0.18em'
+}

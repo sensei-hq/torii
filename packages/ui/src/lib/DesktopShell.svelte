@@ -81,7 +81,13 @@
 </script>
 
 <div data-desktop-shell class="grid h-full grid-rows-[auto_1fr]" use:shortcuts={commands}>
-	<TitleBar {user} {brand} title={workspace.name} onsearch={() => (paletteOpen = true)} {onsignout} />
+	<TitleBar
+		{user}
+		{brand}
+		title={workspace.name}
+		onsearch={() => (paletteOpen = true)}
+		{onsignout}
+	/>
 	<div class="grid min-h-0 grid-cols-[15rem_1fr] overflow-hidden">
 		<nav
 			aria-label="Primary"
@@ -110,9 +116,7 @@
 			<!-- nav groups -->
 			{#each NAV as group (group.label)}
 				<div class="mt-5">
-					<div
-						class="mb-1.5 px-2 text-xs font-semibold uppercase tracking-[0.14em] text-ink-faint"
-					>
+					<div class="mb-1.5 px-2 text-xs font-semibold uppercase tracking-[0.14em] text-ink-faint">
 						{group.label}
 					</div>
 					<div class="flex flex-col gap-0.5">

@@ -130,6 +130,11 @@ const OVERVIEW: Role[] = [
 		role: 'setup step title',
 		app: { text: 'connect routers', mode: 'exact' },
 		mock: { text: 'connect routers', mode: 'exact' }
+	},
+	{
+		role: 'alerts card eyebrow',
+		app: { text: 'alerts · needs attention', mode: 'exact' },
+		mock: { text: 'alerts · needs attention', mode: 'exact' }
 	}
 ]
 

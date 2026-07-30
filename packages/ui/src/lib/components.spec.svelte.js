@@ -3,6 +3,7 @@ import { render } from '@testing-library/svelte'
 import Stat from './Stat.svelte'
 import PageHeader from './PageHeader.svelte'
 import CardHead from './CardHead.svelte'
+import AlertsCard from './AlertsCard.svelte'
 
 // Component-level guard for the mock-matched typography/spacing CLASSES on the shared Zen-Sumi
 // components. jsdom doesn't compute CSS (the page-level e2e/fidelity.spec.ts does that against the
@@ -83,6 +84,58 @@ describe('CardHead', () => {
 
 	test('markup snapshot', () => {
 		const { container } = render(CardHead, { props: { title: 'Execution plane' } })
+		expect(container.innerHTML).toMatchSnapshot()
+	})
+})
+
+describe('AlertsCard', () => {
+	const alerts = [
+		{
+			id: 'a1',
+			severity: 'warning',
+			icon: 'i-solar-wallet-2-bold-duotone',
+			text: 'Support at 92%',
+			route: '/billing'
+		},
+		{
+			id: 'a2',
+			severity: 'accent',
+			icon: 'i-solar-key-bold-duotone',
+			text: '2 routers need a key',
+			route: '/connections'
+		}
+	]
+
+	test('renders a row per alert with a severity-toned dot', () => {
+		const { container } = render(AlertsCard, { props: { alerts } })
+		const rows = container.querySelectorAll('[data-severity]')
+		expect(rows).toHaveLength(2)
+		expect(rows[0].querySelector('.bg-warning')).toBeTruthy() // warning → amber
+		expect(rows[1].querySelector('.bg-accent')).toBeTruthy() // accent → vermillion
+		expect(container.textContent).toContain('2 open')
+	})
+
+	test('empty alerts → the reassuring empty state, no rows', () => {
+		const { container } = render(AlertsCard, { props: { alerts: [] } })
+		expect(container.querySelectorAll('[data-severity]')).toHaveLength(0)
+		expect(container.textContent).toContain('Nothing needs attention')
+	})
+
+	test('routes user intent: opening a row calls onopen(route); dismiss calls ondismiss(id)', async () => {
+		const opened = []
+		const dismissed = []
+		const { container } = render(AlertsCard, {
+			props: { alerts, onopen: (r) => opened.push(r), ondismiss: (id) => dismissed.push(id) }
+		})
+		const firstRow = container.querySelector('[data-severity]')
+		firstRow.querySelector('button').click() // the text button opens
+		firstRow.querySelector('button[aria-label="Dismiss alert"]').click()
+		expect(opened).toEqual(['/billing'])
+		expect(dismissed).toEqual(['a1'])
+	})
+
+	test('markup snapshot', () => {
+		const { container } = render(AlertsCard, { props: { alerts } })
 		expect(container.innerHTML).toMatchSnapshot()
 	})
 })

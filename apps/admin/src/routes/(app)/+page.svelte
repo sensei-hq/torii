@@ -1,8 +1,10 @@
 <script>
 	import { onMount } from 'svelte'
 	import { resolve } from '$app/paths'
-	import { AppShell, PageHeader, Card, CardHead, Stat, Meter, Chip } from '@torii/ui'
+	import { goto } from '$app/navigation'
+	import { AppShell, PageHeader, Card, CardHead, Stat, Meter, Chip, AlertsCard } from '@torii/ui'
 	import { api } from '$lib/api'
+	import { alertsState } from '$lib/alerts-state.svelte'
 	import {
 		execPlaneSplit,
 		costTrend,
@@ -51,6 +53,8 @@
 			models = m.models
 			steps = rt.steps
 			email = id.email ?? ''
+			// Alerts derive from the reads above (ui-state-pattern Load→State seam), no new backend.
+			alertsState.load({ nodes, requests, providers })
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e)
 		} finally {
@@ -180,6 +184,13 @@
 					>{hero.actionLabel}</a
 				>
 			</Card>
+
+			<!-- proactive alerts (mock's next section) — derived from budget/health/connection signals -->
+			<AlertsCard
+				alerts={alertsState.visible}
+				onopen={(route) => goto(resolve(route))}
+				ondismiss={(id) => alertsState.dismiss(id)}
+			/>
 
 			<!-- headline stats (mock: Spend·today / Calls served / Fallbacks / Avg latency), all live.
 			 Fallbacks needs the per-call routing trace (Pass 2) — On-device stands in until then. -->

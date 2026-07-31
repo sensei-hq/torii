@@ -134,10 +134,8 @@
 					<div class="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-ink-mute">
 						<span class="font-mono">{playground.result.model ?? '—'}</span>
 						<span class="text-paper-edge">·</span>
-						<ExecBadge
-							plane={playground.result.plane}
-							region={playground.result.plane === 'cloud' ? 'eu-west-2' : ''}
-						/>
+						<!-- region omitted (M3): sourced from the gateway response, never a hardcode. -->
+						<ExecBadge plane={playground.result.plane} />
 						<button
 							class="ml-auto text-accent hover:underline"
 							onclick={() => playground.toggleInspector()}

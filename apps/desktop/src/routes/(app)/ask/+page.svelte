@@ -108,10 +108,9 @@
 						<div class="mt-1.5 flex items-center gap-2 text-xs text-ink-mute">
 							<span class="font-medium">{turn.exec?.model ?? 'gemma2:2b'}</span>
 							<span class="text-paper-edge">·</span>
-							<ExecBadge
-								plane={turn.exec?.plane ?? 'local'}
-								region={turn.exec?.plane === 'cloud' ? 'eu-west-2' : ''}
-							/>
+							<!-- region omitted: it must come from the gateway (M3) — no fabricated constant.
+							     The badge shows the honest plane ("via gateway") until the response carries it. -->
+							<ExecBadge plane={turn.exec?.plane ?? 'local'} />
 							{#if turn.exec != null && turn.exec.cost_usd === 0}
 								<span class="text-paper-edge">·</span>
 								<span>$0</span>

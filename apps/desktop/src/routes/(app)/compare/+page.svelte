@@ -289,7 +289,8 @@
 								<p class="text-sm text-danger">{r.error}</p>
 							{:else if r?.status === 'ok'}
 								<div class="mb-2">
-									<ExecBadge plane={r.plane} region={r.plane === 'cloud' ? 'eu-west-2' : ''} />
+									<!-- region omitted (M3): from the gateway response, not a hardcode. -->
+									<ExecBadge plane={r.plane} />
 								</div>
 								<div class="whitespace-pre-wrap text-[13px] leading-relaxed text-ink">
 									{r.content}

@@ -13,5 +13,5 @@
 			? 'i-solar-cpu-bold-duotone h-3 w-3'
 			: 'i-solar-server-minimalistic-bold-duotone h-3 w-3'}
 	></span>
-	{local ? 'on your device' : `via gateway · ${region}`}
+	{local ? 'on your device' : region ? `via gateway · ${region}` : 'via gateway'}
 </span>

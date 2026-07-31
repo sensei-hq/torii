@@ -3,27 +3,12 @@
    Layout: full-width intro header (brand · eyebrow · headline · summary),
    then two columns — routing diagram + value props | sign-in card. */
 (function () {
+  const { Card, Tag, Button } = window.StrategosUI;
   const { Icon, BrandIcon, Enso, MarkPaths } = window.StrategosIcons;
-  const { PROVIDER_HUE } = window.StrategosData;
+  const { PROVIDER_HUE } = window.StrategosAPI;
   const { useState } = React;
 
-  const IDENTITIES = [
-    { persona: 'admin',  initial: 'A', name: 'Aiko Tanaka',  email: 'aiko@northwind.co',  role: 'Administrator', scope: 'Full control · governance · billing' },
-    { persona: 'member', initial: 'M', name: 'Mara Okafor',  email: 'mara@northwind.co',  role: 'Member',        scope: 'Leasing Ops · create, ask & share' },
-  ];
-
-  const PROVIDERS = [
-    { key: 'anthropic', label: 'anthropic', y: 38 },
-    { key: 'google',    label: 'google',    y: 92 },
-    { key: 'openai',    label: 'openai',    y: 146 },
-    { key: 'local',     label: 'local',     y: 200 },
-  ];
-
-  const VALUE = [
-    { ic: 'routing', t: 'Route across every provider', s: 'One endpoint. Step-down routing and a free-tier floor pick the cheapest model that still answers well.' },
-    { ic: 'wallet',  t: 'Spend with intent',           s: 'Org, team and user budgets with hard caps. Blended cost per call is down 35% this quarter.' },
-    { ic: 'shield',  t: 'Govern with confidence',      s: 'OAuth, role-based access and a full request ledger — every call traceable, every key accounted for.' },
-  ];
+  const { IDENTITIES, PROVIDERS, VALUE } = window.StrategosAPI.content.signin;
 
   // routing diagram — providers on the left converge through the gateway enso
   // and out to the workspace. hairline strokes, vermillion reserved for the hub.
@@ -78,7 +63,7 @@
     return (
       <div className="flex items-center gap-3">
         <Enso size={size} />
-        <span style={{ fontFamily: 'var(--font-display)', fontSize: font, letterSpacing: '-0.02em' }}>{name}</span>
+        <span className="font-display tracking-tight" style={{ fontSize: font}}>{name}</span>
       </div>
     );
   }
@@ -94,31 +79,6 @@
 
     return (
       <div className="sgn-root">
-        <style>{`
-          .sgn-root { position: fixed; inset: 0; background: var(--paper); overflow: auto; }
-          .sgn-wrap { max-width: 1100px; margin: 0 auto; padding: var(--space-7) clamp(20px, 5vw, 48px) var(--space-7); }
-          .sgn-head { padding-bottom: var(--space-2); border-bottom: 1px solid var(--paper-edge); }
-          .sgn-head-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
-          .sgn-body { display: grid; grid-template-columns: 1fr; gap: var(--space-7); padding-top: var(--space-7); align-items: start; }
-          .sgn-intro { min-width: 0; }
-          .sgn-main { display: flex; justify-content: center; min-width: 0; }
-          .sgn-graphic { width: 100%; height: auto; display: block; }
-          .sgn-value { display: flex; flex-direction: column; gap: var(--space-4); margin-top: var(--space-6); }
-          .sgn-value-row { display: grid; grid-template-columns: 36px 1fr; gap: var(--space-3); align-items: start; }
-          .sgn-value-ic { width: 36px; height: 36px; border-radius: var(--radius); display: grid; place-items: center; background: var(--paper-soft); border: 1px solid var(--paper-edge); }
-          .sgn-flow { stroke-dasharray: 5 90; stroke-dashoffset: 0; }
-          @media (prefers-reduced-motion: no-preference) {
-            .sgn-flow { animation: sgn-flow 2.6s linear infinite; }
-          }
-          @keyframes sgn-flow { to { stroke-dashoffset: -95; } }
-          @media (max-width: 899px) {
-            .sgn-intro { display: none; }
-          }
-          @media (min-width: 900px) {
-            .sgn-body { grid-template-columns: 1.05fr 0.95fr; gap: clamp(48px, 7vw, 96px); }
-            .sgn-main { justify-content: flex-end; }
-          }
-        `}</style>
 
         <div className="sgn-wrap rise">
           {/* ── header · spans both columns ───────────────────────── */}
@@ -128,27 +88,27 @@
                 <Brand size={32} font={28} name={isAdmin ? 'Seiki' : 'Torii'} />
                 <span className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-mute)', border: '1px solid var(--paper-edge)', borderRadius: 'var(--radius-full)', padding: '1px 7px' }}>v1.0</span>
               </span>
-              <div className="zs-eyebrow" style={{ color: 'var(--accent)' }}>{isAdmin ? 'Admin portal · define · manage · control · inspect' : 'AI gateway · routing & governance'}</div>
+              <div className="zs-eyebrow text-accent">{isAdmin ? 'Admin portal · define · manage · control · inspect' : 'AI gateway · routing & governance'}</div>
             </div>
           </header>
 
-          <div className="sgn-body">
+          <div className="sgn-body grid grid-cols-1 items-start gap-12 pt-12 lg:grid-cols-[1.05fr_0.95fr] lg:gap-[clamp(48px,7vw,96px)]">
             {/* ── left · routing diagram + value props ─────────────── */}
-            <section className="sgn-intro">
-              <p className="zs-body-sm" style={{ marginBottom: 'var(--space-5)', color: 'var(--ink-soft)', maxWidth: 460 }}>
+            <section className="sgn-intro lt-lg:hidden">
+              <p className="zs-body-sm mb-6 text-ink-soft max-w-[460px]">
                 {isAdmin ? 'Seiki' : 'Torii'} routes every request across Anthropic, Google, OpenAI and your local models — then keeps spend, access and answer quality under one roof.
               </p>
-              <div className="card" style={{ padding: 'var(--space-5) var(--space-5) var(--space-4)' }}>
+              <Card className="pt-6 px-6 pb-4">
                 <RoutingGraphic />
-              </div>
+              </Card>
 
               <div className="sgn-value">
                 {VALUE.map((v) => (
                   <div key={v.t} className="sgn-value-row">
                     <span className="sgn-value-ic"><Icon name={v.ic} size={18} tone="accent" /></span>
                     <span>
-                      <span style={{ display: 'block', fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--ink)' }}>{v.t}</span>
-                      <span style={{ display: 'block', fontSize: 'var(--text-sm)', color: 'var(--ink-mute)', marginTop: 3, lineHeight: 1.45 }}>{v.s}</span>
+                      <span className="block text-sm font-semibold text-ink">{v.t}</span>
+                      <span className="block text-sm text-ink-mute mt-1 leading-[1.45]">{v.s}</span>
                     </span>
                   </div>
                 ))}
@@ -156,38 +116,38 @@
             </section>
 
             {/* ── right · sign in ──────────────────────────────────── */}
-            <main className="sgn-main">
-              <div style={{ width: 400, maxWidth: '100%' }}>
-            <div className="card" style={{ padding: 'var(--space-6)' }}>
-              <h1 className="zs-h2" style={{ textAlign: 'center', marginBottom: 'var(--space-5)' }}>{isAdmin ? 'Sign in to the admin portal' : 'Sign in to your workspace'}</h1>
+            <main className="sgn-main lg:justify-end">
+              <div className="w-[400px] max-w-full">
+            <Card className="p-8">
+              <h1 className="zs-h2 text-center mb-6">{isAdmin ? 'Sign in to the admin portal' : 'Sign in to your workspace'}</h1>
 
               {/* OAuth — v1 sign-in */}
-              <div className="flex flex-col" style={{ gap: 8 }}>
-                <button className="zs-btn zs-btn-secondary" style={{ width: '100%', justifyContent: 'center', height: 40 }} onClick={() => onSignIn(sel)}>
+              <div className="flex flex-col gap-2">
+                <Button className="w-full justify-center h-[40px]" variant="secondary" onClick={() => onSignIn(sel)}>
                   <BrandIcon name="google" size={17} /> Continue with Google
-                </button>
-                <button className="zs-btn zs-btn-secondary" style={{ width: '100%', justifyContent: 'center', height: 40 }} onClick={() => onSignIn(sel)}>
+                </Button>
+                <Button className="w-full justify-center h-[40px]" variant="secondary" onClick={() => onSignIn(sel)}>
                   <BrandIcon name="github" size={17} tone="ink" /> Continue with GitHub
-                </button>
+                </Button>
               </div>
 
-              <div className="flex items-center gap-3" style={{ margin: 'var(--space-4) 0' }}>
-                <span className="zs-rule" style={{ flex: 1 }} />
-                <span className="zs-meta" style={{ fontSize: 10 }}>OR</span>
-                <span className="zs-rule" style={{ flex: 1 }} />
+              <div className="flex items-center gap-3 my-4 mx-0">
+                <span className="zs-rule flex-1" />
+                <span className="zs-meta text-[10px]">OR</span>
+                <span className="zs-rule flex-1" />
               </div>
 
               {/* magic link — passwordless email (v1 primary) */}
-              <label className="zs-eyebrow" style={{ display: 'block', marginBottom: 6 }}>Work email</label>
-              <div className="zs-input" style={{ marginBottom: 'var(--space-3)' }}>
+              <label className="zs-eyebrow block mb-1.5">Work email</label>
+              <div className="zs-input mb-3">
                 <Icon name="user" size={14} tone="mute" /><input value={id.email} readOnly />
               </div>
-              <button className="zs-btn zs-btn-secondary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => onSignIn(sel)}><Icon name="bolt" size={14} tone="soft" /> Email me a magic link</button>
-              <p className="zs-body-sm" style={{ textAlign: 'center', marginTop: 8, fontSize: 'var(--text-xs)', color: 'var(--ink-faint)' }}>Passwordless — we send a one-time sign-in link. No password to remember.</p>
-              <button className="zs-btn zs-btn-ghost" disabled style={{ width: '100%', justifyContent: 'center', marginTop: 8, opacity: 0.6 }} title="Fast-follow — not yet enabled"><Icon name="sso" size={14} tone="mute" /> SAML SSO — fast-follow</button>
+              <Button className="w-full justify-center" variant="secondary" onClick={() => onSignIn(sel)}><Icon name="bolt" size={14} tone="soft" /> Email me a magic link</Button>
+              <p className="zs-body-sm text-center mt-2 text-xs text-ink-faint">Passwordless — we send a one-time sign-in link. No password to remember.</p>
+              <Button className="w-full justify-center mt-2 opacity-60" variant="ghost" disabled title="Fast-follow — not yet enabled"><Icon name="sso" size={14} tone="mute" /> SAML SSO — fast-follow</Button>
 
               {/* identity / role picker */}
-              <div className="zs-eyebrow" style={{ margin: 'var(--space-5) 0 var(--space-3)' }}>Demo · sign in as</div>
+              <div className="zs-eyebrow mt-6 mx-0 mb-3">Demo · sign in as</div>
               <div className="flex flex-col gap-2">
                 {ids.map((i) => {
                   const on = sel === i.persona;
@@ -197,29 +157,29 @@
                       border: '1px solid ' + (on ? 'var(--accent)' : 'var(--paper-edge)'),
                       background: on ? 'var(--accent-soft)' : 'var(--paper)',
                     }}>
-                      <span className="ava" style={{ width: 32, height: 32, background: on ? 'var(--accent)' : 'var(--paper-mute)', color: on ? 'var(--paper)' : 'var(--ink)', borderColor: 'transparent' }}>{i.initial}</span>
-                      <span style={{ flex: 1, minWidth: 0 }}>
+                      <span className="ava w-[32px] h-[32px] border-transparent" style={{ background: on ? 'var(--accent)' : 'var(--paper-mute)', color: on ? 'var(--paper)' : 'var(--ink)'}}>{i.initial}</span>
+                      <span className="flex-1 min-w-0">
                         <span className="flex items-center gap-2">
-                          <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--ink)' }}>{i.name}</span>
-                          <span className="tag">{i.role}</span>
+                          <span className="text-sm font-semibold text-ink">{i.name}</span>
+                          <Tag>{i.role}</Tag>
                         </span>
-                        <span style={{ display: 'block', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-mute)', marginTop: 2 }}>{i.scope}</span>
+                        <span className="block font-mono text-xs text-ink-mute mt-0.5">{i.scope}</span>
                       </span>
-                      <span style={{ width: 16, height: 16, borderRadius: '50%', border: '1px solid ' + (on ? 'var(--accent)' : 'var(--paper-edge)'), display: 'grid', placeItems: 'center' }}>
-                        {on && <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--accent)' }} />}
+                      <span className="w-[16px] h-[16px] rounded-full grid place-items-center" style={{ border: '1px solid ' + (on ? 'var(--accent)' : 'var(--paper-edge)')}}>
+                        {on && <span className="w-[8px] h-[8px] rounded-full bg-accent" />}
                       </span>
                     </button>
                   );
                 })}
               </div>
-            </div>
+            </Card>
 
-            <p className="zs-body-sm" style={{ textAlign: 'center', marginTop: 'var(--space-4)', color: 'var(--ink-faint)', fontSize: 'var(--text-xs)' }}>
-              <Icon name="shield" size={12} tone="faint" style={{ display: 'inline-block', verticalAlign: '-2px', marginRight: 4 }} />
+            <p className="zs-body-sm text-center mt-4 text-ink-faint text-xs">
+              <Icon className="inline-block mr-1" name="shield" size={12} tone="faint" style={{ verticalAlign: '-2px'}} />
               Email + OAuth · SAML SSO fast-follow · session pinned to your tenant region
             </p>
-            <div style={{ textAlign: 'center', marginTop: 'var(--space-4)', paddingTop: 'var(--space-4)', borderTop: '1px solid var(--paper-edge)' }}>
-              <a href={cross.href} className="zs-body-sm" style={{ color: 'var(--accent)', textDecoration: 'none', fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <div className="text-center mt-4 pt-4 border-t">
+              <a href={cross.href} className="zs-body-sm text-accent font-medium inline-flex items-center gap-1.5" style={{ textDecoration: 'none'}}>
                 {cross.label} <Icon name="arrow" size={13} tone="accent" />
               </a>
             </div>

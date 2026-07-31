@@ -4,16 +4,11 @@
    custom / OpenAI-compatible endpoint with its region. */
 (function () {
   const { Icon } = window.StrategosIcons;
-  const { Pill, PageHeader } = window.StrategosUI;
-  const { ROUTERS } = window.StrategosData;
+  const { ViewPad, Card, CardHead, CardFoot, Button, Pill, PageHeader } = window.StrategosUI;
+  const { ROUTERS } = window.StrategosAPI;
   const { useState } = React;
 
-  const ROUTER_ICON = { Anthropic: 'provider', OpenAI: 'provider', Bedrock: 'router', Vercel: 'bolt', OpenRouter: 'globe', Ollama: 'database' };
-  const MASKED = { Anthropic: 'sk-ant-•••• 4f2a', OpenAI: 'sk-•••• 9c1e', Bedrock: 'arn:•••• prod', Vercel: 'vc-•••• 7b30', OpenRouter: 'or-•••• 22aa', Ollama: 'localhost:11434' };
-  const REGION0 = { Anthropic: 'eu-west-2', OpenAI: 'eu-west-2', Bedrock: 'eu-west-2', Vercel: 'fra1 · edge', OpenRouter: '—', Ollama: 'on-box' };
-  const SCOPES = [['all', 'All spaces'], ['finance', 'Finance only'], ['leasing', 'Leasing only'], ['admins', 'Admins only']];
-  const HEALTH = { healthy: ['healthy', 'var(--success)'], expiring: ['expiring soon', 'var(--warning)'], expired: ['expired', 'var(--accent)'] };
-  const EXP_DAYS = { Anthropic: 210, OpenAI: 120, Bedrock: 365, Vercel: 45, OpenRouter: 9, Ollama: null };
+  const { ROUTER_ICON, MASKED, REGION0, SCOPES, HEALTH, EXP_DAYS } = window.StrategosAPI.content.connections;
 
   function ConnectionsView() {
     const [rows, setRows] = useState(() => ROUTERS.map((r) => ({
@@ -51,43 +46,43 @@
     const inp = { border: '1px solid var(--paper-edge)', borderRadius: 'var(--radius)', background: 'var(--paper)', font: '500 13px var(--font-mono)', color: 'var(--ink)', padding: '7px 9px', width: '100%' };
 
     return (
-      <div className="view-pad rise">
+      <ViewPad className="rise">
         <PageHeader eyebrow="Connections" title="Provider connections"
           sub="The gateway routes every call through Northwind's own credentials. Keys live in the org vault — members never see them. Set each router's custody, rotate keys, or add a custom endpoint."
           actions={<>
             <Pill icon="keys">{connected} of {rows.length} connected</Pill>
-            <button className="zs-btn zs-btn-primary" onClick={() => setAddOpen((v) => !v)}><Icon name="plus" size={15} tone="paper" /> Add router</button>
+            <Button variant="primary" onClick={() => setAddOpen((v) => !v)}><Icon name="plus" size={15} tone="paper" /> Add router</Button>
           </>} />
 
         {addOpen && (
-          <div className="card rise" style={{ overflow: 'hidden', marginBottom: 'var(--space-5)', border: '1px solid var(--accent)' }}>
-            <div className="card-hd"><span className="zs-eyebrow">Add a custom · OpenAI-compatible router</span><button onClick={() => setAddOpen(false)} style={{ display: 'grid', placeItems: 'center' }}><Icon name="close" size={15} tone="mute" /></button></div>
-            <div style={{ padding: 'var(--space-5)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 'var(--space-4)', alignItems: 'end' }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}><span className="zs-eyebrow" style={{ margin: 0 }}>Name</span><input style={inp} value={custom.id} onChange={(e) => setCustom({ ...custom, id: e.target.value })} placeholder="Internal-LLM" /></label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}><span className="zs-eyebrow" style={{ margin: 0 }}>Base URL</span><input style={inp} value={custom.url} onChange={(e) => setCustom({ ...custom, url: e.target.value })} placeholder="https://llm.internal/v1" /></label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}><span className="zs-eyebrow" style={{ margin: 0 }}>Region</span><select style={inp} value={custom.region} onChange={(e) => setCustom({ ...custom, region: e.target.value })}>{['eu-west-2', 'us-east-1', 'eu-central-1', 'on-box'].map((r) => <option key={r} value={r}>{r}</option>)}</select></label>
-              <button className="zs-btn zs-btn-primary" onClick={addRouter}><Icon name="plus" size={14} tone="paper" /> Add router</button>
+          <Card className="rise overflow-hidden mb-6 border border-accent">
+            <CardHead><span className="zs-eyebrow">Add a custom · OpenAI-compatible router</span><button onClick={() => setAddOpen(false)} style={{ display: 'grid', placeItems: 'center' }}><Icon name="close" size={15} tone="mute" /></button></CardHead>
+            <div className="p-6 grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', alignItems: 'end' }}>
+              <label className="flex flex-col gap-1"><span className="zs-eyebrow m-0">Name</span><input style={inp} value={custom.id} onChange={(e) => setCustom({ ...custom, id: e.target.value })} placeholder="Internal-LLM" /></label>
+              <label className="flex flex-col gap-1"><span className="zs-eyebrow m-0">Base URL</span><input style={inp} value={custom.url} onChange={(e) => setCustom({ ...custom, url: e.target.value })} placeholder="https://llm.internal/v1" /></label>
+              <label className="flex flex-col gap-1"><span className="zs-eyebrow m-0">Region</span><select style={inp} value={custom.region} onChange={(e) => setCustom({ ...custom, region: e.target.value })}>{['eu-west-2', 'us-east-1', 'eu-central-1', 'on-box'].map((r) => <option key={r} value={r}>{r}</option>)}</select></label>
+              <Button variant="primary" onClick={addRouter}><Icon name="plus" size={14} tone="paper" /> Add router</Button>
             </div>
-          </div>
+          </Card>
         )}
 
-        <div className="card" style={{ overflow: 'hidden' }}>
-          <div className="card-hd">
+        <Card className="overflow-hidden">
+          <CardHead>
             <span className="zs-eyebrow">Routers &amp; credentials</span>
             <span className="flex items-center gap-2"><Icon name="lock" size={13} tone="success" /><span className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-mute)' }}>org vault · eu-west-2</span></span>
-          </div>
+          </CardHead>
 
           <div className="grid-flush-3">
             {rows.map((r, i) => {
               const on = r.keyed;
               return (
-                <div key={r.id} style={{ padding: '16px 18px', borderRight: i % 3 !== 2 ? '1px solid var(--paper-edge)' : 'none', borderTop: i >= 3 ? '1px solid var(--paper-edge)' : 'none', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div className="py-4 px-4 flex flex-col gap-3" key={r.id} style={{ borderRight: i % 3 !== 2 ? '1px solid var(--paper-edge)' : 'none', borderTop: i >= 3 ? '1px solid var(--paper-edge)' : 'none'}}>
                   <div className="flex items-center gap-3">
-                    <span style={{ width: 30, height: 30, borderRadius: 8, display: 'grid', placeItems: 'center', flexShrink: 0, border: '1px solid var(--paper-edge)', background: on ? 'var(--accent-soft)' : 'var(--paper-mute)' }}>
+                    <span className="w-[30px] h-[30px] rounded-[8px] grid place-items-center shrink-0 border" style={{ background: on ? 'var(--accent-soft)' : 'var(--paper-mute)' }}>
                       <Icon name={ROUTER_ICON[r.id] || 'router'} size={15} tone={on ? 'accent' : 'mute'} />
                     </span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--ink)' }}>{r.id}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold text-ink">{r.id}</div>
                       <div className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--ink-mute)' }}>{r.kind}</div>
                     </div>
                     <span className="status" style={{ color: on ? 'var(--success)' : 'var(--ink-faint)' }}>
@@ -97,26 +92,26 @@
                   </div>
 
                   {connecting === r.id ? (
-                    <div className="flex flex-col" style={{ gap: 6 }}>
-                      {r.oauth && <React.Fragment><button className="zs-btn zs-btn-primary zs-btn-sm" style={{ justifyContent: 'center' }} onClick={() => confirmConnect(r.id, true)}><Icon name="sso" size={13} tone="paper" /> Connect with {r.id} OAuth</button><div className="flex items-center gap-2"><span className="zs-rule" style={{ flex: 1 }} /><span className="zs-meta" style={{ fontSize: 10 }}>OR KEY</span><span className="zs-rule" style={{ flex: 1 }} /></div></React.Fragment>}
+                    <div className="flex flex-col gap-1.5">
+                      {r.oauth && <React.Fragment><Button className="justify-center" variant="primary" size="sm" onClick={() => confirmConnect(r.id, true)}><Icon name="sso" size={13} tone="paper" /> Connect with {r.id} OAuth</Button><div className="flex items-center gap-2"><span className="zs-rule flex-1" /><span className="zs-meta text-[10px]">OR KEY</span><span className="zs-rule flex-1" /></div></React.Fragment>}
                       <input autoFocus value={keyDraft} onChange={(e) => setKeyDraft(e.target.value)} placeholder={r.id === 'Ollama' ? 'localhost:11434' : 'paste API key…'} style={{ ...inp, fontSize: 12 }} />
                       <div className="flex items-center gap-2">
-                        <button className="zs-btn zs-btn-primary zs-btn-sm" style={{ flex: 1, justifyContent: 'center' }} onClick={() => confirmConnect(r.id)}><Icon name="check" size={13} tone="paper" /> Validate &amp; store</button>
-                        <button className="zs-btn zs-btn-ghost zs-btn-sm" onClick={() => setConnecting(null)}>Cancel</button>
+                        <Button className="flex-1 justify-center" variant="primary" size="sm" onClick={() => confirmConnect(r.id)}><Icon name="check" size={13} tone="paper" /> Validate &amp; store</Button>
+                        <Button variant="ghost" size="sm" onClick={() => setConnecting(null)}>Cancel</Button>
                       </div>
                     </div>
                   ) : on ? (
                     <React.Fragment>
-                      <div className="flex items-center gap-2" style={{ height: 32, padding: '0 10px', borderRadius: 8, background: 'var(--paper-mute)', border: '1px solid var(--paper-edge)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-mute)' }}>
+                      <div className="flex items-center gap-2 h-[32px] py-0 px-2.5 rounded-[8px] bg-paper-mute border font-mono text-xs text-ink-mute">
                         <Icon name="lock" size={12} tone="mute" />
-                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{flash === r.id ? 'rotated · ' : ''}{r.masked}</span>
+                        <span className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{flash === r.id ? 'rotated · ' : ''}{r.masked}</span>
                         <button type="button" onClick={() => rotate(r.id)} aria-label="rotate" title="Rotate key" style={{ display: 'grid', placeItems: 'center' }}><Icon name="refresh" size={12} tone="mute" /></button>
                         <button type="button" onClick={() => disconnect(r.id)} aria-label="disconnect" title="Revoke" style={{ display: 'grid', placeItems: 'center' }}><Icon name="close" size={13} tone="mute" /></button>
                       </div>
-                      <div className="flex items-center gap-2" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>
+                      <div className="flex items-center gap-2 font-mono text-xs">
                         <span className="dot" style={{ background: HEALTH[r.health][1] }} />
                         <span style={{ color: HEALTH[r.health][1] }}>{HEALTH[r.health][0]}</span>
-                        <span style={{ color: 'var(--ink-faint)' }}>· {r.expDays == null ? 'no expiry' : (r.expDays < 30 ? 'expires in ' + r.expDays + 'd' : 'rotates in ' + Math.round(r.expDays / 30) + 'mo')}</span>
+                        <span className="text-ink-faint">· {r.expDays == null ? 'no expiry' : (r.expDays < 30 ? 'expires in ' + r.expDays + 'd' : 'rotates in ' + Math.round(r.expDays / 30) + 'mo')}</span>
                         {r.masked.indexOf('oauth') === 0 && <span className="dtag">OAuth</span>}
                       </div>
                       <div className="flex items-center gap-2">
@@ -125,7 +120,7 @@
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-faint)', flexShrink: 0 }}>custody</span>
-                        <div style={{ display: 'inline-flex', border: '1px solid var(--paper-edge)', borderRadius: 'var(--radius)', overflow: 'hidden', opacity: r.canDevice ? 1 : 0.6 }}>
+                        <div className="inline-flex border rounded overflow-hidden" style={{ opacity: r.canDevice ? 1 : 0.6 }}>
                           {[['device', 'On-device'], ['proxied', 'Via gateway']].map(([v, lab], j) => {
                             const sel = r.custody === v;
                             const allowed = v === 'proxied' || r.canDevice;
@@ -137,9 +132,9 @@
                       </div>
                     </React.Fragment>
                   ) : (
-                    <button type="button" onClick={() => startConnect(r.id)} className="zs-btn zs-btn-secondary zs-btn-sm" style={{ width: '100%', justifyContent: 'center', borderStyle: 'dashed' }}>
+                    <Button className="w-full justify-center" variant="secondary" size="sm" type="button" onClick={() => startConnect(r.id)} style={{ borderStyle: 'dashed' }}>
                       <Icon name="plus" size={13} tone="soft" /> Connect {r.id}
-                    </button>
+                    </Button>
                   )}
 
                   <div className="flex items-center justify-between mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-mute)' }}>
@@ -150,12 +145,12 @@
             })}
           </div>
 
-          <div className="card-foot dashed">
+          <CardFoot dashed>
             <Icon name="shield" size={14} tone="success" />
-            <span style={{ lineHeight: 1.45 }}><b>Custody</b> decides whether a router’s keys run on-device or proxy through the gateway; <b>scope</b> limits which spaces/roles may use it. Keys show <b>health &amp; expiry</b> so you can rotate before they lapse. Anthropic supports <b>OAuth</b> connect; others take a vault key.</span>
-          </div>
-        </div>
-      </div>
+            <span className="leading-[1.45]"><b>Custody</b> decides whether a router’s keys run on-device or proxy through the gateway; <b>scope</b> limits which spaces/roles may use it. Keys show <b>health &amp; expiry</b> so you can rotate before they lapse. Anthropic supports <b>OAuth</b> connect; others take a vault key.</span>
+          </CardFoot>
+        </Card>
+      </ViewPad>
     );
   }
 

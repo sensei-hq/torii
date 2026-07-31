@@ -640,3 +640,91 @@ test.describe('fidelity — Routing matches the mock (header-level)', () => {
 		})
 	}
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Connections — a clean, close-to-mock screen: real BYOK vault (connect/rotate/
+// revoke + OAuth) in a "Routers & credentials" card grid. Custody, per-scope
+// enablement and add-custom-router are deferred (see the backlog). Full role table.
+// ─────────────────────────────────────────────────────────────────────────────
+const CONNECTIONS: Role[] = [
+	{
+		role: 'page title (h1)',
+		app: { selector: 'main h1' },
+		mock: { text: 'provider connections', mode: 'contains' }
+	},
+	{
+		role: 'header eyebrow',
+		app: { text: 'connections', mode: 'exact' },
+		mock: { text: 'connections', mode: 'exact' }
+	},
+	{
+		role: 'card head eyebrow',
+		app: { text: 'routers & credentials', mode: 'contains' },
+		mock: { text: 'routers & credentials', mode: 'contains' }
+	}
+]
+const CONN_CARD: Anchor = { text: 'routers & credentials', mode: 'contains' }
+
+async function gotoAppConnections(app: Page): Promise<void> {
+	await signIn(app)
+	await app
+		.getByRole('link', { name: /^connections$/i })
+		.first()
+		.click()
+	await expect(app.locator('main h1')).toHaveText(/provider connections/i, { timeout: 15_000 })
+}
+
+async function gotoMockConnections(mock: Page): Promise<void> {
+	await enterMock(mock)
+	await mock
+		.getByRole('button', { name: /^connections$/i })
+		.first()
+		.click()
+	await expect(mock.getByText(/provider connections/i).first()).toBeVisible({ timeout: 10_000 })
+}
+
+test.describe('fidelity — Connections matches the mock', () => {
+	for (const mode of ['light', 'dark'] as Mode[]) {
+		test(`typography + colour @ ${mode}`, async ({ browser }) => {
+			const appCtx = await browser.newContext({ viewport: DESKTOP })
+			const app = await appCtx.newPage()
+			await gotoAppConnections(app)
+			await setAppMode(app, mode)
+			const mockCtx = await browser.newContext({ viewport: DESKTOP })
+			const mock = await mockCtx.newPage()
+			await gotoMockConnections(mock)
+			await setMockMode(mock, mode)
+
+			const drift = await collectTypoColor(app, mock, CONNECTIONS, CONN_CARD, CONN_CARD)
+			await appCtx.close()
+			await mockCtx.close()
+			expect(
+				drift,
+				`${mode}-mode Connections typography/colour drift vs the mock:\n  ${drift.join('\n  ')}`
+			).toEqual([])
+		})
+	}
+
+	test('spacing @ desktop (1280px)', async ({ browser }) => {
+		const appCtx = await browser.newContext({ viewport: DESKTOP })
+		const app = await appCtx.newPage()
+		await gotoAppConnections(app)
+		await setAppMode(app, 'light')
+		const mockCtx = await browser.newContext({ viewport: DESKTOP })
+		const mock = await mockCtx.newPage()
+		await gotoMockConnections(mock)
+		await setMockMode(mock, 'light')
+
+		const drift = await collectCardSpacing(
+			app,
+			mock,
+			CONN_CARD,
+			CONN_CARD,
+			'routers & credentials',
+			'routers & credentials'
+		)
+		await appCtx.close()
+		await mockCtx.close()
+		expect(drift, `Connections spacing drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
+	})
+})

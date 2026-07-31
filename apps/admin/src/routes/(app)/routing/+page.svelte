@@ -1,6 +1,7 @@
 <script>
 	import { onMount } from 'svelte'
 	import { AppShell, PageHeader, Card, CardHead, Chip, Async } from '@torii/ui'
+	import { resolve } from '$app/paths'
 	import { api } from '$lib/api'
 
 	/** @type {import('$lib/api').RoutingStep[]} */
@@ -55,15 +56,25 @@
 
 <AppShell app="admin" title="Routing">
 	<PageHeader
-		eyebrow="Gateway"
-		title="Routing & fallback"
-		sub="Each capability's fallback chain — the ordered sequence of router → model the gateway steps through on budget pressure or provider error."
-	/>
+		eyebrow="Routing"
+		title="Spend it like it’s yours"
+		sub="Named fallback chains — the ordered router → model sequence the gateway steps through on budget pressure or provider error. Spend limits live in Organization; this is how the gateway behaves against them."
+	>
+		{#snippet actions()}
+			<a
+				href={resolve('/organization')}
+				class="inline-flex items-center gap-1.5 rounded-full border border-paper-edge bg-paper px-2.5 py-1 text-xs text-ink-soft transition-colors hover:bg-paper-mute"
+			>
+				<span class="i-solar-buildings-2-bold-duotone h-3.5 w-3.5 text-ink-mute"></span>
+				budget limits → Organization
+			</a>
+		{/snippet}
+	</PageHeader>
 
 	{#if loading}
 		<Async loading />
 	{:else if error}
-		<div class="px-5">
+		<div class="px-4 sm:px-6 xl:px-12">
 			<Card pad
 				><p class="text-sm text-danger">
 					{error}{error.includes('403') ? ' — needs the chain.read capability.' : ''}
@@ -71,7 +82,7 @@
 			>
 		</div>
 	{:else}
-		<div class="space-y-4 px-5 pb-6">
+		<div class="space-y-6 px-4 pb-12 sm:px-6 xl:px-12 xl:pb-16">
 			{#each chains as chain (chain.name)}
 				<Card flush>
 					<CardHead
@@ -81,13 +92,14 @@
 					<div>
 						{#each chain.rows as s (s.id)}
 							<div
-								class="flex items-center gap-3 border-b border-paper-edge px-4 py-2.5 last:border-b-0"
-								class:opacity-40={!s.is_active}
+								class="flex items-center gap-3 border-b border-paper-edge px-6 py-2.5 last:border-b-0"
+								class:opacity-50={!s.is_active}
 							>
 								<span
 									class="grid h-6 w-6 flex-shrink-0 place-items-center rounded-full bg-paper-mute font-mono text-xs text-ink-mute"
 									>{s.sequence_order}</span
 								>
+								<span class="h-2 w-2 shrink-0 rounded-full bg-ink-mute"></span>
 								<span class="font-mono text-sm text-ink-soft">{s.router}</span>
 								<span class="i-solar-alt-arrow-right-bold-duotone h-3.5 w-3.5 text-ink-faint"
 								></span>

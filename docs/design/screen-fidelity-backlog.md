@@ -23,7 +23,7 @@ vs the live mock at `:8890`), and keep unit coverage > 80% (`bun run test:covera
 | Connections | `/connections` | ✅ done | 3/3 | real BYOK vault (connect/rotate/revoke/OAuth); custody/scope/add-router deferred |
 | Tools & MCP | `/tools` | ⬜ | — | ⚠ allow-lists stored but NOT enforced at inference (security) |
 | Governance | `/governance` | ✅ header | 2/2 | real feature-gov + fleet + audit; DLP/policy editors deferred (P6) |
-| Budgets & billing | `/billing` | ⬜ | — | |
+| Budgets & billing | `/billing` | ✅ done | 3/3 | real budget tree + approvals + cost breakdown; commercial billing §10.1-deferred |
 | Devices | `/devices` | ⬜ | — | |
 | Settings | `/settings` | ⬜ | — | |
 | Onboarding | `/onboarding` | ⬜ (no route yet) | — | Pass-2 wizard (`onboarding_state` table) |

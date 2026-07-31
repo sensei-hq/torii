@@ -41,7 +41,7 @@ Config changes (`type-scale.js`, `uno.config.js`, `rokkit.config.js`) need a `vi
 ## The verification harness (two layers)
 
 - **Component/config (fast, no browser)** — `packages/ui/src/lib/type-scale.spec.svelte.js` (scale == mock) + `components.spec.svelte.js` (class contracts + snapshots). jsdom can't compute CSS, so it pins _classes_.
-- **Page (integration)** — `apps/admin/e2e/fidelity.spec.ts` drives the live mock (`:8890`) + authed app, diffs computed font size/weight/family/**color**/padding/gap/radius per role. `playwright.config` auto-starts the mock server. Extend by adding rows/screens.
+- **Page (integration)** — `apps/admin/e2e/fidelity.spec.ts` drives the live mock (`:8890`) + authed app and fails on drift, as a **(mode × viewport) matrix**: typography+colour+card-border+**token-parity** (`--accent`/`-soft`/`paper`/`ink`/`success`/`warning`) in LIGHT and DARK; spacing/radius+card-head+page-padding at mobile/tablet/desktop (catches responsive drift). `setAppMode`/`setMockMode` pin the mode (app defaults dark, mock light). Extend a screen by adding rows to `OVERVIEW`; add a screen by adding a table.
 
 ## Gotchas (each cost a rework cycle — check them)
 

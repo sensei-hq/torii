@@ -439,3 +439,112 @@ test.describe('fidelity — Requests (org lens) matches the mock', () => {
 		expect(drift, `Requests spacing drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
 	})
 })
+
+/** Card radius + border + responsive page side padding — for screens whose card carries no
+ *  stat tile / distinct card-head (e.g. a bare catalog table), where collectSpacing's tile
+ *  and head anchors don't apply. */
+async function collectCardSpacing(
+	app: Page,
+	mock: Page,
+	cardApp: Anchor,
+	cardMock: Anchor,
+	sideApp: string,
+	sideMock: string
+): Promise<string[]> {
+	const drift: string[] = []
+	const ac = await measureBox(app, cardApp)
+	const mc = await measureBox(mock, cardMock)
+	if (ac.radius !== mc.radius) drift.push(`card radius: app ${ac.radius} ≠ mock ${mc.radius}`)
+	if (ac.border !== mc.border) drift.push(`card border: app ${ac.border} ≠ mock ${mc.border}`)
+	const ap = await sidePad(app, sideApp)
+	const mp = await sidePad(mock, sideMock)
+	if (ap !== mp) drift.push(`page side padding: app ${ap} ≠ mock ${mp}`)
+	return drift
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Models — the catalog table. Real columns (provider, context, output, reachable,
+// enable) match the mock; the economics columns (tier/$/quality/latency) need a
+// catalog-metadata backend and are deferred (see the fidelity backlog).
+// ─────────────────────────────────────────────────────────────────────────────
+const MODELS: Role[] = [
+	{
+		role: 'page title (h1)',
+		app: { selector: 'main h1' },
+		mock: { text: 'model catalog', mode: 'contains' }
+	},
+	{
+		role: 'header eyebrow',
+		app: { text: 'models', mode: 'exact' },
+		mock: { text: 'models', mode: 'exact' }
+	}
+	// NOTE: the table header ("Context") is intentionally NOT asserted for size — the mock
+	// renders table headers at 10px (below the 11-based on-grid foundation). The app matches
+	// the mock's mono family + uppercase; the 1px sub-grid size is a documented foundation
+	// tension (see docs/design/screen-fidelity-backlog.md), not per-screen drift.
+]
+const MODELS_CARD: Anchor = { text: 'context', mode: 'exact' }
+
+async function gotoAppModels(app: Page): Promise<void> {
+	await signIn(app)
+	await app
+		.getByRole('link', { name: /^models$/i })
+		.first()
+		.click()
+	await expect(app.locator('main h1')).toHaveText(/model catalog/i, { timeout: 15_000 })
+}
+
+async function gotoMockModels(mock: Page): Promise<void> {
+	await enterMock(mock)
+	await mock
+		.getByRole('button', { name: /^models/i })
+		.first()
+		.click()
+	await expect(mock.getByText(/model catalog/i).first()).toBeVisible({ timeout: 10_000 })
+}
+
+test.describe('fidelity — Models matches the mock', () => {
+	for (const mode of ['light', 'dark'] as Mode[]) {
+		test(`typography + colour @ ${mode}`, async ({ browser }) => {
+			const appCtx = await browser.newContext({ viewport: DESKTOP })
+			const app = await appCtx.newPage()
+			await gotoAppModels(app)
+			await setAppMode(app, mode)
+			const mockCtx = await browser.newContext({ viewport: DESKTOP })
+			const mock = await mockCtx.newPage()
+			await gotoMockModels(mock)
+			await setMockMode(mock, mode)
+
+			const drift = await collectTypoColor(app, mock, MODELS, MODELS_CARD, MODELS_CARD)
+			await appCtx.close()
+			await mockCtx.close()
+			expect(
+				drift,
+				`${mode}-mode Models typography/colour drift vs the mock:\n  ${drift.join('\n  ')}`
+			).toEqual([])
+		})
+	}
+
+	test('spacing @ desktop (1280px)', async ({ browser }) => {
+		const appCtx = await browser.newContext({ viewport: DESKTOP })
+		const app = await appCtx.newPage()
+		await gotoAppModels(app)
+		await setAppMode(app, 'light')
+		const mockCtx = await browser.newContext({ viewport: DESKTOP })
+		const mock = await mockCtx.newPage()
+		await gotoMockModels(mock)
+		await setMockMode(mock, 'light')
+
+		const drift = await collectCardSpacing(
+			app,
+			mock,
+			MODELS_CARD,
+			MODELS_CARD,
+			'context',
+			'context'
+		)
+		await appCtx.close()
+		await mockCtx.close()
+		expect(drift, `Models spacing drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
+	})
+})

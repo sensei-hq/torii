@@ -1,0 +1,34 @@
+name: js
+
+# JS gate (H1 in docs/code-review.md): typecheck + unit tests for the web packages so a broken
+# dep or a type error can't land red at head again. Scoped to the CI-resolvable packages
+# (@torii/core, @torii/ui, @seiki/admin) — @torii/desktop is EXCLUDED because it consumes the
+# @kavach/* framework via dev-in-place `link:` global links that aren't resolvable in CI; the
+# desktop app is built + tested separately as a Tauri bundle.
+#
+# Injection-safe: no untrusted github.event.* is interpolated into any run: step.
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+
+concurrency:
+  group: js-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install
+      - name: Typecheck (core / ui / admin)
+        run: bun run --filter '!@torii/desktop' check
+      - name: Unit tests (core / ui / admin)
+        run: bun run --filter '!@torii/desktop' test
+      - name: Lint (core / ui / admin)
+        run: bun run --filter '!@torii/desktop' lint

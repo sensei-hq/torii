@@ -1832,18 +1832,19 @@ pub async fn connections_oauth_connect(
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    // v1 paste-token: a long-lived Anthropic `setup-token` (no refresh/expiry/scopes) — the
+    // ToS-safe non-official-client path (DECISIONS §F3). vault 0.5.0 takes a single
+    // `OAuthCredential` struct in place of the former positional token/refresh/expiry args.
+    let cred = vault::OAuthCredential {
+        access_token: &body.token,
+        refresh_token: None,
+        expires_at_ms: None,
+        scopes: None,
+        client_id: None,
+    };
     match state
         .tenant_keys
-        .store_oauth(
-            tenant,
-            router_id,
-            &body.token,
-            None,
-            None,
-            None,
-            None,
-            &actor.to_string(),
-        )
+        .store_oauth(tenant, router_id, &cred, &actor.to_string())
         .await
     {
         Ok(id) => {

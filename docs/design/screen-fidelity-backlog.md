@@ -24,7 +24,7 @@ vs the live mock at `:8890`), and keep unit coverage > 80% (`bun run test:covera
 | Tools & MCP | `/tools` | ✅ done | 3/3 | real server-enable + tool×role grants; ⚠ allow-lists STORED but not enforced (disclosed) |
 | Governance | `/governance` | ✅ header | 2/2 | real feature-gov + fleet + audit; DLP/policy editors deferred (P6) |
 | Budgets & billing | `/billing` | ✅ done | 3/3 | real budget tree + approvals + cost breakdown; commercial billing §10.1-deferred |
-| Devices | `/devices` | ⬜ | — | |
+| Device fleet | `/devices` | ✅ done | 3/3 | real fleet list + revoke; nav Devices→Device fleet; enroll/config-drift deferred |
 | Settings | `/settings` | ⬜ | — | |
 | Onboarding | `/onboarding` | ⬜ (no route yet) | — | Pass-2 wizard (`onboarding_state` table) |
 

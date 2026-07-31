@@ -970,3 +970,87 @@ test.describe('fidelity — Tools & MCP matches the mock', () => {
 		expect(drift, `Tools spacing drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
 	})
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Device fleet — real /v1/devices list + revoke (denies the next request on the
+// hot path). The mock's enroll form + config-drift card are deferred. Full role
+// table (title + Enrolled devices card head).
+// ─────────────────────────────────────────────────────────────────────────────
+const DEVICES: Role[] = [
+	{
+		role: 'page title (h1)',
+		app: { selector: 'main h1' },
+		mock: { text: 'device fleet', mode: 'contains' }
+	},
+	{
+		// exact — the empty state "No devices enrolled" collides with a contains match.
+		role: 'card head eyebrow',
+		app: { text: 'enrolled devices', mode: 'exact' },
+		mock: { text: 'enrolled devices', mode: 'exact' }
+	}
+]
+const DEVICES_CARD: Anchor = { text: 'enrolled devices', mode: 'exact' }
+
+async function gotoAppDevices(app: Page): Promise<void> {
+	await signIn(app)
+	await app
+		.getByRole('link', { name: /device fleet/i })
+		.first()
+		.click()
+	await expect(app.locator('main h1')).toHaveText(/device fleet/i, { timeout: 15_000 })
+}
+
+async function gotoMockDevices(mock: Page): Promise<void> {
+	await enterMock(mock)
+	await mock
+		.getByRole('button', { name: /device fleet/i })
+		.first()
+		.click()
+	await expect(mock.getByText(/device fleet/i).first()).toBeVisible({ timeout: 10_000 })
+}
+
+test.describe('fidelity — Device fleet matches the mock', () => {
+	for (const mode of ['light', 'dark'] as Mode[]) {
+		test(`typography + colour @ ${mode}`, async ({ browser }) => {
+			const appCtx = await browser.newContext({ viewport: DESKTOP })
+			const app = await appCtx.newPage()
+			await gotoAppDevices(app)
+			await setAppMode(app, mode)
+			const mockCtx = await browser.newContext({ viewport: DESKTOP })
+			const mock = await mockCtx.newPage()
+			await gotoMockDevices(mock)
+			await setMockMode(mock, mode)
+
+			const drift = await collectTypoColor(app, mock, DEVICES, DEVICES_CARD, DEVICES_CARD)
+			await appCtx.close()
+			await mockCtx.close()
+			expect(
+				drift,
+				`${mode}-mode Device fleet typography/colour drift vs the mock:\n  ${drift.join('\n  ')}`
+			).toEqual([])
+		})
+	}
+
+	test('spacing @ desktop (1280px)', async ({ browser }) => {
+		const appCtx = await browser.newContext({ viewport: DESKTOP })
+		const app = await appCtx.newPage()
+		await gotoAppDevices(app)
+		await setAppMode(app, 'light')
+		const mockCtx = await browser.newContext({ viewport: DESKTOP })
+		const mock = await mockCtx.newPage()
+		await gotoMockDevices(mock)
+		await setMockMode(mock, 'light')
+
+		const drift = await collectCardSpacing(
+			app,
+			mock,
+			DEVICES_CARD,
+			DEVICES_CARD,
+			'enrolled devices',
+			'enrolled devices'
+		)
+		await appCtx.close()
+		await mockCtx.close()
+		expect(drift, `Device fleet spacing drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
+	})
+})

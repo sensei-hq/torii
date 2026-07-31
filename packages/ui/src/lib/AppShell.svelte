@@ -54,7 +54,7 @@
 					label: 'Members & roles',
 					icon: 'i-solar-buildings-3-bold-duotone'
 				},
-				{ href: '/devices', label: 'Devices', icon: 'i-solar-laptop-bold-duotone' }
+				{ href: '/devices', label: 'Device fleet', icon: 'i-solar-laptop-bold-duotone' }
 			]
 		},
 		{

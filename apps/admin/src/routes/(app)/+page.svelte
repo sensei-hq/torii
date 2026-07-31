@@ -30,36 +30,45 @@
 	let models = $state([])
 	/** @type {import('$lib/api').RoutingStep[]} */
 	let steps = $state([])
-	let error = $state('')
 	let loading = $state(true)
+	/** labels of dashboard reads that failed — drives a subtle "partial data" note (M4). */
+	let loadFailures = $state([])
 	/** signed-in user's email → the header greeting name (mock: "Good morning, Aiko."). */
 	let email = $state('')
 
 	onMount(async () => {
-		try {
-			const [r, b, a, c, m, rt, id] = await Promise.all([
-				api.requests(200),
-				api.budgets(),
-				api.audit(8),
-				api.connections(),
-				api.models(),
-				api.routing(),
-				api.identity()
-			])
-			requests = r.requests
-			nodes = b.nodes
-			events = a.events
-			providers = c.providers
-			models = m.models
-			steps = rt.steps
-			email = id.email ?? ''
-			// Alerts derive from the reads above (ui-state-pattern Load→State seam), no new backend.
-			alertsState.load({ nodes, requests, providers })
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e)
-		} finally {
-			loading = false
+		// Each read degrades INDEPENDENTLY (M4): a dashboard whose job is showing where things
+		// broke must not blank on a single failing endpoint. A rejected read falls back to an
+		// empty shape (every derived tile already handles empty data) and its label surfaces in a
+		// subtle "partial data" note — the other cards render regardless.
+		/** @template T @param {string} label @param {Promise<T>} p @param {T} fallback */
+		const settle = async (label, p, fallback) => {
+			try {
+				return await p
+			} catch {
+				loadFailures.push(label)
+				return fallback
+			}
 		}
+		const [r, b, a, c, m, rt, id] = await Promise.all([
+			settle('requests', api.requests(200), { requests: [] }),
+			settle('budgets', api.budgets(), { nodes: [], requests: [] }),
+			settle('audit', api.audit(8), { events: [] }),
+			settle('connections', api.connections(), { providers: [] }),
+			settle('models', api.models(), { models: [] }),
+			settle('routing', api.routing(), { steps: [] }),
+			settle('identity', api.identity(), { email: '' })
+		])
+		requests = r.requests
+		nodes = b.nodes
+		events = a.events
+		providers = c.providers
+		models = m.models
+		steps = rt.steps
+		email = id.email ?? ''
+		// Alerts derive from the reads above (ui-state-pattern Load→State seam), no new backend.
+		alertsState.load({ nodes, requests, providers })
+		loading = false
 	})
 
 	// header, matching the mock: date eyebrow + time-of-day greeting with the real name.
@@ -140,7 +149,7 @@
 <AppShell app="admin" title="Overview">
 	<PageHeader eyebrow={dateEyebrow()} {title}>
 		{#snippet actions()}
-			{#if !error && !loading}
+			{#if !loading && loadFailures.length === 0}
 				<span
 					class="inline-flex items-center gap-1 rounded-full border border-success/30 bg-success-soft px-2.5 py-1 text-xs font-medium text-success"
 				>
@@ -159,13 +168,24 @@
 
 	{#if loading}
 		<p class="px-4 pt-6 text-sm text-ink-mute sm:px-6 xl:px-12">Loading…</p>
-	{:else if error}
-		<div class="px-4 pt-6 sm:px-6 xl:px-12">
-			<Card pad><p class="text-sm text-accent">{error}</p></Card>
-		</div>
 	{:else}
 		<!-- page padding matches the mock's ViewPad (atoms.jsx): responsive sides + bottom via sm:/xl: -->
 		<div class="space-y-6 px-4 pb-12 sm:px-6 xl:px-12 xl:pb-16">
+			{#if loadFailures.length}
+				<!-- M4: partial-failure note — the dashboard renders every card that loaded. -->
+				<div
+					class="flex items-start gap-2 rounded-lg border border-dashed border-paper-edge bg-paper-soft px-4 py-2.5 text-xs text-ink-mute"
+					role="status"
+				>
+					<span class="i-solar-info-circle-bold-duotone mt-0.5 h-3.5 w-3.5 shrink-0 text-warning"
+					></span>
+					<span
+						>Showing partial data — couldn't load <b class="text-ink-soft"
+							>{loadFailures.join(', ')}</b
+						>. The other cards are unaffected.</span
+					>
+				</div>
+			{/if}
 			<!-- hero insight — the single most salient fact today, derived from the reads -->
 			<Card class="flex items-start gap-4 p-6">
 				<span

@@ -240,13 +240,26 @@ test.describe('fidelity — computed typography matches the mock', () => {
 		const mHead = await measureHeadPad(mock, { text: 'execution plane · 24h', mode: 'exact' })
 		if (aHead !== mHead) drift.push(`card-head padding: app ${aHead} ≠ mock ${mHead}`)
 
-		// page content side padding (mock .view-pad = 24px; app had px-5 = 20px)
+		// page content side padding — climb from a known card to the page wrapper (the direct child
+		// of <main>/.view). App = the content wrapper; mock = the <ViewPad> div. Both responsive.
 		const sidePad = (page: Page) =>
 			page.evaluate(() => {
-				const wrap = [...(document.querySelector('main')?.children || [])].find((d) =>
-					/space-y/.test(d.className)
-				)
-				const el = wrap || document.querySelector('.view-pad')
+				let el: Element | null = null
+				for (const e of document.querySelectorAll('body *')) {
+					const t = (e.textContent || '').trim().toLowerCase()
+					if (
+						t.includes('execution plane') &&
+						![...e.children].some((c) =>
+							(c.textContent || '').trim().toLowerCase().includes('execution plane')
+						)
+					)
+						el = e
+				}
+				while (el && el.parentElement) {
+					const p = el.parentElement
+					if (p.tagName === 'MAIN' || /(^|\s)view(\s|$)/.test(p.className)) break
+					el = p
+				}
 				return el ? getComputedStyle(el).paddingLeft : ''
 			})
 		const aSide = await sidePad(app)

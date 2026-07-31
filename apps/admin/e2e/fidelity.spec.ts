@@ -99,16 +99,14 @@ async function measureHeadPad(page: Page, a: Anchor): Promise<string> {
 }
 
 /** Left-padding of the page wrapper (direct child of <main>/.view) — responsive by breakpoint. */
-async function sidePad(page: Page): Promise<string> {
-	return page.evaluate(() => {
+async function sidePad(page: Page, needle = 'execution plane'): Promise<string> {
+	return page.evaluate((needle) => {
 		let el: Element | null = null
 		for (const e of document.querySelectorAll('body *')) {
 			const t = (e.textContent || '').trim().toLowerCase()
 			if (
-				t.includes('execution plane') &&
-				![...e.children].some((c) =>
-					(c.textContent || '').trim().toLowerCase().includes('execution plane')
-				)
+				t.includes(needle) &&
+				![...e.children].some((c) => (c.textContent || '').trim().toLowerCase().includes(needle))
 			)
 				el = e
 		}
@@ -118,7 +116,7 @@ async function sidePad(page: Page): Promise<string> {
 			el = p
 		}
 		return el ? getComputedStyle(el).paddingLeft : ''
-	})
+	}, needle)
 }
 
 /** Pin the APP to a mode (its default is dark). Detect via the h1 text lightness, toggle to match. */
@@ -216,9 +214,15 @@ async function measureTokens(page: Page): Promise<Record<string, string>> {
 }
 
 /** Typography + colour per role, the card border colour, and semantic-token parity. */
-async function collectTypoColor(app: Page, mock: Page): Promise<string[]> {
+async function collectTypoColor(
+	app: Page,
+	mock: Page,
+	roles: Role[],
+	cardApp: Anchor,
+	cardMock: Anchor
+): Promise<string[]> {
 	const drift: string[] = []
-	for (const r of OVERVIEW) {
+	for (const r of roles) {
 		const a = await measure(app, r.app)
 		const m = await measure(mock, r.mock)
 		if (!a.found) drift.push(`${r.role}: not found in app`)
@@ -228,8 +232,8 @@ async function collectTypoColor(app: Page, mock: Page): Promise<string[]> {
 				`${r.role}: app ${a.fs}/${a.fw}/${a.ff}/${a.color} ≠ mock ${m.fs}/${m.fw}/${m.ff}/${m.color}`
 			)
 	}
-	const ab = await measureBox(app, CARD_APP)
-	const mb = await measureBox(mock, CARD_MOCK)
+	const ab = await measureBox(app, cardApp)
+	const mb = await measureBox(mock, cardMock)
 	if (ab.border !== mb.border) drift.push(`card border: app ${ab.border} ≠ mock ${mb.border}`)
 
 	const at = await measureTokens(app)
@@ -240,20 +244,29 @@ async function collectTypoColor(app: Page, mock: Page): Promise<string[]> {
 }
 
 /** Card padding + radius + inter-card gap, card-head padding, and responsive page side padding. */
-async function collectSpacing(app: Page, mock: Page): Promise<string[]> {
+async function collectSpacing(
+	app: Page,
+	mock: Page,
+	statApp: Anchor,
+	statMock: Anchor,
+	cardApp: Anchor,
+	cardMock: Anchor,
+	sideApp: string,
+	sideMock: string
+): Promise<string[]> {
 	const drift: string[] = []
-	const as = await measureBox(app, STAT_A)
-	const ms = await measureBox(mock, STAT_A)
+	const as = await measureBox(app, statApp)
+	const ms = await measureBox(mock, statMock)
 	if (as.pad !== ms.pad || as.radius !== ms.radius)
 		drift.push(`stat tile: app pad ${as.pad} r ${as.radius} ≠ mock pad ${ms.pad} r ${ms.radius}`)
-	const ac = await measureBox(app, CARD_APP)
-	const mc = await measureBox(mock, CARD_MOCK)
+	const ac = await measureBox(app, cardApp)
+	const mc = await measureBox(mock, cardMock)
 	if (ac.mt !== mc.mt) drift.push(`inter-card gap: app ${ac.mt} ≠ mock ${mc.mt}`)
-	const ah = await measureHeadPad(app, CARD_APP)
-	const mh = await measureHeadPad(mock, CARD_MOCK)
+	const ah = await measureHeadPad(app, cardApp)
+	const mh = await measureHeadPad(mock, cardMock)
 	if (ah !== mh) drift.push(`card-head padding: app ${ah} ≠ mock ${mh}`)
-	const ap = await sidePad(app)
-	const mp = await sidePad(mock)
+	const ap = await sidePad(app, sideApp)
+	const mp = await sidePad(mock, sideMock)
 	if (ap !== mp) drift.push(`page side padding: app ${ap} ≠ mock ${mp}`)
 	return drift
 }
@@ -278,7 +291,7 @@ test.describe('fidelity — Overview matches the mock', () => {
 			await enterMock(mock)
 			await setMockMode(mock, mode)
 
-			const drift = await collectTypoColor(app, mock)
+			const drift = await collectTypoColor(app, mock, OVERVIEW, CARD_APP, CARD_MOCK)
 			await appCtx.close()
 			await mockCtx.close()
 			expect(
@@ -300,7 +313,16 @@ test.describe('fidelity — Overview matches the mock', () => {
 			await enterMock(mock)
 			await setMockMode(mock, 'light')
 
-			const drift = await collectSpacing(app, mock)
+			const drift = await collectSpacing(
+				app,
+				mock,
+				STAT_A,
+				STAT_A,
+				CARD_APP,
+				CARD_MOCK,
+				'execution plane',
+				'execution plane'
+			)
 			await appCtx.close()
 			await mockCtx.close()
 			expect(
@@ -309,4 +331,111 @@ test.describe('fidelity — Overview matches the mock', () => {
 			).toEqual([])
 		})
 	}
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Requests (org lens) — the admin "usage patterns" screen. Navigates BOTH sides to
+// the Requests view first (app: /requests · mock: the "Usage patterns" nav item),
+// then runs the same measured diff. Structure/labels render regardless of data, so
+// an empty tenant still verifies typography, tokens, and the stat-tile/card rhythm.
+// ─────────────────────────────────────────────────────────────────────────────
+const REQUESTS: Role[] = [
+	{
+		role: 'page title (h1)',
+		app: { selector: 'main h1' },
+		mock: { text: 'routing & usage health', mode: 'contains' }
+	},
+	{
+		role: 'header eyebrow',
+		app: { text: 'usage patterns', mode: 'exact' },
+		mock: { text: 'usage patterns', mode: 'exact' }
+	},
+	{
+		role: 'stat label',
+		app: { text: 'calls · 24h', mode: 'exact' },
+		mock: { text: 'calls · 24h', mode: 'exact' }
+	},
+	{
+		role: 'card head eyebrow (falling back)',
+		app: { text: 'falling back · 24h', mode: 'contains' },
+		mock: { text: 'falling back · 24h', mode: 'contains' }
+	},
+	{
+		role: 'card head eyebrow (being used)',
+		app: { text: 'being used · 24h', mode: 'contains' },
+		mock: { text: 'being used · 24h', mode: 'contains' }
+	}
+]
+const REQ_CARD_APP: Anchor = { text: 'falling back · 24h', mode: 'contains' }
+const REQ_CARD_MOCK: Anchor = { text: 'falling back · 24h', mode: 'contains' }
+const REQ_STAT: Anchor = { text: 'calls · 24h', mode: 'exact' }
+
+/** Sign into the app and click through to the Requests screen. Uses the in-app nav link
+ *  (client-side SvelteKit routing) — a full `goto('/requests')` would hard-load and the
+ *  client-only session guard bounces that to /signin. */
+async function gotoAppRequests(app: Page): Promise<void> {
+	await signIn(app)
+	await app
+		.getByRole('link', { name: /usage patterns/i })
+		.first()
+		.click()
+	await expect(app.locator('main h1')).toHaveText(/routing & usage health/i, { timeout: 15_000 })
+}
+
+/** Enter the mock and click through to its "Usage patterns" (Requests) view. */
+async function gotoMockRequests(mock: Page): Promise<void> {
+	await enterMock(mock)
+	await mock
+		.getByRole('button', { name: /usage patterns/i })
+		.first()
+		.click()
+	await expect(mock.getByText(/routing & usage health/i).first()).toBeVisible({ timeout: 10_000 })
+}
+
+test.describe('fidelity — Requests (org lens) matches the mock', () => {
+	for (const mode of ['light', 'dark'] as Mode[]) {
+		test(`typography + colour @ ${mode}`, async ({ browser }) => {
+			const appCtx = await browser.newContext({ viewport: DESKTOP })
+			const app = await appCtx.newPage()
+			await gotoAppRequests(app)
+			await setAppMode(app, mode)
+			const mockCtx = await browser.newContext({ viewport: DESKTOP })
+			const mock = await mockCtx.newPage()
+			await gotoMockRequests(mock)
+			await setMockMode(mock, mode)
+
+			const drift = await collectTypoColor(app, mock, REQUESTS, REQ_CARD_APP, REQ_CARD_MOCK)
+			await appCtx.close()
+			await mockCtx.close()
+			expect(
+				drift,
+				`${mode}-mode Requests typography/colour drift vs the mock:\n  ${drift.join('\n  ')}`
+			).toEqual([])
+		})
+	}
+
+	test('spacing @ desktop (1280px)', async ({ browser }) => {
+		const appCtx = await browser.newContext({ viewport: DESKTOP })
+		const app = await appCtx.newPage()
+		await gotoAppRequests(app)
+		await setAppMode(app, 'light')
+		const mockCtx = await browser.newContext({ viewport: DESKTOP })
+		const mock = await mockCtx.newPage()
+		await gotoMockRequests(mock)
+		await setMockMode(mock, 'light')
+
+		const drift = await collectSpacing(
+			app,
+			mock,
+			REQ_STAT,
+			REQ_STAT,
+			REQ_CARD_APP,
+			REQ_CARD_MOCK,
+			'being used · 24h',
+			'being used · 24h'
+		)
+		await appCtx.close()
+		await mockCtx.close()
+		expect(drift, `Requests spacing drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
+	})
 })

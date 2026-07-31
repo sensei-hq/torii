@@ -106,6 +106,92 @@ export function triageSummary(groups: StatusGroup[]): TriageSummary {
 	}
 }
 
+// ── org operational lens: "usage patterns" (the admin Requests header + meters) ─
+// The mock's admin Requests is an operational lens, not a ledger: how many calls, how
+// much they cost, and which models carry the traffic. Every figure below is REAL, from
+// /v1/requests. The fallback/step-down/failover breakdown the mock also shows needs the
+// per-call routing-trace column (GH-5, backend pass) — surfaced honestly as null here.
+
+const MS_PER_HOUR = 3_600_000
+
+/** Calls recorded within the trailing `hours`-hour window ending at `now`. */
+export function callsInWindow(requests: RequestRow[], hours = 24, now: Date = new Date()): number {
+	const cutoff = now.getTime() - hours * MS_PER_HOUR
+	let n = 0
+	for (const r of requests) {
+		const t = new Date(r.recorded_at).getTime()
+		if (Number.isFinite(t) && t >= cutoff) n++
+	}
+	return n
+}
+
+/** Mean $/call over the given rows (0 when none) — the "Avg cost" tile. */
+export function avgCost(requests: RequestRow[]): number {
+	if (!requests.length) return 0
+	return requests.reduce((s, r) => s + Number(r.cost_usd || 0), 0) / requests.length
+}
+
+export interface ModelUsage {
+	model: string
+	/** the router/adapter that served it — a subtle provenance label. */
+	adapter: string
+	calls: number
+	/** share of ALL calls, 0-100 rounded. */
+	share: number
+}
+
+/**
+ * Which models actually carried traffic, busiest first — the "what's being used" meters.
+ * Groups the ledger by model, counts calls, and computes each model's share of the whole.
+ * `limit` caps the list to the top-N busiest so the card stays a glance, not a table.
+ */
+export function usageByModel(requests: RequestRow[], limit = 8): ModelUsage[] {
+	const total = requests.length
+	const acc = new Map<string, { adapter: string; calls: number }>()
+	for (const r of requests) {
+		const model = r.model || 'unknown'
+		const b = acc.get(model) ?? { adapter: r.adapter || '', calls: 0 }
+		b.calls += 1
+		acc.set(model, b)
+	}
+	return [...acc.entries()]
+		.map(([model, b]): ModelUsage => ({
+			model,
+			adapter: b.adapter,
+			calls: b.calls,
+			share: total ? Math.round((b.calls / total) * 100) : 0
+		}))
+		.sort((a, b) => b.calls - a.calls || a.model.localeCompare(b.model))
+		.slice(0, limit)
+}
+
+export interface UsageStats {
+	/** calls in the trailing 24h — REAL. */
+	calls24h: number
+	/** mean $/call over the window — REAL. */
+	avgCost: number
+	/**
+	 * Fallback-rate / step-down / failover counts classify *why* a call fell back, which
+	 * needs the per-call routing trace (GH-5). Today the ledger's `status` is only
+	 * success|failed — it can't distinguish a budget step-down from a provider failover —
+	 * so these stay `null` (rendered "—") until the trace column lands, rather than faked.
+	 */
+	fallbackRate: number | null
+	stepDowns: number | null
+	failovers: number | null
+}
+
+/** The five header tiles: two computed from real reads, three deferred to the trace backend. */
+export function usageStats(requests: RequestRow[], now: Date = new Date()): UsageStats {
+	return {
+		calls24h: callsInWindow(requests, 24, now),
+		avgCost: avgCost(requests),
+		fallbackRate: null,
+		stepDowns: null,
+		failovers: null
+	}
+}
+
 // ── member budget cascade: walk the org → dept → team → user tree ─────────────
 /** Utilization of a node as a whole percent (0 when it carries no cap). */
 export function nodePct(n: BudgetNode): number {

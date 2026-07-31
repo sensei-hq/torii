@@ -40,7 +40,7 @@
 				{ href: '/', label: 'Overview', icon: 'i-solar-widget-5-bold-duotone' },
 				{
 					href: '/requests',
-					label: 'Requests & audit',
+					label: 'Usage patterns',
 					icon: 'i-solar-clipboard-list-bold-duotone',
 					live: true
 				}

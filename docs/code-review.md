@@ -13,6 +13,26 @@ The security-critical backend and the entire database authz layer are in genuine
 
 ---
 
+## Resolution status (2026-07-31)
+
+All findings addressed. Commits are local on `develop` (per-finding).
+
+| # | Status | Commit | Note |
+| --- | --- | --- | --- |
+| H1 | ✅ fixed | `596a64d` | core: inline @kavach in vitest + tsconfig `paths` shim → `bun run test`/`check` green; new `js.yml` CI gate (core/ui/admin). |
+| H2 | ✅ amended + partly built | `e9cda5e`, `acf560f` | DECISIONS §10.2 amended (email+password is a blessed secondary); desktop now ships magic-link (OTP) primary + password reset. |
+| H3 | ✅ fixed | `6e3555b` | desktop guard allowlist DERIVED from the route tree (`deriveGuardRules` + 4 unit tests + e2e nav sweep) → /compare + /models reachable. |
+| M1 | ✅ fixed | `697148f` | desktop cloud plane requests the real `chat` chain (was `local`); demo routing no longer baked into `lib/`. |
+| M2 | ✅ fixed | `3b8f7b8` | e2e seams consolidated behind one prod-dead `IS_E2E` gate (route-intercept N/A for Tauri IPC infer). |
+| M3 | ✅ fixed | `8080373` | dropped the fabricated `eu-west-2` badge; region only shown when the gateway provides it. |
+| M4 | ✅ fixed | `edb4d32` | Overview degrades per-read (partial-data note) instead of blanking on one failure. |
+| L1 | ✅ fixed | (this commit) | `~/.strategos/models` → `~/.torii/models` with a one-time migration; Makefile header + README; `strategos://` comment retired. Tauri id was already `dev.torii.app`. |
+| L2 | ✅ folds into H1 | `596a64d` | `make test`/`check` were red only because of H1; now green. |
+
+Deferred by design (not regressions): env-var fallbacks `STRATEGOS_ENV`/`STRATEGOS_KEK` (TORII_* is primary), the `owner2@strategos.local` dev seed identity, and the ~164-file doc-prose rename sweep (rebrand memory). Upstream: republish `@kavach/*` with `dist/` + extension-ful imports to retire the core shim.
+
+---
+
 ## High
 
 ### H1 — Repo gates are red at head: `bun run test` and `bun run check` both fail

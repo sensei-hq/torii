@@ -56,15 +56,15 @@
 
 <AppShell app="admin" title="Devices">
 	<PageHeader
-		eyebrow="Tenant"
-		title="Enrolled devices"
+		eyebrow="Governance"
+		title="Device fleet"
 		sub="Every desktop app that enrolled against this workspace. Revoking a device denies its next request on the gateway hot path — a revoked device can't keep spending even while its session token is still valid."
 	/>
 
 	{#if loading}
 		<Async loading />
 	{:else}
-		<div class="space-y-4 px-5 pb-6">
+		<div class="space-y-6 px-4 pb-12 sm:px-6 xl:px-12 xl:pb-16">
 			{#if error}
 				<Card pad
 					><p class="text-sm text-danger" role="alert">
@@ -76,7 +76,10 @@
 			{/if}
 
 			<Card flush>
-				<CardHead title="Fleet" meta={`${activeCount} active · ${devices.length} enrolled`} />
+				<CardHead
+					title="Enrolled devices"
+					meta={`${activeCount} active · ${devices.length} enrolled`}
+				/>
 				<div>
 					{#each devices as d (d.id)}
 						{@const revoked = d.status === 'revoked'}

@@ -728,3 +728,63 @@ test.describe('fidelity — Connections matches the mock', () => {
 		expect(drift, `Connections spacing drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
 	})
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Governance — real feature-governance posture (4-state, scope switcher) + device
+// fleet + immutable audit trail. The mock's DLP editors (classification, masking,
+// redaction rules, safe-terms, retention, effective-policy, policy-enforcement
+// counts) need the DLP/policy backend (P6) → deferred. Header-level fidelity.
+// ─────────────────────────────────────────────────────────────────────────────
+const GOVERNANCE: Role[] = [
+	{
+		role: 'page title (h1)',
+		app: { selector: 'main h1' },
+		mock: { text: 'ownership, security', mode: 'contains' }
+	},
+	{
+		role: 'header eyebrow',
+		app: { text: 'governance', mode: 'exact' },
+		mock: { text: 'governance', mode: 'exact' }
+	}
+]
+
+async function gotoAppGovernance(app: Page): Promise<void> {
+	await signIn(app)
+	await app
+		.getByRole('link', { name: /^governance$/i })
+		.first()
+		.click()
+	await expect(app.locator('main h1')).toHaveText(/feature governance/i, { timeout: 15_000 })
+}
+
+async function gotoMockGovernance(mock: Page): Promise<void> {
+	await enterMock(mock)
+	await mock
+		.getByRole('button', { name: /^governance$/i })
+		.first()
+		.click()
+	await expect(mock.getByText(/ownership, security/i).first()).toBeVisible({ timeout: 10_000 })
+}
+
+test.describe('fidelity — Governance matches the mock (header-level)', () => {
+	for (const mode of ['light', 'dark'] as Mode[]) {
+		test(`typography + colour + padding @ ${mode}`, async ({ browser }) => {
+			const appCtx = await browser.newContext({ viewport: DESKTOP })
+			const app = await appCtx.newPage()
+			await gotoAppGovernance(app)
+			await setAppMode(app, mode)
+			const mockCtx = await browser.newContext({ viewport: DESKTOP })
+			const mock = await mockCtx.newPage()
+			await gotoMockGovernance(mock)
+			await setMockMode(mock, mode)
+
+			const drift = await collectHeaderFidelity(app, mock, GOVERNANCE, 'governance', 'governance')
+			await appCtx.close()
+			await mockCtx.close()
+			expect(
+				drift,
+				`${mode}-mode Governance header drift vs the mock:\n  ${drift.join('\n  ')}`
+			).toEqual([])
+		})
+	}
+})

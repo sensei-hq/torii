@@ -22,7 +22,7 @@ vs the live mock at `:8890`), and keep unit coverage > 80% (`bun run test:covera
 | Routing | `/routing` | ✅ header | 2/2 | real chains + step toggle; editor/policy/health deferred |
 | Connections | `/connections` | ✅ done | 3/3 | real BYOK vault (connect/rotate/revoke/OAuth); custody/scope/add-router deferred |
 | Tools & MCP | `/tools` | ⬜ | — | ⚠ allow-lists stored but NOT enforced at inference (security) |
-| Governance | `/governance` | ⬜ | — | |
+| Governance | `/governance` | ✅ header | 2/2 | real feature-gov + fleet + audit; DLP/policy editors deferred (P6) |
 | Budgets & billing | `/billing` | ⬜ | — | |
 | Devices | `/devices` | ⬜ | — | |
 | Settings | `/settings` | ⬜ | — | |
@@ -52,6 +52,19 @@ Deferred (mock is a full editor; gateway is read + toggle only):
 - **Routing POLICY** — retry budget, backoff, hard timeout, region pin, health-check interval (no read/write).
 - **Provider HEALTH** list — needs a health-probe backend.
 - **Chain assignments** (scope/role → chain) + budget-remaining simulator.
+
+### Governance — deferred depth (DLP-P6 + policy-model backend)
+Header + the three REAL cards (feature-governance 4-state posture with scope switcher · device
+fleet from /v1/devices · immutable audit trail from /v1/audit with category triage + CSV) are done.
+The mock has 8 more cards, all needing a backend that isn't built:
+- **Policy enforcement · live** (applied/blocked counts + block drill-down + reinforce/false-positive feedback).
+- **Confidentiality** classification scheme editor · **Masking policy** editor · **Redaction rules** (RE2)
+  editor · **Safe-term allow-list** — DLP redactor is P6 (C4).
+- **Retention & data rights** (per-type retention + legal hold + subject export/erase) — needs the doc system.
+- **Ownership** by space + **Security** posture tiles + **Effective policy · per member** (workspace→space→
+  user resolution) — need the policy engine + spaces backend.
+Note: app title kept honest ("Feature governance") rather than the mock's grander
+"Ownership, security & confidentiality" which describes the unbuilt cards.
 
 ### FOUNDATION — table-header micro-typography (systematic, affects every table screen)
 The mock renders table column headers at **10px JetBrains Mono uppercase**; the app foundation

@@ -151,15 +151,15 @@
 
 <AppShell app="admin" title="Governance">
 	<PageHeader
-		eyebrow="Govern"
+		eyebrow="Governance"
 		title="Feature governance"
-		sub="Set each governed capability's posture — locked on, default on/off, or user-overridable — for the workspace default or a specific role. Overrides resolve server-side and can only tighten per space and role."
+		sub="Set each governed capability's posture — locked on, default on/off, or user-overridable — for the workspace default or a specific role. Overrides resolve server-side and can only tighten per space and role. Device fleet and the immutable audit trail sit below."
 	/>
 
 	{#if loading}
 		<Async loading />
 	{:else if error}
-		<div class="px-5">
+		<div class="px-4 sm:px-6 xl:px-12">
 			<Card pad
 				><p class="text-sm text-danger">
 					{error}{error.includes('403')
@@ -169,7 +169,7 @@
 			>
 		</div>
 	{:else}
-		<div class="space-y-4 px-5 pb-6">
+		<div class="space-y-6 px-4 pb-12 sm:px-6 xl:px-12 xl:pb-16">
 			<div class="grid grid-cols-3 gap-4">
 				<Card pad>
 					<div class="text-xs font-semibold uppercase tracking-wider text-ink-mute">Features</div>

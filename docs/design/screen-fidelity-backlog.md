@@ -21,7 +21,7 @@ vs the live mock at `:8890`), and keep unit coverage > 80% (`bun run test:covera
 | Models | `/models` | ✅ done | 3/3 | single catalog table + provider filter; economics/CRUD deferred |
 | Routing | `/routing` | ✅ header | 2/2 | real chains + step toggle; editor/policy/health deferred |
 | Connections | `/connections` | ✅ done | 3/3 | real BYOK vault (connect/rotate/revoke/OAuth); custody/scope/add-router deferred |
-| Tools & MCP | `/tools` | ⬜ | — | ⚠ allow-lists stored but NOT enforced at inference (security) |
+| Tools & MCP | `/tools` | ✅ done | 3/3 | real server-enable + tool×role grants; ⚠ allow-lists STORED but not enforced (disclosed) |
 | Governance | `/governance` | ✅ header | 2/2 | real feature-gov + fleet + audit; DLP/policy editors deferred (P6) |
 | Budgets & billing | `/billing` | ✅ done | 3/3 | real budget tree + approvals + cost breakdown; commercial billing §10.1-deferred |
 | Devices | `/devices` | ⬜ | — | |
@@ -65,6 +65,14 @@ The mock has 8 more cards, all needing a backend that isn't built:
   user resolution) — need the policy engine + spaces backend.
 Note: app title kept honest ("Feature governance") rather than the mock's grander
 "Ownership, security & confidentiality" which describes the unbuilt cards.
+
+### ⚠ SECURITY — Tools allow-lists stored but NOT enforced at inference (Pass-2)
+`chat.rs` never reads `tool_allow_lists`, so the tool×role grants (real writes, saved to the DB)
+do NOT actually gate tool calls yet — a default-deny that currently denies nothing at runtime.
+Disclosed honestly in the UI (the sub + the card note say grants are "saved now and enforced at
+tool-call time once the Tools runtime ships"). Fixed the sub's earlier present-tense over-claim.
+**Backend TODO:** wire `tool_allow_lists` into the MCP tool-call path in `chat.rs` + per-space
+tightening. Until then the enforcement toggles are configuration-only.
 
 ### FOUNDATION — table-header micro-typography (systematic, affects every table screen)
 The mock renders table column headers at **10px JetBrains Mono uppercase**; the app foundation

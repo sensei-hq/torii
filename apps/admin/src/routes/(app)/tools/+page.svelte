@@ -79,13 +79,13 @@
 	<PageHeader
 		eyebrow="Gateway"
 		title="Tools & MCP servers"
-		sub="Register MCP servers and grant their tools per role. Default-deny — a role may call only the tools explicitly allowed here; the gateway enforces it at tool-call time."
+		sub="Register the MCP servers your org exposes — stdio for on-device desktop tools, http/sse for shared gateway tools — and decide which roles may call each tool. Default-deny; grants are saved now and enforced at tool-call time once the Tools runtime ships."
 	/>
 
 	{#if loading}
 		<Async loading />
 	{:else}
-		<div class="space-y-4 px-5 pb-6">
+		<div class="space-y-6 px-4 pb-12 sm:px-6 xl:px-12 xl:pb-16">
 			{#if error}
 				<Card pad
 					><p class="text-sm text-danger" role="alert">

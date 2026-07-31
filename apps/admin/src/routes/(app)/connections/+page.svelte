@@ -126,6 +126,8 @@
 	}
 	/** @param {string} iso */
 	const fmtDate = (iso) => new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' })
+
+	const connectedCount = $derived(providers.filter((p) => p.connected).length)
 </script>
 
 <AppShell app="admin" title="Connections">
@@ -133,12 +135,21 @@
 		eyebrow="Connections"
 		title="Provider connections"
 		sub="Outbound provider credentials — the gateway routes every call through the org's own keys, sealed in the vault so members never see them. Manage API identities for the org's own apps on the Organization screen."
-	/>
+	>
+		{#snippet actions()}
+			<span
+				class="inline-flex items-center gap-1.5 rounded-full border border-paper-edge bg-paper px-2.5 py-1 text-xs text-ink-soft"
+			>
+				<span class="i-solar-key-bold-duotone h-3.5 w-3.5 text-ink-mute"></span>
+				{connectedCount} of {providers.length} connected
+			</span>
+		{/snippet}
+	</PageHeader>
 
 	{#if loading}
 		<Async loading />
 	{:else}
-		<div class="space-y-4 px-5 pb-6">
+		<div class="space-y-6 px-4 pb-12 sm:px-6 xl:px-12 xl:pb-16">
 			{#if error}
 				<Card pad><p class="text-sm text-accent">{error}</p></Card>
 			{/if}
@@ -146,10 +157,14 @@
 			<!-- Provider routers — bring-your-own-key. Remote providers use THIS org's own key
 			 (sealed in the vault); keyless local routers need none. No cross-tenant fallback. -->
 			<Card flush>
-				<CardHead
-					title="Routers & credentials"
-					meta={`${providers.filter((p) => p.connected).length}/${providers.filter((p) => p.requires_key).length} connected`}
-				/>
+				<CardHead title="Routers & credentials">
+					{#snippet right()}
+						<span class="flex items-center gap-2">
+							<span class="i-solar-lock-keyhole-bold-duotone h-3.5 w-3.5 text-success"></span>
+							<span class="font-mono text-xs text-ink-mute">org vault</span>
+						</span>
+					{/snippet}
+				</CardHead>
 				<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
 					{#each providers as p, i (p.name)}
 						<div
@@ -304,7 +319,7 @@
 						<p class="p-4 text-sm text-ink-mute">No routers configured.</p>
 					{/if}
 				</div>
-				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
+				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-6 py-3">
 					<span class="i-solar-shield-check-bold-duotone mt-0.5 h-3.5 w-3.5 text-success"></span>
 					<span class="text-xs leading-relaxed text-ink-mute">
 						Remote providers authenticate with the org's own key, sealed in the vault and shown to

@@ -20,7 +20,7 @@ vs the live mock at `:8890`), and keep unit coverage > 80% (`bun run test:covera
 | Organization | `/organization` | ⬜ | — | |
 | Models | `/models` | ✅ done | 3/3 | single catalog table + provider filter; economics/CRUD deferred |
 | Routing | `/routing` | ✅ header | 2/2 | real chains + step toggle; editor/policy/health deferred |
-| Connections | `/connections` | ⬜ | — | |
+| Connections | `/connections` | ✅ done | 3/3 | real BYOK vault (connect/rotate/revoke/OAuth); custody/scope/add-router deferred |
 | Tools & MCP | `/tools` | ⬜ | — | ⚠ allow-lists stored but NOT enforced at inference (security) |
 | Governance | `/governance` | ⬜ | — | |
 | Budgets & billing | `/billing` | ⬜ | — | |

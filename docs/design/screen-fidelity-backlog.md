@@ -19,7 +19,7 @@ vs the live mock at `:8890`), and keep unit coverage > 80% (`bun run test:covera
 | Requests | `/requests` | ✅ done | 3/3 | org "usage patterns" lens (`dd845a6`) |
 | Organization | `/organization` | ⬜ | — | |
 | Models | `/models` | ✅ done | 3/3 | single catalog table + provider filter; economics/CRUD deferred |
-| Routing | `/routing` | ⬜ | — | |
+| Routing | `/routing` | ✅ header | 2/2 | real chains + step toggle; editor/policy/health deferred |
 | Connections | `/connections` | ⬜ | — | |
 | Tools & MCP | `/tools` | ⬜ | — | ⚠ allow-lists stored but NOT enforced at inference (security) |
 | Governance | `/governance` | ⬜ | — | |
@@ -44,6 +44,14 @@ Captured as each screen surfaces a gap that needs a backend that doesn't exist y
 - **Spaces & KB, Templates** — no route + no backend (RAG/P7 territory). Pass-3.
 
 ## Gaps / TODOs found during the run
+
+### Routing — deferred depth (backend not built) — "Routing reorder/policy/health" (Pass-2)
+Header + real read-only chains (order, router, model, plane) + live step enable/disable are done.
+Deferred (mock is a full editor; gateway is read + toggle only):
+- **Chain EDITOR** — reorder / add / remove steps, per-step model & role & rule & plane edit, new chain.
+- **Routing POLICY** — retry budget, backoff, hard timeout, region pin, health-check interval (no read/write).
+- **Provider HEALTH** list — needs a health-probe backend.
+- **Chain assignments** (scope/role → chain) + budget-remaining simulator.
 
 ### FOUNDATION — table-header micro-typography (systematic, affects every table screen)
 The mock renders table column headers at **10px JetBrains Mono uppercase**; the app foundation

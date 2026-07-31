@@ -548,3 +548,95 @@ test.describe('fidelity — Models matches the mock', () => {
 		expect(drift, `Models spacing drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
 	})
 })
+
+/** Header-level fidelity for screens whose body diverges from the mock because the mock's
+ *  editors need a backend that isn't built (Routing policy/health, editable chains, etc.):
+ *  verify the title + eyebrow typography, semantic-token parity, and responsive page padding.
+ *  The body's real read-only data + honest deferrals are documented in the fidelity backlog. */
+async function collectHeaderFidelity(
+	app: Page,
+	mock: Page,
+	roles: Role[],
+	sideApp: string,
+	sideMock: string
+): Promise<string[]> {
+	const drift: string[] = []
+	for (const r of roles) {
+		const a = await measure(app, r.app)
+		const m = await measure(mock, r.mock)
+		if (!a.found) drift.push(`${r.role}: not found in app`)
+		else if (!m.found) drift.push(`${r.role}: not found in mock`)
+		else if (a.fs !== m.fs || a.fw !== m.fw || a.ff !== m.ff || a.color !== m.color)
+			drift.push(
+				`${r.role}: app ${a.fs}/${a.fw}/${a.ff}/${a.color} ≠ mock ${m.fs}/${m.fw}/${m.ff}/${m.color}`
+			)
+	}
+	const at = await measureTokens(app)
+	const mt = await measureTokens(mock)
+	for (const n of TOKENS)
+		if (at[n] && mt[n] && at[n] !== mt[n]) drift.push(`token ${n}: app ${at[n]} ≠ mock ${mt[n]}`)
+	const ap = await sidePad(app, sideApp)
+	const mp = await sidePad(mock, sideMock)
+	if (ap !== mp) drift.push(`page side padding: app ${ap} ≠ mock ${mp}`)
+	return drift
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Routing — real read-only chains + a live step enable/disable. The mock's chain
+// EDITOR (reorder/add/remove), routing POLICY (retry/backoff/timeout/region) and
+// provider HEALTH need a backend that isn't built → deferred (see the backlog).
+// Header-level fidelity only.
+// ─────────────────────────────────────────────────────────────────────────────
+const ROUTING: Role[] = [
+	{
+		role: 'page title (h1)',
+		app: { selector: 'main h1' },
+		mock: { text: 'spend it like', mode: 'contains' }
+	},
+	{
+		role: 'header eyebrow',
+		app: { text: 'routing', mode: 'exact' },
+		mock: { text: 'routing', mode: 'exact' }
+	}
+]
+
+async function gotoAppRouting(app: Page): Promise<void> {
+	await signIn(app)
+	await app
+		.getByRole('link', { name: /^routing$/i })
+		.first()
+		.click()
+	await expect(app.locator('main h1')).toHaveText(/spend it like/i, { timeout: 15_000 })
+}
+
+async function gotoMockRouting(mock: Page): Promise<void> {
+	await enterMock(mock)
+	await mock
+		.getByRole('button', { name: /^routing$/i })
+		.first()
+		.click()
+	await expect(mock.getByText(/spend it like/i).first()).toBeVisible({ timeout: 10_000 })
+}
+
+test.describe('fidelity — Routing matches the mock (header-level)', () => {
+	for (const mode of ['light', 'dark'] as Mode[]) {
+		test(`typography + colour + padding @ ${mode}`, async ({ browser }) => {
+			const appCtx = await browser.newContext({ viewport: DESKTOP })
+			const app = await appCtx.newPage()
+			await gotoAppRouting(app)
+			await setAppMode(app, mode)
+			const mockCtx = await browser.newContext({ viewport: DESKTOP })
+			const mock = await mockCtx.newPage()
+			await gotoMockRouting(mock)
+			await setMockMode(mock, mode)
+
+			const drift = await collectHeaderFidelity(app, mock, ROUTING, 'routing', 'routing')
+			await appCtx.close()
+			await mockCtx.close()
+			expect(
+				drift,
+				`${mode}-mode Routing header drift vs the mock:\n  ${drift.join('\n  ')}`
+			).toEqual([])
+		})
+	}
+})

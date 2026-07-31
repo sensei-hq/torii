@@ -44,6 +44,12 @@ export default {
 
 		// Accent — vermillion (rationed). --accent = shu-500 light / shu-400 dark.
 		accent: { light: 'shu.500', dark: 'shu.400' },
+		// accent-soft is an ALPHA wash of the accent (mockup zs.css), not a solid tint — the
+		// preset default would emit a solid shu stop; pin the raw alpha value per mode instead.
+		'accent-soft': {
+			light: 'oklch(0.580 0.150 35 / 0.12)',
+			dark: 'oklch(0.700 0.150 35 / 0.18)'
+		},
 
 		// Primary named token = ink-colored CTA (design system: --primary = --ink).
 		// bg-primary / text-primary render ink; the vermillion is `accent`.

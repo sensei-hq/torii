@@ -79,7 +79,7 @@
 		sub="Policies that apply to every member of the organization unless a space overrides them."
 	/>
 
-	<div class="space-y-4 px-5 pb-6">
+	<div class="space-y-6 px-4 pb-12 sm:px-6 xl:px-12 xl:pb-16">
 		{#if error}
 			<Card pad
 				><p class="text-sm text-danger">
@@ -91,7 +91,7 @@
 		{/if}
 		<Card flush>
 			{#each ROWS as r, i (r.k)}
-				<div class="flex items-center gap-4 px-5 py-4 {i > 0 ? 'border-t border-paper-edge' : ''}">
+				<div class="flex items-center gap-4 px-6 py-4 {i > 0 ? 'border-t border-paper-edge' : ''}">
 					<Glyph icon={r.ic} size={34} tone={values[r.k] ? 'accent' : 'mute'} />
 					<div class="min-w-0 flex-1">
 						<div class="text-sm font-semibold text-ink">{r.t}</div>

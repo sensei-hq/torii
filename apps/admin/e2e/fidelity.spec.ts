@@ -879,3 +879,94 @@ test.describe('fidelity — Budgets & billing matches the mock', () => {
 		expect(drift, `Billing spacing drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
 	})
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tools & MCP — real: register-less MCP server enable + tool×role allow-list grants
+// (both real writes). ⚠ Allow-lists are STORED but not yet enforced at inference
+// (chat.rs doesn't read tool_allow_lists) — disclosed honestly in the UI. Full role
+// table (title + both card heads).
+// ─────────────────────────────────────────────────────────────────────────────
+const TOOLS: Role[] = [
+	{
+		role: 'page title (h1)',
+		app: { selector: 'main h1' },
+		mock: { text: 'tools & mcp servers', mode: 'contains' }
+	},
+	{
+		// exact — an empty tenant shows "No MCP servers registered" (text-sm/400), later in the
+		// DOM; exact pins the card-head eyebrow span (11px/500).
+		role: 'card head · MCP servers',
+		app: { text: 'mcp servers', mode: 'exact' },
+		mock: { text: 'mcp servers', mode: 'exact' }
+	},
+	{
+		role: 'card head · Tool allow-list',
+		app: { text: 'tool allow-list', mode: 'exact' },
+		mock: { text: 'tool allow-list', mode: 'exact' }
+	}
+]
+const TOOLS_CARD: Anchor = { text: 'mcp servers', mode: 'exact' }
+
+async function gotoAppTools(app: Page): Promise<void> {
+	await signIn(app)
+	await app
+		.getByRole('link', { name: /tools & mcp/i })
+		.first()
+		.click()
+	await expect(app.locator('main h1')).toHaveText(/tools & mcp servers/i, { timeout: 15_000 })
+}
+
+async function gotoMockTools(mock: Page): Promise<void> {
+	await enterMock(mock)
+	await mock
+		.getByRole('button', { name: /tools & mcp/i })
+		.first()
+		.click()
+	await expect(mock.getByText(/tools & mcp servers/i).first()).toBeVisible({ timeout: 10_000 })
+}
+
+test.describe('fidelity — Tools & MCP matches the mock', () => {
+	for (const mode of ['light', 'dark'] as Mode[]) {
+		test(`typography + colour @ ${mode}`, async ({ browser }) => {
+			const appCtx = await browser.newContext({ viewport: DESKTOP })
+			const app = await appCtx.newPage()
+			await gotoAppTools(app)
+			await setAppMode(app, mode)
+			const mockCtx = await browser.newContext({ viewport: DESKTOP })
+			const mock = await mockCtx.newPage()
+			await gotoMockTools(mock)
+			await setMockMode(mock, mode)
+
+			const drift = await collectTypoColor(app, mock, TOOLS, TOOLS_CARD, TOOLS_CARD)
+			await appCtx.close()
+			await mockCtx.close()
+			expect(
+				drift,
+				`${mode}-mode Tools typography/colour drift vs the mock:\n  ${drift.join('\n  ')}`
+			).toEqual([])
+		})
+	}
+
+	test('spacing @ desktop (1280px)', async ({ browser }) => {
+		const appCtx = await browser.newContext({ viewport: DESKTOP })
+		const app = await appCtx.newPage()
+		await gotoAppTools(app)
+		await setAppMode(app, 'light')
+		const mockCtx = await browser.newContext({ viewport: DESKTOP })
+		const mock = await mockCtx.newPage()
+		await gotoMockTools(mock)
+		await setMockMode(mock, 'light')
+
+		const drift = await collectCardSpacing(
+			app,
+			mock,
+			TOOLS_CARD,
+			TOOLS_CARD,
+			'mcp servers',
+			'mcp servers'
+		)
+		await appCtx.close()
+		await mockCtx.close()
+		expect(drift, `Tools spacing drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
+	})
+})

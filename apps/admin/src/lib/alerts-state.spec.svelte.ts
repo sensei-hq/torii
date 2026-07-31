@@ -26,6 +26,8 @@ const signals = (): AlertSignals => ({
 			cap_amount: 100,
 			spent_amount: 95,
 			reserved_amount: 0,
+			alert_threshold: null,
+			free_floor_enabled: true,
 			enforcement: 'hard',
 			period: 'month'
 		}

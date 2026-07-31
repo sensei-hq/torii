@@ -17,7 +17,7 @@ vs the live mock at `:8890`), and keep unit coverage > 80% (`bun run test:covera
 | --- | --- | --- | --- | --- |
 | Overview | `/` | ✅ done | 5/5 | prior pass |
 | Requests | `/requests` | ✅ done | 3/3 | org "usage patterns" lens (`dd845a6`) |
-| Organization | `/organization` | ⬜ | — | |
+| Organization | `/organization` | ✅ done | 3/3 | **editable budget-hierarchy tree BUILT** (org→dept→team→user, real upsert/delete) + RBAC; SSO/SCIM omitted by decision |
 | Models | `/models` | ✅ done | 3/3 | single catalog table + provider filter; economics/CRUD deferred |
 | Routing | `/routing` | ✅ header | 2/2 | real chains + step toggle; editor/policy/health deferred |
 | Connections | `/connections` | ✅ done | 3/3 | real BYOK vault (connect/rotate/revoke/OAuth); custody/scope/add-router deferred |

@@ -1142,3 +1142,93 @@ test.describe('fidelity — Settings matches the mock', () => {
 		expect(drift, `Settings spacing drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
 	})
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Organization — now the mock's "Hierarchy & budgets": the editable budget tree is
+// real (org→dept→team→user via /v1/budgets + upsert/delete RPCs), plus the app's RBAC
+// (members/roles/matrix/API-identities, §10.3). The mock's SSO/SCIM directory card is
+// intentionally omitted (auth method is out of scope). Header + Budget-hierarchy card.
+// ─────────────────────────────────────────────────────────────────────────────
+const ORGANIZATION: Role[] = [
+	{
+		role: 'page title (h1)',
+		app: { selector: 'main h1' },
+		mock: { text: 'hierarchy & budgets', mode: 'contains' }
+	},
+	{
+		role: 'header eyebrow',
+		app: { text: 'organization', mode: 'exact' },
+		mock: { text: 'organization', mode: 'exact' }
+	},
+	{
+		// exact — the header sub also says "…the budget hierarchy…"; exact pins the card-head span.
+		role: 'card head eyebrow',
+		app: { text: 'budget hierarchy', mode: 'exact' },
+		mock: { text: 'budget hierarchy', mode: 'exact' }
+	}
+]
+const ORG_CARD: Anchor = { text: 'budget hierarchy', mode: 'exact' }
+
+async function gotoAppOrg(app: Page): Promise<void> {
+	await signIn(app)
+	await app
+		.getByRole('link', { name: /members & roles/i })
+		.first()
+		.click()
+	await expect(app.locator('main h1')).toHaveText(/hierarchy & budgets/i, { timeout: 15_000 })
+}
+
+async function gotoMockOrg(mock: Page): Promise<void> {
+	await enterMock(mock)
+	await mock
+		.getByRole('button', { name: /members & roles/i })
+		.first()
+		.click()
+	await expect(mock.getByText(/hierarchy & budgets/i).first()).toBeVisible({ timeout: 10_000 })
+}
+
+test.describe('fidelity — Organization (Hierarchy & budgets) matches the mock', () => {
+	for (const mode of ['light', 'dark'] as Mode[]) {
+		test(`typography + colour @ ${mode}`, async ({ browser }) => {
+			const appCtx = await browser.newContext({ viewport: DESKTOP })
+			const app = await appCtx.newPage()
+			await gotoAppOrg(app)
+			await setAppMode(app, mode)
+			const mockCtx = await browser.newContext({ viewport: DESKTOP })
+			const mock = await mockCtx.newPage()
+			await gotoMockOrg(mock)
+			await setMockMode(mock, mode)
+
+			const drift = await collectTypoColor(app, mock, ORGANIZATION, ORG_CARD, ORG_CARD)
+			await appCtx.close()
+			await mockCtx.close()
+			expect(
+				drift,
+				`${mode}-mode Organization typography/colour drift vs the mock:\n  ${drift.join('\n  ')}`
+			).toEqual([])
+		})
+	}
+
+	test('spacing @ desktop (1280px)', async ({ browser }) => {
+		const appCtx = await browser.newContext({ viewport: DESKTOP })
+		const app = await appCtx.newPage()
+		await gotoAppOrg(app)
+		await setAppMode(app, 'light')
+		const mockCtx = await browser.newContext({ viewport: DESKTOP })
+		const mock = await mockCtx.newPage()
+		await gotoMockOrg(mock)
+		await setMockMode(mock, 'light')
+
+		const drift = await collectCardSpacing(
+			app,
+			mock,
+			ORG_CARD,
+			ORG_CARD,
+			'budget hierarchy',
+			'budget hierarchy'
+		)
+		await appCtx.close()
+		await mockCtx.close()
+		expect(drift, `Organization spacing drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
+	})
+})

@@ -116,6 +116,10 @@ export interface BudgetNode {
 	reserved_amount: number
 	enforcement: string
 	period: string
+	/** alert fraction 0..1 (0.8 = alert at 80%); null = no alert set. */
+	alert_threshold: number | null
+	/** drop to a free local model when the cap is exhausted. */
+	free_floor_enabled: boolean
 }
 
 export interface BudgetRequest {
@@ -335,6 +339,10 @@ export const api = {
 	approveBudgetRequest: (id: string) => gwPost('/rpc/budgets/approve-request', { id }),
 	denyBudgetRequest: (id: string) => gwPost('/rpc/budgets/deny-request', { id }),
 	upsertBudgetNode: (node: Record<string, unknown>) => gwPost('/rpc/budgets/upsert-node', node),
+
+	// Delete a budget node + its whole subtree (server cascades via the parent_id self-FK).
+	// The org root is undeletable (400) — resolution is fail-closed. Capability `budget.write`.
+	deleteBudgetNode: (id: string) => gwPost<{ id: string }>('/rpc/budgets/delete-node', { id }),
 	// mint an identity-bound API key — the raw secret is returned once, never re-fetchable.
 	issueApiKey: (name?: string) => gwPost<IssuedKey>('/rpc/apikeys/issue', { name }),
 	// revoke a key — it stops authenticating immediately (auth denies non-active status).

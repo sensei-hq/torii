@@ -152,7 +152,8 @@ pub async fn get_budgets(
         "select coalesce(json_agg(t order by t.kind), '[]'::json) from ( \
            select id, parent_id, kind, name, \
                   cap_amount::float8 as cap_amount, spent_amount::float8 as spent_amount, \
-                  reserved_amount::float8 as reserved_amount, enforcement, period \
+                  reserved_amount::float8 as reserved_amount, enforcement, period, \
+                  alert_threshold::float8 as alert_threshold, free_floor_enabled \
              from public.budget_nodes where tenant_id = $1) t",
     )
     .bind(tenant)

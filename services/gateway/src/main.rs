@@ -255,6 +255,10 @@ async fn main() -> anyhow::Result<()> {
             "/budgets/upsert-node",
             post(routes::rpc::budgets_upsert_node),
         )
+        .route(
+            "/budgets/delete-node",
+            post(routes::rpc::budgets_delete_node),
+        )
         .route("/budgets/request", post(routes::rpc::budgets_request))
         .route(
             "/budgets/approve-request",

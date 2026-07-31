@@ -99,19 +99,19 @@
 
 <AppShell app="admin" title="Budgets & Billing">
 	<PageHeader
-		eyebrow="Governance"
+		eyebrow="Billing"
 		title="Budgets & billing"
-		sub="Cascading spend caps across the org → team → user tree, with pending increase requests."
+		sub="One license, governed like thousands. Caps cascade from the org down to each member; spend is metered on every call through the gateway. Plans, seats and invoices arrive with launch billing."
 	/>
 
 	{#if loading}
 		<Async loading />
 	{:else if error}
-		<div class="px-5">
+		<div class="px-4 sm:px-6 xl:px-12">
 			<Card pad><p class="text-sm text-ink-soft">{error}</p></Card>
 		</div>
 	{:else}
-		<div class="space-y-4 px-5 pb-6">
+		<div class="space-y-6 px-4 pb-12 sm:px-6 xl:px-12 xl:pb-16">
 			<Card flush>
 				<CardHead title="Budget tree" meta={`${nodes.length} nodes`} />
 				<div>

@@ -788,3 +788,94 @@ test.describe('fidelity — Governance matches the mock (header-level)', () => {
 		})
 	}
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Budgets & billing — real spend governance: budget tree (cap edit via upsert),
+// increase-request approvals, cost breakdown (provider/model from the ledger).
+// Commercial billing (plans/seats/invoices) is v1.x (DECISIONS §10.1) → deferred.
+// Full role table (title + eyebrow + Budget tree card head).
+// ─────────────────────────────────────────────────────────────────────────────
+const BILLING: Role[] = [
+	{
+		role: 'page title (h1)',
+		app: { selector: 'main h1' },
+		mock: { text: 'budgets & billing', mode: 'contains' }
+	},
+	{
+		role: 'header eyebrow',
+		app: { text: 'billing', mode: 'exact' },
+		mock: { text: 'billing', mode: 'exact' }
+	},
+	{
+		// exact, not contains — the §10.1 footer note also says "…the budget tree…" (weight 400)
+		// and is later in the DOM; exact pins the card-head eyebrow span (weight 500).
+		role: 'card head eyebrow',
+		app: { text: 'budget tree', mode: 'exact' },
+		mock: { text: 'budget tree', mode: 'exact' }
+	}
+]
+const BILLING_CARD: Anchor = { text: 'budget tree', mode: 'exact' }
+
+async function gotoAppBilling(app: Page): Promise<void> {
+	await signIn(app)
+	await app
+		.getByRole('link', { name: /budgets & billing/i })
+		.first()
+		.click()
+	await expect(app.locator('main h1')).toHaveText(/budgets & billing/i, { timeout: 15_000 })
+}
+
+async function gotoMockBilling(mock: Page): Promise<void> {
+	await enterMock(mock)
+	await mock
+		.getByRole('button', { name: /budgets & billing/i })
+		.first()
+		.click()
+	await expect(mock.getByText(/budgets & billing/i).first()).toBeVisible({ timeout: 10_000 })
+}
+
+test.describe('fidelity — Budgets & billing matches the mock', () => {
+	for (const mode of ['light', 'dark'] as Mode[]) {
+		test(`typography + colour @ ${mode}`, async ({ browser }) => {
+			const appCtx = await browser.newContext({ viewport: DESKTOP })
+			const app = await appCtx.newPage()
+			await gotoAppBilling(app)
+			await setAppMode(app, mode)
+			const mockCtx = await browser.newContext({ viewport: DESKTOP })
+			const mock = await mockCtx.newPage()
+			await gotoMockBilling(mock)
+			await setMockMode(mock, mode)
+
+			const drift = await collectTypoColor(app, mock, BILLING, BILLING_CARD, BILLING_CARD)
+			await appCtx.close()
+			await mockCtx.close()
+			expect(
+				drift,
+				`${mode}-mode Billing typography/colour drift vs the mock:\n  ${drift.join('\n  ')}`
+			).toEqual([])
+		})
+	}
+
+	test('spacing @ desktop (1280px)', async ({ browser }) => {
+		const appCtx = await browser.newContext({ viewport: DESKTOP })
+		const app = await appCtx.newPage()
+		await gotoAppBilling(app)
+		await setAppMode(app, 'light')
+		const mockCtx = await browser.newContext({ viewport: DESKTOP })
+		const mock = await mockCtx.newPage()
+		await gotoMockBilling(mock)
+		await setMockMode(mock, 'light')
+
+		const drift = await collectCardSpacing(
+			app,
+			mock,
+			BILLING_CARD,
+			BILLING_CARD,
+			'budget tree',
+			'budget tree'
+		)
+		await appCtx.close()
+		await mockCtx.close()
+		expect(drift, `Billing spacing drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
+	})
+})

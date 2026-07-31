@@ -1054,3 +1054,91 @@ test.describe('fidelity — Device fleet matches the mock', () => {
 		expect(drift, `Device fleet spacing drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
 	})
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Settings — workspace-default policy toggles, each persisted to tenant_settings
+// (real writes; masking + autoFallback are C1-enforced). Closely matches the mock.
+// Anchors the header + the first toggle-row title (no card head on this screen).
+// ─────────────────────────────────────────────────────────────────────────────
+const SETTINGS: Role[] = [
+	{
+		role: 'page title (h1)',
+		app: { selector: 'main h1' },
+		mock: { text: 'workspace defaults', mode: 'contains' }
+	},
+	{
+		role: 'header eyebrow',
+		app: { text: 'settings', mode: 'exact' },
+		mock: { text: 'settings', mode: 'exact' }
+	},
+	{
+		role: 'toggle row title',
+		app: { text: 'pii & tenant masking', mode: 'exact' },
+		mock: { text: 'pii & tenant masking', mode: 'exact' }
+	}
+]
+const SETTINGS_CARD: Anchor = { text: 'pii & tenant masking', mode: 'exact' }
+
+async function gotoAppSettings(app: Page): Promise<void> {
+	await signIn(app)
+	await app
+		.getByRole('link', { name: /^settings$/i })
+		.first()
+		.click()
+	await expect(app.locator('main h1')).toHaveText(/workspace defaults/i, { timeout: 15_000 })
+}
+
+async function gotoMockSettings(mock: Page): Promise<void> {
+	await enterMock(mock)
+	await mock
+		.getByRole('button', { name: /^settings$/i })
+		.first()
+		.click()
+	await expect(mock.getByText(/workspace defaults/i).first()).toBeVisible({ timeout: 10_000 })
+}
+
+test.describe('fidelity — Settings matches the mock', () => {
+	for (const mode of ['light', 'dark'] as Mode[]) {
+		test(`typography + colour @ ${mode}`, async ({ browser }) => {
+			const appCtx = await browser.newContext({ viewport: DESKTOP })
+			const app = await appCtx.newPage()
+			await gotoAppSettings(app)
+			await setAppMode(app, mode)
+			const mockCtx = await browser.newContext({ viewport: DESKTOP })
+			const mock = await mockCtx.newPage()
+			await gotoMockSettings(mock)
+			await setMockMode(mock, mode)
+
+			const drift = await collectTypoColor(app, mock, SETTINGS, SETTINGS_CARD, SETTINGS_CARD)
+			await appCtx.close()
+			await mockCtx.close()
+			expect(
+				drift,
+				`${mode}-mode Settings typography/colour drift vs the mock:\n  ${drift.join('\n  ')}`
+			).toEqual([])
+		})
+	}
+
+	test('spacing @ desktop (1280px)', async ({ browser }) => {
+		const appCtx = await browser.newContext({ viewport: DESKTOP })
+		const app = await appCtx.newPage()
+		await gotoAppSettings(app)
+		await setAppMode(app, 'light')
+		const mockCtx = await browser.newContext({ viewport: DESKTOP })
+		const mock = await mockCtx.newPage()
+		await gotoMockSettings(mock)
+		await setMockMode(mock, 'light')
+
+		const drift = await collectCardSpacing(
+			app,
+			mock,
+			SETTINGS_CARD,
+			SETTINGS_CARD,
+			'pii & tenant masking',
+			'pii & tenant masking'
+		)
+		await appCtx.close()
+		await mockCtx.close()
+		expect(drift, `Settings spacing drift vs the mock:\n  ${drift.join('\n  ')}`).toEqual([])
+	})
+})

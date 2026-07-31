@@ -25,7 +25,7 @@ vs the live mock at `:8890`), and keep unit coverage > 80% (`bun run test:covera
 | Governance | `/governance` | ✅ header | 2/2 | real feature-gov + fleet + audit; DLP/policy editors deferred (P6) |
 | Budgets & billing | `/billing` | ✅ done | 3/3 | real budget tree + approvals + cost breakdown; commercial billing §10.1-deferred |
 | Device fleet | `/devices` | ✅ done | 3/3 | real fleet list + revoke; nav Devices→Device fleet; enroll/config-drift deferred |
-| Settings | `/settings` | ⬜ | — | |
+| Settings | `/settings` | ✅ done | 3/3 | real persisted workspace-default toggles; already matched the mock |
 | Onboarding | `/onboarding` | ⬜ (no route yet) | — | Pass-2 wizard (`onboarding_state` table) |
 
 ---

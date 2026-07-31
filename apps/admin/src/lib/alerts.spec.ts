@@ -10,6 +10,8 @@ const node = (over: Partial<BudgetNode> = {}): BudgetNode => ({
 	cap_amount: 100,
 	spent_amount: 0,
 	reserved_amount: 0,
+	alert_threshold: null,
+	free_floor_enabled: true,
 	enforcement: 'hard',
 	period: 'month',
 	...over

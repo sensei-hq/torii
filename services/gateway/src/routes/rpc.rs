@@ -105,6 +105,11 @@ pub struct UpsertNode {
     pub cap_amount: Option<f64>,
     pub period: Option<String>,
     pub enforcement: Option<String>,
+    /// Alert fraction 0..1 (e.g. 0.8 = alert at 80%); null = no alert.
+    pub alert_threshold: Option<f64>,
+    /// Drop to a free local model when the cap is exhausted (schema default true).
+    /// The client sends the whole node on every edit, so an omitted value resets to true.
+    pub free_floor_enabled: Option<bool>,
 }
 
 /// `POST /rpc/budgets/upsert-node` — capability `budget.write`.
@@ -121,12 +126,16 @@ pub async fn budgets_upsert_node(
     let id = body.id.unwrap_or_else(Uuid::new_v4);
     let write = sqlx::query(
         "insert into public.budget_nodes \
-           (tenant_id, id, parent_id, kind, name, cap_amount, period, enforcement, modified_by) \
-         values ($1,$2,$3,$4,$5,$6, coalesce($7,'monthly'), coalesce($8,'hard'), $9) \
+           (tenant_id, id, parent_id, kind, name, cap_amount, period, enforcement, \
+            alert_threshold, free_floor_enabled, modified_by) \
+         values ($1,$2,$3,$4,$5,$6, coalesce($7,'monthly'), coalesce($8,'hard'), \
+                 $9, coalesce($10, true), $11) \
          on conflict (tenant_id, id) do update set \
            parent_id = excluded.parent_id, kind = excluded.kind, name = excluded.name, \
            cap_amount = excluded.cap_amount, period = excluded.period, \
-           enforcement = excluded.enforcement, modified_at = now(), modified_by = excluded.modified_by",
+           enforcement = excluded.enforcement, alert_threshold = excluded.alert_threshold, \
+           free_floor_enabled = excluded.free_floor_enabled, \
+           modified_at = now(), modified_by = excluded.modified_by",
     )
     .bind(tenant)
     .bind(id)
@@ -136,6 +145,8 @@ pub async fn budgets_upsert_node(
     .bind(body.cap_amount)
     .bind(&body.period)
     .bind(&body.enforcement)
+    .bind(body.alert_threshold)
+    .bind(body.free_floor_enabled)
     .bind(actor.to_string())
     .execute(&state.pool)
     .await;
@@ -155,6 +166,75 @@ pub async fn budgets_upsert_node(
     )
     .await;
     (StatusCode::OK, Json(json!({ "id": id }))).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct DeleteNode {
+    pub id: Uuid,
+}
+
+/// `POST /rpc/budgets/delete-node` — capability `budget.write`. Deletes a budget node and,
+/// via the `(tenant_id, parent_id)` self-FK `ON DELETE CASCADE`, its entire subtree. The
+/// tenant's org ROOT (`parent_id IS NULL`) is UNDELETABLE: budget resolution is fail-closed
+/// and every call needs a seeded org root, so removing it would break metering tenant-wide.
+pub async fn budgets_delete_node(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<DeleteNode>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "budget.write").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    // Look up the node IN THE CALLER'S TENANT (no cross-tenant delete). A NULL parent
+    // identifies the org root, which is refused.
+    let parent: Result<Option<Option<Uuid>>, _> = sqlx::query_scalar(
+        "select parent_id from public.budget_nodes where tenant_id = $1 and id = $2",
+    )
+    .bind(tenant)
+    .bind(body.id)
+    .fetch_optional(&state.pool)
+    .await;
+
+    match parent {
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such budget node").into_response(),
+        Ok(Some(None)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "cannot delete the org root budget node",
+            )
+                .into_response()
+        }
+        Ok(Some(Some(_))) => {}
+        Err(e) => {
+            tracing::error!("budgets_delete_node lookup: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response();
+        }
+    }
+
+    // Cascade delete — descendants go with it via the parent_id self-FK ON DELETE CASCADE.
+    let del = sqlx::query("delete from public.budget_nodes where tenant_id = $1 and id = $2")
+        .bind(tenant)
+        .bind(body.id)
+        .execute(&state.pool)
+        .await;
+
+    if let Err(e) = del {
+        tracing::error!("budgets_delete_node: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "delete failed").into_response();
+    }
+
+    audit(
+        &state,
+        tenant,
+        actor,
+        "budget.node.deleted",
+        "budget_node",
+        Some(body.id),
+    )
+    .await;
+    (StatusCode::OK, Json(json!({ "id": body.id }))).into_response()
 }
 
 #[derive(Deserialize)]
@@ -1868,6 +1948,52 @@ mod tests {
         assert!(taken("support", tenant, pool.clone()).await, "created custom key is now taken (409 on re-create)");
 
         // cleanup: dropping the tenant cascades to its roles + grants.
+        sqlx::query("delete from core.tenants where id=$1").bind(tenant).execute(&pool).await.unwrap();
+    }
+
+    /// The SQL contracts `budgets_delete_node` relies on: (1) the org root is identified by a
+    /// NULL `parent_id` (so the handler can refuse it), and (2) deleting a non-root node CASCADES
+    /// to its whole subtree via the `(tenant_id, parent_id)` self-FK `ON DELETE CASCADE`. A revert
+    /// of the cascade FK (or the root guard) fails this. DB-gated (needs local Supabase 55322).
+    #[tokio::test]
+    #[ignore = "requires local Supabase (55322) with the budget_nodes schema"]
+    async fn budgets_delete_cascades_subtree_and_root_is_null_parent() {
+        let pool = pool().await;
+        let tenant = Uuid::new_v4();
+        sqlx::query("insert into core.tenants (id,name,slug,modified_by) values ($1,'budtree-test',$2,'test')")
+            .bind(tenant).bind(format!("budtree-{tenant}")).execute(&pool).await.unwrap();
+
+        // org (root) → dept → user, plus alert/floor to prove the columns round-trip.
+        let (org, dept, user) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let ins = |id: Uuid, parent: Option<Uuid>, kind: &'static str, p: PgPool, t: Uuid| async move {
+            sqlx::query("insert into public.budget_nodes (tenant_id,id,parent_id,kind,name,cap_amount,alert_threshold,free_floor_enabled,enforcement,modified_by) \
+                         values ($1,$2,$3,$4,$4,100,0.8,false,'hard','test')")
+                .bind(t).bind(id).bind(parent).bind(kind).execute(&p).await.unwrap();
+        };
+        ins(org, None, "org", pool.clone(), tenant).await;
+        ins(dept, Some(org), "dept", pool.clone(), tenant).await;
+        ins(user, Some(dept), "user", pool.clone(), tenant).await;
+
+        // (1) root guard: the org node has a NULL parent → the handler refuses to delete it.
+        let root_parent: Option<Uuid> = sqlx::query_scalar(
+            "select parent_id from public.budget_nodes where tenant_id=$1 and id=$2")
+            .bind(tenant).bind(org).fetch_one(&pool).await.unwrap();
+        assert!(root_parent.is_none(), "org root must have a NULL parent (undeletable)");
+        // alert/floor persisted (columns exposed by the read + upsert).
+        let (alert, floor): (Option<f64>, bool) = sqlx::query_as(
+            "select alert_threshold::float8, free_floor_enabled from public.budget_nodes where tenant_id=$1 and id=$2")
+            .bind(tenant).bind(dept).fetch_one(&pool).await.unwrap();
+        assert_eq!(alert, Some(0.8));
+        assert!(!floor, "free_floor_enabled must round-trip false");
+
+        // (2) delete the dept → cascade removes dept + its user child; only the org root remains.
+        sqlx::query("delete from public.budget_nodes where tenant_id=$1 and id=$2")
+            .bind(tenant).bind(dept).execute(&pool).await.unwrap();
+        let remaining: i64 = sqlx::query_scalar(
+            "select count(*) from public.budget_nodes where tenant_id=$1")
+            .bind(tenant).fetch_one(&pool).await.unwrap();
+        assert_eq!(remaining, 1, "cascade must remove dept + user, leaving only the org root");
+
         sqlx::query("delete from core.tenants where id=$1").bind(tenant).execute(&pool).await.unwrap();
     }
 

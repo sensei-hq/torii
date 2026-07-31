@@ -3,6 +3,8 @@
 	import { SvelteSet } from 'svelte/reactivity'
 	import { AppShell, PageHeader, Card, CardHead, Glyph, Chip, Async, Empty } from '@torii/ui'
 	import { api } from '$lib/api'
+	import { orgTreeState } from '$lib/org-tree-state.svelte'
+	import BudgetTreeNode from '$lib/BudgetTreeNode.svelte'
 
 	/** @type {import('$lib/api').Member[]} */
 	let members = $state([])
@@ -30,11 +32,18 @@
 
 	async function load() {
 		try {
-			const [o, k] = await Promise.all([api.org(), api.apikeys()])
+			// Budgets ride their own capability (budget.read) — a denial or an unseeded tree must
+			// NOT blank the RBAC below, so it degrades to an empty tree in its own slot.
+			const [o, k, b] = await Promise.all([
+				api.org(),
+				api.apikeys(),
+				api.budgets().catch(() => ({ nodes: [], requests: [] }))
+			])
 			members = o.members
 			roles = o.roles
 			capabilities = o.capabilities
 			keys = k.keys
+			orgTreeState.load(b.nodes)
 			me = await api.whoami()
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e)
@@ -43,6 +52,11 @@
 		}
 	}
 	onMount(load)
+
+	// org root (the parent-less node) drives the header "left this month" pill.
+	const orgRoot = $derived(orgTreeState.nodes.find((n) => n.parent_id == null))
+	/** @param {number | null | undefined} n */
+	const money0 = (n) => (n == null ? '∞' : '$' + Math.round(n).toLocaleString())
 
 	/** Issue a scoped API identity — the raw key is returned once, kept only in `revealed`. */
 	async function issue() {
@@ -237,14 +251,90 @@
 <AppShell app="admin" title="Organization">
 	<PageHeader
 		eyebrow="Organization"
-		title="People & access"
-		sub="Members and their roles, the API identities that stand in for the org's own apps, and the authoritative role × capability matrix. Effective access is the union of a member's roles — resolved server-side by the gateway, never trusted from the token."
-	/>
+		title="Hierarchy & budgets"
+		sub="Model your org as it really is — the budget hierarchy (add levels, rename, cap each; caps cascade org → team → user), the people and roles that map onto it, and the API identities for your own apps. Access resolves server-side, never trusted from the token."
+	>
+		{#snippet actions()}
+			{#if orgRoot}
+				<span
+					class="inline-flex items-center gap-1.5 rounded-full border border-paper-edge bg-paper px-2.5 py-1 text-xs text-ink-soft"
+				>
+					<span class="h-1.5 w-1.5 rounded-full bg-success"></span>
+					{#if orgRoot.cap_amount != null}
+						{money0(orgRoot.cap_amount - orgRoot.spent_amount)} left this {orgRoot.period ===
+						'daily'
+							? 'day'
+							: orgRoot.period === 'weekly'
+								? 'week'
+								: 'month'}
+					{:else}
+						{money0(orgRoot.spent_amount)} spent · no org cap
+					{/if}
+				</span>
+			{/if}
+		{/snippet}
+	</PageHeader>
 
 	{#if loading}
 		<Async loading />
 	{:else}
-		<div class="space-y-4 px-5 pb-6">
+		<div class="space-y-6 px-4 pb-12 sm:px-6 xl:px-12 xl:pb-16">
+			<!-- Budget hierarchy — the editable org → dept → team → user tree (real /v1/budgets +
+			     upsert/delete RPCs). The mock's SSO/SCIM directory card is intentionally omitted:
+			     auth method (magic-link/OAuth/SSO) is out of scope; the hierarchy + budgets are the point. -->
+			<Card flush>
+				<CardHead title="Budget hierarchy" icon="i-solar-buildings-2-bold-duotone">
+					{#snippet right()}
+						{#if orgRoot}
+							<button
+								type="button"
+								onclick={() => orgTreeState.addChild(orgRoot)}
+								disabled={orgTreeState.busy === orgRoot.id}
+								class="inline-flex items-center gap-1.5 rounded-md border border-paper-edge bg-paper px-2.5 py-1 text-xs text-ink-soft transition-colors hover:bg-paper-mute disabled:opacity-40"
+							>
+								<span class="i-solar-add-circle-linear h-3.5 w-3.5 text-ink-mute"></span>
+								Add department
+							</button>
+						{/if}
+					{/snippet}
+				</CardHead>
+				{#if orgTreeState.error}
+					<div class="flex items-center gap-2 border-b border-paper-edge px-6 py-2">
+						<span class="text-xs text-danger" role="alert">{orgTreeState.error}</span>
+						<button
+							type="button"
+							onclick={() => orgTreeState.clearError()}
+							class="text-xs text-ink-mute hover:text-ink">dismiss</button
+						>
+					</div>
+				{/if}
+				<div class="px-4 py-3">
+					{#each orgTreeState.tree as root (root.id)}
+						<BudgetTreeNode node={root} />
+					{/each}
+					{#if orgTreeState.tree.length === 0}
+						<Empty
+							icon="i-solar-wallet-bold-duotone"
+							message="No budget tree seeded for this tenant."
+							pad="py-8"
+						/>
+					{/if}
+				</div>
+				<div
+					class="flex items-start gap-2 border-t border-dashed border-paper-edge px-6 py-3 text-xs text-ink-mute"
+				>
+					<span class="i-solar-info-circle-linear mt-0.5 h-3.5 w-3.5 shrink-0"></span>
+					<span>
+						Each level shows <b>alloc</b> — the sum of its children's caps against its own;
+						over-allocate and it turns red. The gear sets a node's <b>hard/soft</b> cap,
+						<b>alert threshold</b>
+						and
+						<b>free-floor</b>; <b>D·W·M</b> set its enforcement window. Caps cascade — a call needs
+						headroom at user, team, department <em>and</em> org.
+					</span>
+				</div>
+			</Card>
+
 			<!-- action/load errors show inline here, without hiding the member list -->
 			{#if error}
 				<Card pad

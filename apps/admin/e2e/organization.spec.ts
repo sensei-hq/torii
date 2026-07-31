@@ -12,11 +12,11 @@ test.describe('organization — API identities home', () => {
 	test('Organization hosts the API-identities section', async ({ page }) => {
 		await page.getByRole('link', { name: /members & roles/i }).click()
 		await expect(page).toHaveURL(/\/organization$/)
-		// Members still load (the screen's primary content).
-		await expect(page.getByRole('heading', { name: /people & access/i })).toBeVisible({
+		// The screen is now the mock's "Hierarchy & budgets" (editable budget tree + RBAC).
+		await expect(page.getByRole('heading', { name: /hierarchy & budgets/i })).toBeVisible({
 			timeout: 10_000
 		})
-		// The moved block: identity issuance now lives here.
+		// The moved block (DECISIONS §10.3): identity issuance still lives here.
 		await expect(page.getByText(/^API identities$/i)).toBeVisible({ timeout: 10_000 })
 		await expect(page.getByRole('button', { name: /issue key/i })).toBeVisible()
 	})

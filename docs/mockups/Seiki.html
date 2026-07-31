@@ -4,9 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Seiki · admin portal</title>
+  <!-- typefaces (Fontsource) + design tokens: the only CSS files -->
+  <link rel="stylesheet" href="app/fonts.css" />
   <link rel="stylesheet" href="app/zs.css" />
-  <link rel="stylesheet" href="app/zs-app.css" />
-  <link rel="stylesheet" href="app/zs-responsive.css" />
+  <!-- UnoCSS: the whole styling system lives in app/uno.config.js -->
+  <script src="app/uno.config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@unocss/runtime@0.63.6/uno.global.js"></script>
   <template id="__bundler_thumbnail">
     <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
       <rect width="32" height="32" rx="6" fill="#A83D1F"/>
@@ -24,7 +27,9 @@
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
   <!-- non-JSX modules (plain IIFEs) -->
+  <script src="app/content.js"></script>
   <script src="app/data.jsx"></script>
+  <script src="app/api.jsx"></script>
   <script src="app/icons.jsx"></script>
   <script src="app/atoms.jsx"></script>
 

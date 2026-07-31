@@ -3,24 +3,10 @@
    for shared) and set tool allow-lists per role. v1 scope. */
 (function () {
   const { Icon } = window.StrategosIcons;
-  const { Pill, Switch, PageHeader } = window.StrategosUI;
+  const { ViewPad, Card, CardHead, Tag, CardFoot, Button, Table, Pill, Switch, PageHeader } = window.StrategosUI;
   const { useState } = React;
 
-  const SERVERS0 = [
-    { id: 'finance-warehouse', transport: 'http', scope: 'shared',  exec: 'gateway',   tools: 4, status: 'healthy', url: 'https://mcp.northwind/finance', note: 'SQL over finance.*' },
-    { id: 'file-export',       transport: 'sse',  scope: 'shared',  exec: 'gateway',   tools: 3, status: 'healthy', url: 'https://mcp.northwind/files',   note: 'csv · xlsx · pdf' },
-    { id: 'code-interpreter',  transport: 'stdio', scope: 'desktop', exec: 'on-device', tools: 1, status: 'healthy', url: 'stdio://sandboxed-python',      note: 'sandboxed python · on-box' },
-    { id: 'web-fetch',         transport: 'http', scope: 'shared',  exec: 'gateway',   tools: 1, status: 'restricted', url: 'https://mcp.northwind/web',    note: 'external URLs · off by default' },
-  ];
-  const ROLES = ['Owner', 'Admin', 'Editor', 'Viewer'];
-  const TOOLS = [
-    { id: 'sql',    name: 'Warehouse SQL',    server: 'finance-warehouse', grants: { Owner: true, Admin: true, Editor: true, Viewer: false } },
-    { id: 'export', name: 'File export',      server: 'file-export',       grants: { Owner: true, Admin: true, Editor: true, Viewer: true } },
-    { id: 'code',   name: 'Code interpreter', server: 'code-interpreter',  grants: { Owner: true, Admin: true, Editor: false, Viewer: false } },
-    { id: 'web',    name: 'Web fetch',        server: 'web-fetch',         grants: { Owner: true, Admin: false, Editor: false, Viewer: false } },
-  ];
-  const TRANSPORT = { stdio: ['stdio', 'var(--ink-mute)'], http: ['http', 'var(--ink-mute)'], sse: ['sse', 'var(--ink-mute)'] };
-  const SPACES = [['all', 'Role default'], ['leasing', 'Leasing Ops'], ['finance', 'Finance'], ['support', 'Support']];
+  const { SERVERS0, ROLES, TOOLS, TRANSPORT, SPACES } = window.StrategosAPI.content.tools;
 
   function ToolsView() {
     const [servers, setServers] = useState(SERVERS0);
@@ -39,20 +25,20 @@
     };
 
     return (
-      <div className="view-pad wide rise">
+      <ViewPad wide className="rise">
         <PageHeader eyebrow="Gateway" title="Tools & MCP servers" subMax={660}
           sub="Register the MCP servers your org exposes — stdio for on-device desktop tools, http/sse for shared gateway tools — and decide which roles may call each tool."
-          actions={<button className="zs-btn zs-btn-primary"><Icon name="plus" size={15} tone="paper" /> Register server</button>} />
+          actions={<Button variant="primary"><Icon name="plus" size={15} tone="paper" /> Register server</Button>} />
 
-        <div className="card" style={{ overflow: 'hidden', marginBottom: 'var(--space-5)' }}>
-          <div className="card-hd"><span className="flex items-center gap-2"><Icon name="router" size={15} tone="soft" /><span className="zs-eyebrow">MCP servers</span></span><span className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-mute)' }}>{servers.filter((s) => s.status !== 'off').length} of {servers.length} active</span></div>
+        <Card className="overflow-hidden mb-6">
+          <CardHead><span className="flex items-center gap-2"><Icon name="router" size={15} tone="soft" /><span className="zs-eyebrow">MCP servers</span></span><span className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-mute)' }}>{servers.filter((s) => s.status !== 'off').length} of {servers.length} active</span></CardHead>
           {servers.map((s, i) => (
-            <div key={s.id} className="flex items-center gap-3" style={{ padding: 'var(--space-4) var(--space-5)', borderTop: i ? '1px solid var(--paper-edge)' : 'none', opacity: s.status === 'off' ? 0.55 : 1 }}>
-              <span className="glyph" style={{ width: 32, height: 32 }}><Icon name={s.exec === 'on-device' ? 'models' : 'globe'} size={16} tone={s.exec === 'on-device' ? 'success' : 'soft'} /></span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="flex items-center gap-2" style={{ flexWrap: 'wrap' }}>
+            <div key={s.id} className="flex items-center gap-3 py-4 px-6" style={{ borderTop: i ? '1px solid var(--paper-edge)' : 'none', opacity: s.status === 'off' ? 0.55 : 1 }}>
+              <span className="glyph w-[32px] h-[32px]"><Icon name={s.exec === 'on-device' ? 'models' : 'globe'} size={16} tone={s.exec === 'on-device' ? 'success' : 'soft'} /></span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="mono" style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--ink)' }}>{s.id}</span>
-                  <span className="tag">{TRANSPORT[s.transport][0]}</span>
+                  <Tag>{TRANSPORT[s.transport][0]}</Tag>
                   <span className="dtag">{s.scope}</span>
                   {s.exec === 'on-device'
                     ? <span className="exec exec-local"><Icon name="models" size={12} tone="success" />on device</span>
@@ -65,24 +51,24 @@
               <Switch on={s.status !== 'off'} onClick={() => toggleServer(s.id)} label={'Enable ' + s.id} />
             </div>
           ))}
-          <div className="card-foot dashed"><Icon name="info" size={14} tone="mute" /><span><b>stdio</b> servers run inside Torii (on-device, no egress). <b>http/sse</b> servers are shared and run via the gateway.</span></div>
-        </div>
+          <CardFoot dashed><Icon name="info" size={14} tone="mute" /><span><b>stdio</b> servers run inside Torii (on-device, no egress). <b>http/sse</b> servers are shared and run via the gateway.</span></CardFoot>
+        </Card>
 
-        <div className="card" style={{ overflow: 'hidden' }}>
-          <div className="card-hd">
+        <Card className="overflow-hidden">
+          <CardHead>
             <span className="flex items-center gap-2"><Icon name="shield" size={15} tone="soft" /><span className="zs-eyebrow">Tool allow-list</span></span>
-            <span className="flex items-center gap-2" style={{ flexWrap: 'wrap' }}>
-              <span className="zs-eyebrow" style={{ marginRight: 2 }}>Space</span>
+            <span className="flex items-center gap-2 flex-wrap">
+              <span className="zs-eyebrow mr-0.5">Space</span>
               {SPACES.map(([id, lab]) => { const on = space === id; return <button key={id} onClick={() => setSpace(id)} style={{ padding: '3px 9px', borderRadius: 'var(--radius-full)', fontSize: 'var(--text-xs)', fontWeight: 500, border: '1px solid ' + (on ? 'var(--ink)' : 'var(--paper-edge)'), background: on ? 'var(--ink)' : 'var(--paper)', color: on ? 'var(--on-primary)' : 'var(--ink-soft)' }}>{lab}</button>; })}
             </span>
-          </div>
-          <div style={{ overflowX: 'auto' }}>
-            <table className="tbl tbl-stack" style={{ '--tbl-min': '640px' }}>
+          </CardHead>
+          <div className="overflow-x-auto">
+            <Table min={640}>
               <thead><tr><th>Tool</th>{ROLES.map((r) => <th key={r} className="num">{r}</th>)}</tr></thead>
               <tbody>
                 {TOOLS.map((t) => (
                   <tr key={t.id}>
-                    <td><div style={{ color: 'var(--ink)', fontWeight: 600, fontSize: 'var(--text-sm)' }}>{t.name}</div><div className="mono" style={{ fontSize: 11, color: 'var(--ink-mute)' }}>{t.server}</div></td>
+                    <td><div className="text-ink font-semibold text-sm">{t.name}</div><div className="mono" style={{ fontSize: 11, color: 'var(--ink-mute)' }}>{t.server}</div></td>
                     {ROLES.map((r) => {
                       const allowed = cellAllowed(t.id, r);
                       const locked = space !== 'all' && !roleAllows(t.id, r);   // role denies → space can't grant
@@ -100,11 +86,11 @@
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </Table>
           </div>
-          <div className="card-foot dashed"><Icon name="lock" size={14} tone="mute" /><span>{space === 'all' ? <>Editing the <b>role default</b>. Pick a space to tighten it — a space may remove a tool a role allows, but never grant one the role denies.</> : <>Editing <b style={{ color: 'var(--ink)' }}>{(SPACES.find((s) => s[0] === space) || [])[1]}</b>. Greyed cells are denied by the role and can’t be granted here.</>}</span></div>
-        </div>
-      </div>
+          <CardFoot dashed><Icon name="lock" size={14} tone="mute" /><span>{space === 'all' ? <>Editing the <b>role default</b>. Pick a space to tighten it — a space may remove a tool a role allows, but never grant one the role denies.</> : <>Editing <b style={{ color: 'var(--ink)' }}>{(SPACES.find((s) => s[0] === space) || [])[1]}</b>. Greyed cells are denied by the role and can’t be granted here.</>}</span></CardFoot>
+        </Card>
+      </ViewPad>
     );
   }
 

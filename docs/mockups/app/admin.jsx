@@ -4,7 +4,7 @@
 (function () {
   const { Chrome, Rail } = window.StrategosShell;
   const { Icon, Mark } = window.StrategosIcons;
-  const { Switch, PageHeader } = window.StrategosUI;
+  const { ViewPad, Card, Switch, PageHeader } = window.StrategosUI;
   const { useState, useEffect } = React;
 
   /* ── workspace defaults (admin settings) ──────────────────── */
@@ -18,57 +18,29 @@
     const [s, setS] = useState(() => Object.fromEntries(ROWS.map((r, i) => [r.k, i < 2])));
     const flip = (k) => setS((o) => ({ ...o, [k]: !o[k] }));
     return (
-      <div className="view-pad rise">
+      <ViewPad className="rise">
         <PageHeader eyebrow="Settings" title="Workspace defaults" subMax={600}
           sub="Policies that apply to every member of Northwind Estates unless a space overrides them." />
-        <div className="card" style={{ overflow: 'hidden' }}>
+        <Card className="overflow-hidden">
           {ROWS.map((r, i) => (
-            <div key={r.k} className="flex items-center gap-4" style={{ padding: 'var(--space-4) var(--space-5)', borderTop: i ? '1px solid var(--paper-edge)' : 'none' }}>
-              <span className="glyph" style={{ width: 34, height: 34 }}><Icon name={r.ic} size={17} tone={s[r.k] ? 'accent' : 'mute'} /></span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--ink)' }}>{r.t}</div>
-                <div className="zs-body-sm" style={{ marginTop: 1 }}>{r.d}</div>
+            <div key={r.k} className="flex items-center gap-4 py-4 px-6" style={{ borderTop: i ? '1px solid var(--paper-edge)' : 'none' }}>
+              <span className="glyph w-[34px] h-[34px]"><Icon name={r.ic} size={17} tone={s[r.k] ? 'accent' : 'mute'} /></span>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-ink">{r.t}</div>
+                <div className="zs-body-sm mt-px">{r.d}</div>
               </div>
               <Switch on={s[r.k]} onClick={() => flip(r.k)} label={r.t} />
             </div>
           ))}
-        </div>
-        <div className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-faint)', marginTop: 'var(--space-5)' }}>Seiki · gateway · healthy · last heartbeat 2s ago</div>
-      </div>
+        </Card>
+        <div className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-faint)', marginTop: '24px' }}>Seiki · gateway · healthy · last heartbeat 2s ago</div>
+      </ViewPad>
     );
   }
 
   /* ── admin navigation ─────────────────────────────────────── */
-  const NAV = [
-    { label: 'Overview', items: [
-      { id: 'overview', label: 'Overview', icon: 'overview' },
-      { id: 'requests', label: 'Usage patterns', icon: 'requests', end: 'live' },
-    ]},
-    { label: 'Tenant', items: [
-      { id: 'organization', label: 'Members & roles', icon: 'org' },
-      { id: 'onboarding', label: 'Onboarding', icon: 'sso' },
-      { id: 'apikeys', label: 'API identities', icon: 'keys' },
-    ]},
-    { label: 'Gateway', items: [
-      { id: 'models', label: 'Models', icon: 'models', end: '8' },
-      { id: 'routing', label: 'Routing', icon: 'routing' },
-      { id: 'connections', label: 'Connections', icon: 'keys' },
-      { id: 'spaces', label: 'Spaces & KB', icon: 'library' },
-      { id: 'tools', label: 'Tools & MCP', icon: 'branch' },
-      { id: 'templates', label: 'Prompt library', icon: 'grid' },
-    ]},
-    { label: 'Govern', items: [
-      { id: 'governance', label: 'Governance', icon: 'governance' },
-      { id: 'features', label: 'Feature management', icon: 'lock' },
-      { id: 'devices', label: 'Device fleet', icon: 'models' },
-      { id: 'alerts', label: 'Alerts', icon: 'bell' },
-      { id: 'billing', label: 'Budgets & billing', icon: 'wallet' },
-      { id: 'settings', label: 'Settings', icon: 'settings' },
-    ]},
-  ];
+  const { NAV, ACCOUNT, USER } = window.StrategosAPI.content.admin;
 
-  const ACCOUNT = { mark: 'N', name: 'Northwind Estates', sub: 'org · 142 seats' };
-  const USER = { name: 'Aiko', initial: 'A' };
   const FOOTER = React.createElement(window.StrategosUI.DeviceFooter, { scope: 'admin' });
 
   function renderView(section, go) {
@@ -129,15 +101,15 @@
     );
 
     return (
-      <div className="atop">
+      <div className="atop px-4 py-2 sm:px-6">
         <div className="atop-org">
-          <span className="org-mark" style={{ width: 26, height: 26, fontSize: 13 }}>{ACCOUNT.mark}</span>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap' }}>{ACCOUNT.name}</div>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-mute)' }}>{ACCOUNT.sub}</div>
+          <span className="org-mark w-[26px] h-[26px] text-[13px]">{ACCOUNT.mark}</span>
+          <div className="lt-sm:hidden min-w-0">
+            <div className="text-sm font-semibold text-ink whitespace-nowrap">{ACCOUNT.name}</div>
+            <div className="font-mono text-xs text-ink-mute">{ACCOUNT.sub}</div>
           </div>
         </div>
-        <span className="vrule" style={{ margin: '0 var(--space-2)' }} />
+        <span className="vrule my-0 mx-2" />
         <nav className="atop-nav">
           {overflow.length === 0
             ? groups.map((g, gi) => (
@@ -174,30 +146,6 @@
     );
   }
 
-  const ATOP_STYLE = `
-    .zs .atop { display: flex; align-items: center; gap: var(--space-3); padding: 8px var(--space-5);
-      border-bottom: 1px solid var(--paper-edge); background: var(--paper); flex-shrink: 0; }
-    .zs .atop-org { display: flex; align-items: center; gap: var(--space-3); flex-shrink: 0; }
-    .zs .atop-nav { display: flex; align-items: center; gap: 2px; min-width: 0; }
-    .zs .atop-dot { width: 1px; height: 18px; background: var(--paper-edge); margin: 0 6px; flex-shrink: 0; }
-    .zs .atab { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px;
-      border-radius: var(--radius); color: var(--ink-soft); font-size: var(--text-sm); white-space: nowrap; flex-shrink: 0;
-      transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease); }
-    .zs .atab:hover { background: var(--paper-mute); color: var(--ink); }
-    .zs .atab.on { background: var(--paper-mute); color: var(--ink); font-weight: 500; }
-    .zs .atop-more { position: relative; flex-shrink: 0; }
-    .zs .atop-scrim { position: fixed; inset: 0; z-index: 60; }
-    .zs .atop-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 61; min-width: 208px;
-      background: var(--paper); border: 1px solid var(--paper-edge); border-radius: var(--radius);
-      box-shadow: var(--shadow); padding: 4px; }
-    .zs .atop-mi { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 10px;
-      border-radius: var(--radius-sm); font-size: var(--text-sm); color: var(--ink-soft); text-align: left;
-      transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease); }
-    .zs .atop-mi:hover { background: var(--paper-mute); color: var(--ink); }
-    .zs .atop-mi.on { background: var(--paper-mute); color: var(--ink); font-weight: 500; }
-    @media (max-width: 640px) { .zs .atop-org > div { display: none; } .zs .atop { padding: 8px var(--space-4); } }
-  `;
-
   const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
     "layout": "rail",
     "dark": false
@@ -220,7 +168,6 @@
 
     return (
       <React.Fragment>
-        <style>{ATOP_STYLE}</style>
         <div className="win">
           <Chrome user={USER} role="Administrator" onSignOut={() => setAuthed(false)} theme={theme} onToggleTheme={() => setTweak('dark', !t.dark)} title="Seiki  ·  admin portal" showEnv={false} onMenu={layout === 'rail' ? () => setRailOpen((v) => !v) : undefined} />
           {layout === 'topbar' && <TopNav section={section} setSection={nav} groups={NAV} />}

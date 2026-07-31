@@ -1,0 +1,42 @@
+/* ═══════════════════════════════════════════════════════════════════
+   TYPEFACES — Fontsource, one stylesheet per weight and subset, so what
+   loads is explicit and matches what the app installs.
+
+     npm i @fontsource/inter @fontsource/fraunces \
+           @fontsource/jetbrains-mono @fontsource/shippori-mincho
+
+   …then replace each @import with the package import of the same name,
+   e.g. `import '@fontsource/inter/latin-400.css'`. Families, subsets and
+   weights are identical either way, so nothing else changes.
+
+   Manifest — also exported as `fonts` from app/uno.config.js, and the
+   only weights theme.fontWeight allows:
+
+     token         family            pkg                            subset    weights
+     font-display  Fraunces          @fontsource/fraunces           latin     300 400 500
+     font-ui       Inter             @fontsource/inter              latin     400 500 600
+     font-mono     JetBrains Mono    @fontsource/jetbrains-mono     latin     400 500
+     font-kanji    Shippori Mincho   @fontsource/shippori-mincho    japanese  400 500 600 700
+
+   Using a weight outside this list is a bug — nothing will load it.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* display · Fraunces — 300 light, 400 normal, 500 medium */
+@import url('https://cdn.jsdelivr.net/npm/@fontsource/fraunces@5/latin-300.css');
+@import url('https://cdn.jsdelivr.net/npm/@fontsource/fraunces@5/latin-400.css');
+@import url('https://cdn.jsdelivr.net/npm/@fontsource/fraunces@5/latin-500.css');
+
+/* ui · Inter — 400 normal, 500 medium, 600 semibold */
+@import url('https://cdn.jsdelivr.net/npm/@fontsource/inter@5/latin-400.css');
+@import url('https://cdn.jsdelivr.net/npm/@fontsource/inter@5/latin-500.css');
+@import url('https://cdn.jsdelivr.net/npm/@fontsource/inter@5/latin-600.css');
+
+/* mono · JetBrains Mono — 400 normal, 500 medium (tabular figures) */
+@import url('https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5/latin-400.css');
+@import url('https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5/latin-500.css');
+
+/* kanji · Shippori Mincho — the functional 漢字 marks (japanese subset) */
+@import url('https://cdn.jsdelivr.net/npm/@fontsource/shippori-mincho@5/japanese-400.css');
+@import url('https://cdn.jsdelivr.net/npm/@fontsource/shippori-mincho@5/japanese-500.css');
+@import url('https://cdn.jsdelivr.net/npm/@fontsource/shippori-mincho@5/japanese-600.css');
+@import url('https://cdn.jsdelivr.net/npm/@fontsource/shippori-mincho@5/japanese-700.css');

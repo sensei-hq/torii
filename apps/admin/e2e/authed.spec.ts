@@ -19,7 +19,7 @@ test.describe('authenticated admin', () => {
 
 	test('nav rail reaches every gateway screen (client-side, each loads)', async ({ page }) => {
 		const routes: [RegExp, string][] = [
-			[/requests & audit/i, '/requests'],
+			[/usage patterns/i, '/requests'],
 			[/members & roles/i, '/organization'],
 			[/^models$/i, '/models'],
 			[/^routing$/i, '/routing'],

@@ -1,12 +1,16 @@
 import { describe, expect, test } from 'vitest'
 import {
+	avgCost,
+	callsInWindow,
 	cascadePath,
 	csvFilename,
 	groupByStatus,
 	leafNodes,
 	nodePct,
 	toCsv,
-	triageSummary
+	triageSummary,
+	usageByModel,
+	usageStats
 } from './requests'
 import type { BudgetNode, RequestRow } from './api'
 
@@ -116,6 +120,83 @@ describe('triageSummary', () => {
 
 	test('empty ledger → all zero', () => {
 		expect(triageSummary([])).toMatchObject({ total: 0, exceptions: 0, exceptionPct: 0 })
+	})
+})
+
+// ── org operational lens: usage patterns ─────────────────────────────────────
+describe('callsInWindow', () => {
+	const NOW = new Date('2026-07-25T12:00:00Z')
+
+	test('counts only rows recorded within the trailing window', () => {
+		const reqs = [
+			row({ recorded_at: '2026-07-25T11:30:00Z' }), // 30m ago — in
+			row({ recorded_at: '2026-07-24T13:00:00Z' }), // 23h ago — in
+			row({ recorded_at: '2026-07-24T11:00:00Z' }), // 25h ago — out
+			row({ recorded_at: '2026-07-20T12:00:00Z' }) // days ago — out
+		]
+		expect(callsInWindow(reqs, 24, NOW)).toBe(2)
+	})
+
+	test('a non-parseable timestamp is skipped, never counted', () => {
+		expect(callsInWindow([row({ recorded_at: 'not-a-date' })], 24, NOW)).toBe(0)
+	})
+
+	test('empty ledger → 0', () => {
+		expect(callsInWindow([], 24, NOW)).toBe(0)
+	})
+})
+
+describe('avgCost', () => {
+	test('mean $/call over the rows', () => {
+		expect(avgCost([row({ cost_usd: 0.02 }), row({ cost_usd: 0.04 })])).toBeCloseTo(0.03)
+	})
+
+	test('empty ledger → 0 (no divide-by-zero)', () => {
+		expect(avgCost([])).toBe(0)
+	})
+})
+
+describe('usageByModel', () => {
+	test('groups by model, counts calls, and computes share-of-all, busiest first', () => {
+		const usage = usageByModel([
+			row({ model: 'sonnet', adapter: 'anthropic' }),
+			row({ model: 'sonnet', adapter: 'anthropic' }),
+			row({ model: 'sonnet', adapter: 'anthropic' }),
+			row({ model: 'gpt-5', adapter: 'openai' })
+		])
+		expect(usage.map((u) => u.model)).toEqual(['sonnet', 'gpt-5'])
+		expect(usage[0]).toMatchObject({ model: 'sonnet', adapter: 'anthropic', calls: 3, share: 75 })
+		expect(usage[1]).toMatchObject({ model: 'gpt-5', calls: 1, share: 25 })
+	})
+
+	test('limit caps the list to the top-N busiest', () => {
+		const reqs = ['a', 'b', 'c'].flatMap((m, i) =>
+			Array.from({ length: 3 - i }, () => row({ model: m }))
+		)
+		expect(usageByModel(reqs, 2).map((u) => u.model)).toEqual(['a', 'b'])
+	})
+
+	test('empty ledger → no rows', () => {
+		expect(usageByModel([])).toEqual([])
+	})
+})
+
+describe('usageStats', () => {
+	const NOW = new Date('2026-07-25T12:00:00Z')
+
+	test('calls24h and avgCost are real; trace-derived figures are null (deferred, not faked)', () => {
+		const s = usageStats(
+			[
+				row({ recorded_at: '2026-07-25T11:00:00Z', cost_usd: 0.02 }), // 1h ago — in window
+				row({ recorded_at: '2026-07-22T11:00:00Z', cost_usd: 0.04 }) // 3d ago — out of window
+			],
+			NOW
+		)
+		expect(s.calls24h).toBe(1) // only the in-window row
+		expect(s.avgCost).toBeCloseTo(0.03) // mean over ALL rows, window-independent
+		expect(s.fallbackRate).toBeNull()
+		expect(s.stepDowns).toBeNull()
+		expect(s.failovers).toBeNull()
 	})
 })
 

@@ -1,4 +1,5 @@
 import { GATEWAY_URL } from './env'
+import { IS_E2E } from './e2e'
 import { session } from '@torii/core'
 import type { ChatMessage, InferResult } from './gateway'
 
@@ -17,7 +18,7 @@ export async function cloudInfer(
 	opts: { chain?: string; model?: string } = {}
 ): Promise<InferResult> {
 	// Deterministic E2E stub — no network, no token required. Strictly env-gated.
-	if (import.meta.env.VITE_E2E === 'true') {
+	if (IS_E2E) {
 		return {
 			content: 'Hello from the cloud gateway.',
 			model: opts.model ?? 'gemma4',
@@ -64,7 +65,7 @@ export async function judgeAnswers(
 	answers: { id: string; content: string }[]
 ): Promise<Record<string, number | null>> {
 	// Deterministic E2E stub — descending scores, no network.
-	if (import.meta.env.VITE_E2E === 'true') {
+	if (IS_E2E) {
 		return Object.fromEntries(answers.map((a, i) => [a.id, Math.max(0, 1 - i * 0.15)]))
 	}
 

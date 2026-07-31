@@ -9,6 +9,7 @@
 	import { themable } from '@rokkit/actions'
 	import { createToriiKavach, session, createGuard } from '@torii/core'
 	import { deriveGuardRules } from '$lib/guard-rules'
+	import { IS_E2E } from '$lib/e2e'
 	import { SUPABASE_URL, SUPABASE_ANON_KEY } from '$lib/env'
 
 	let { children } = $props()
@@ -29,7 +30,7 @@
 	}
 
 	onMount(async () => {
-		if (import.meta.env.VITE_E2E === 'true') {
+		if (IS_E2E) {
 			// E2E only: deterministic seeded session, no network. Never true in production builds.
 			// Set `user` BEFORE `ready`: flipping `ready` triggers the reactive guard, which
 			// would bounce the session if it saw no user yet.

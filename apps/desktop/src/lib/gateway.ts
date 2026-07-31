@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { IS_E2E } from './e2e'
 
 export interface ChatMessage {
 	role: 'user' | 'assistant' | 'system'
@@ -19,7 +20,7 @@ export interface ModelInfo {
 
 export const gateway = {
 	infer: (messages: ChatMessage[], opts: { model?: string } = {}) => {
-		if (import.meta.env.VITE_E2E === 'true') {
+		if (IS_E2E) {
 			return Promise.resolve<InferResult>({
 				content: 'Hello from your on-device model.',
 				model: opts.model ?? 'gemma2:2b',

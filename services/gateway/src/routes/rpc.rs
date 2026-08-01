@@ -64,7 +64,11 @@ mod slug_tests {
 
 /// Resolve capabilities + run the freshness gate, or return the mapped error
 /// response. Shared preamble for every privileged handler.
-async fn authorize(
+///
+/// `pub(crate)` so the C5 RAG read/retrieve handlers (`routes::documents`,
+/// `routes::retrieve`) reuse the exact same authz preamble (freshness gate +
+/// server-side capability resolution) rather than re-implementing it.
+pub(crate) async fn authorize(
     state: &SharedState,
     claims: &Claims,
     capability: &str,
@@ -1412,7 +1416,10 @@ pub async fn orgs_transfer_ownership(
 /// stated "at minimum, emit an error-level alert" bar) so it is alertable rather than
 /// silent. Full transactional mutation+audit atomicity is a tracked follow-up
 /// (several handlers do multi-step writes; wrapping each in one tx is the ideal).
-async fn audit(
+///
+/// `pub(crate)` so the C5 RAG document handlers (`routes::documents`) emit the
+/// same actor-bound audit row on register/ingest/delete.
+pub(crate) async fn audit(
     state: &SharedState,
     tenant: Uuid,
     actor: Uuid,
@@ -1899,6 +1906,137 @@ pub async fn connections_oauth_revoke(
     )
     .await;
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// C5 · RAG privileged writes (declassify + per-space retrieval config).
+// ---------------------------------------------------------------------------
+
+/// The fixed 4-level classification lattice (mirrors the `documents.classification` CHECK and
+/// `policies/knowledge.sql`). Declassify may only set one of these.
+const DOC_CLASSIFICATIONS: &[&str] = &["public", "internal", "confidential", "restricted"];
+
+#[derive(Deserialize)]
+pub struct Declassify {
+    pub document_id: Uuid,
+    pub classification: String,
+}
+
+/// `POST /rpc/documents/declassify` — capability `doc.declassify`. Changes a document's
+/// classification (the ONLY sanctioned path: the `trg_guard_document_classification` trigger
+/// rejects a classification change from any non-`service_role` caller, so this must go through
+/// the gateway). Tenant-scoped (404 if the doc isn't in the caller's tenant — no cross-tenant
+/// reclassify) and validated against the fixed lattice (400 on an unknown value). Audited.
+pub async fn documents_declassify(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<Declassify>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "doc.declassify").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if !DOC_CLASSIFICATIONS.contains(&body.classification.as_str()) {
+        return (StatusCode::BAD_REQUEST, "invalid classification").into_response();
+    }
+    let write = sqlx::query(
+        "update public.documents set classification = $3, modified_at = now() \
+          where tenant_id = $1 and id = $2",
+    )
+    .bind(tenant)
+    .bind(body.document_id)
+    .bind(&body.classification)
+    .execute(&state.pool)
+    .await;
+    match write {
+        Ok(r) if r.rows_affected() == 0 => {
+            (StatusCode::NOT_FOUND, "document not found in tenant").into_response()
+        }
+        Ok(_) => {
+            audit(
+                &state,
+                tenant,
+                actor,
+                "document.declassified",
+                "document",
+                Some(body.document_id),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(json!({ "document_id": body.document_id, "classification": body.classification })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::error!("documents_declassify: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SetRetrievalConfig {
+    pub space_id: Uuid,
+    /// The resolved retrieval config to promote as the space default (opaque JSON — the
+    /// retrieval engine reads it via the per-space `settings` seam; v1 still serves
+    /// `RetrievalConfig::default()` at query time, see `routes::retrieve`).
+    pub config: serde_json::Value,
+}
+
+/// `POST /rpc/retrieval/set-config` — capability `retrieval.manage`. Upserts the per-space
+/// retrieval configuration into `public.settings(scope='space', space_id, key='retrieval')`.
+/// Tenant + space scoped (404 if the space isn't the caller's tenant — no cross-tenant write).
+/// Audited. This is the WRITE seam; per-space read resolution at query time is a tracked
+/// follow-up (v1 retrieve uses `RetrievalConfig::default()`).
+pub async fn retrieval_set_config(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<SetRetrievalConfig>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "retrieval.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    // Space must belong to the caller's tenant (else 404 — no cross-tenant config write, and
+    // avoids tripping the settings→spaces composite FK).
+    let space_ok: bool = sqlx::query_scalar(
+        "select exists(select 1 from public.spaces where tenant_id = $1 and id = $2)",
+    )
+    .bind(tenant)
+    .bind(body.space_id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(false);
+    if !space_ok {
+        return (StatusCode::NOT_FOUND, "space not found in tenant").into_response();
+    }
+    let write = sqlx::query(
+        "insert into public.settings (tenant_id, scope, space_id, key, value, modified_by) \
+         values ($1, 'space', $2, 'retrieval', $3::jsonb, $4) \
+         on conflict (tenant_id, scope, space_id, key) \
+         do update set value = excluded.value, modified_at = now(), modified_by = excluded.modified_by",
+    )
+    .bind(tenant)
+    .bind(body.space_id)
+    .bind(body.config.to_string())
+    .bind(actor.to_string())
+    .execute(&state.pool)
+    .await;
+    if let Err(e) = write {
+        tracing::error!("retrieval_set_config: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+    audit(
+        &state,
+        tenant,
+        actor,
+        "retrieval.config.set",
+        "space",
+        Some(body.space_id),
+    )
+    .await;
+    (StatusCode::OK, Json(json!({ "ok": true, "space_id": body.space_id }))).into_response()
 }
 
 #[cfg(test)]

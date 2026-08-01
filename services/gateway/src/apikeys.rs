@@ -32,10 +32,8 @@ pub fn mint() -> Result<NewApiKey, argon2::password_hash::Error> {
     OsRng.fill_bytes(&mut sbytes);
     let secret = URL_SAFE_NO_PAD.encode(sbytes);
 
-    // TORII_ENV (torii = the gateway/engine brand); STRATEGOS_ENV kept as a fallback.
-    let env = std::env::var("TORII_ENV")
-        .or_else(|_| std::env::var("STRATEGOS_ENV"))
-        .unwrap_or_else(|_| "dev".to_string());
+    // TORII_ENV (torii = the gateway/engine brand).
+    let env = std::env::var("TORII_ENV").unwrap_or_else(|_| "dev".to_string());
     let full = format!("sk_tor_{env}_{prefix}.{secret}");
 
     let salt = SaltString::generate(&mut OsRng);

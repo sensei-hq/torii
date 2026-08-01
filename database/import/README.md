@@ -32,7 +32,7 @@ import procedures for all data including the dev-only tables.
 The `dev/tenant_keys.jsonl` seed file contains a DEK encrypted with the canonical dev KEK:
 
 ```
-STRATEGOS_KEK=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+TORII_KEK=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 ```
 
 (32 zero bytes, base64-encoded)

@@ -10,6 +10,7 @@
 
 pub mod chunk;
 pub mod embed;
+pub mod ingest;
 pub mod parse;
 pub mod retrieve;
 pub mod secure;

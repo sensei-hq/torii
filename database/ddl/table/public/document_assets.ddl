@@ -23,3 +23,14 @@ comment on table document_assets is
 'Extracted artifacts from a document — markdown, table CSVs, images, json (the
 markdown-first ingestion outputs). Access inherits the parent document
 (policies/knowledge.sql); composite FK keeps assets in-tenant.';
+
+-- C5 RAG (2026-08-01): version link, hash-addressing, and evidence-pin provenance (page_ref/bbox)
+-- + broadened artifact kinds (original / ir_json / caption). One row per artifact.
+alter table document_assets add column if not exists version_id   uuid;
+alter table document_assets add column if not exists content_hash char(64);
+alter table document_assets add column if not exists page_ref     integer;
+alter table document_assets add column if not exists bbox         jsonb;
+alter table document_assets add column if not exists caption      text;
+alter table document_assets drop constraint if exists document_assets_kind_check;
+alter table document_assets add constraint document_assets_kind_check check (kind in (
+  'original','ir_json','markdown','table_csv','image','caption','json','text','other'));

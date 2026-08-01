@@ -13,6 +13,7 @@ suite=(
   tools.sql     # X1: MCP tool allow-list default-deny
   routing.sql   # C2: chain-binding resolution precedence
   dataset.sql   # §3c: sensitive-data safe schema + k-anonymity
+  retrieval.sql # C5: hybrid_search dual-write + cross-tenant/classification isolation
   analytics.sql # O2: daily usage rollup + idempotency
 )
 

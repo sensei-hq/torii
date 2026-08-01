@@ -170,11 +170,14 @@ async fn main() -> anyhow::Result<()> {
     let router_env = keys::router_env_map(&config);
 
     let cb = CircuitBreakerManager::new(CircuitBreakerConfig::default());
-    let gw = Gateway::new(config, adapters, cb);
+    // One `Arc<Gateway>` built up front: it backs both `AppState.gateway` and the C5
+    // `EngineEmbedder` (config-driven embedding runs through the SAME engine).
+    let gateway = Arc::new(Gateway::new(config, adapters, cb));
 
     // Inject provider (BYOK) keys from the process environment (Task 5).
     // F3 vault decryption is deferred; keys resolve via std::env::var.
-    gw.refresh_router_keys(keys::env_key_resolver(router_env.clone()))
+    gateway
+        .refresh_router_keys(keys::env_key_resolver(router_env.clone()))
         .await;
     let resolved = router_env
         .values()
@@ -191,11 +194,42 @@ async fn main() -> anyhow::Result<()> {
     // ⇒ BYOK disabled (env/platform keys still serve) — the gateway still starts.
     let tenant_keys = crate::state::build_tenant_key_cache(pool.clone()).await;
 
+    // C5 RAG wiring — config-driven, no-hardcoded-ops (chain / model / bucket from env):
+    //   embedder  → the sensei engine over a named embedding chain (mock↔prod seam),
+    //   store     → Supabase Storage (originals + derived artifacts, signed URLs),
+    //   ingestor  → parse → redact-at-rest → chunk → embed → index (spawned per ingest request),
+    //   retriever → hybrid_search (dense pgvector + BM25 fused by RRF, isolation in-query).
+    let embed_chain = std::env::var("TORII_EMBED_CHAIN").unwrap_or_else(|_| "embedding".into());
+    let embedder: Arc<dyn crate::rag::embed::Embedder> = Arc::new(
+        crate::rag::embed::EngineEmbedder::new(gateway.clone(), embed_chain),
+    );
+    let object_store: Arc<dyn crate::rag::storage::ObjectStore> =
+        Arc::new(crate::rag::storage::SupabaseStorage::from_env());
+    let embed_model =
+        std::env::var("TORII_EMBED_MODEL").unwrap_or_else(|_| "mxbai-embed-large".into());
+    let ingestor = Arc::new(crate::rag::ingest::Ingestor {
+        pool: pool.clone(),
+        store: crate::rag::store::DocStore::new(pool.clone()),
+        storage: object_store.clone(),
+        parser: Arc::new(crate::rag::parse::DefaultParser),
+        chunker: Arc::new(crate::rag::chunk::StructuralChunker),
+        embedder: embedder.clone(),
+        redactor: crate::redact::Redactor,
+        embed_model,
+    });
+    let retriever: Arc<dyn crate::rag::retrieve::RetrievalEngine> = Arc::new(
+        crate::rag::retrieve::HybridRetriever::new(pool.clone(), embedder.clone()),
+    );
+
     let state: SharedState = Arc::new(AppState {
         pool,
-        gateway: Arc::new(gw),
+        gateway,
         jwks: RwLock::new(jwks),
         tenant_keys,
+        embedder,
+        object_store,
+        ingestor,
+        retriever,
     });
 
     // O1: background audit → SIEM streamer (no-op until a `siem` notification_channel exists).
@@ -243,6 +277,35 @@ async fn main() -> anyhow::Result<()> {
         .route("/routing", get(routes::ledger::get_routing))
         .route("/governance", get(routes::ledger::get_governance))
         .route("/settings", get(routes::ledger::get_settings))
+        // C5 · RAG document surface + hybrid retrieval (docs/plans/C5-rag-backend-build-plan.md).
+        .route(
+            "/documents",
+            post(routes::documents::create_document).get(routes::documents::list_documents),
+        )
+        .route(
+            "/documents/{id}",
+            get(routes::documents::get_document).delete(routes::documents::delete_document),
+        )
+        .route(
+            "/documents/{id}/ingest",
+            post(routes::documents::ingest_document),
+        )
+        .route(
+            "/documents/{id}/reingest",
+            post(routes::documents::reingest_document),
+        )
+        .route(
+            "/documents/{id}/assets",
+            get(routes::documents::get_assets),
+        )
+        .route(
+            "/spaces/{space_id}/retrieve",
+            post(routes::retrieve::retrieve),
+        )
+        .route(
+            "/spaces/{space_id}/retrieval-config",
+            get(routes::retrieve::retrieval_config),
+        )
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::require_auth,
@@ -306,6 +369,16 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/connections/oauth-revoke",
             post(routes::rpc::connections_oauth_revoke),
+        )
+        // C5 · RAG privileged writes: declassify (doc.declassify) + per-space retrieval config
+        // (retrieval.manage).
+        .route(
+            "/documents/declassify",
+            post(routes::rpc::documents_declassify),
+        )
+        .route(
+            "/retrieval/set-config",
+            post(routes::rpc::retrieval_set_config),
         )
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),

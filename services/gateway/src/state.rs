@@ -44,6 +44,16 @@ pub struct AppState {
     /// F3 per-tenant BYOK credential cache. `None` vault ⇒ BYOK disabled (no KEK) —
     /// `get` returns an empty map and the engine uses the platform/env keys.
     pub tenant_keys: TenantKeyCache,
+    /// C5 RAG · config-driven query/document embedder (the single mock↔prod seam). The same
+    /// `Arc<dyn Embedder>` backs both the ingest pipeline and the retriever.
+    pub embedder: Arc<dyn crate::rag::embed::Embedder>,
+    /// C5 RAG · object storage for document originals + derived artifacts (signed upload/download).
+    pub object_store: Arc<dyn crate::rag::storage::ObjectStore>,
+    /// C5 RAG · ingestion orchestrator (parse → redact-at-rest → chunk → embed → index), spawned
+    /// per `POST /v1/documents/:id/ingest`.
+    pub ingestor: Arc<crate::rag::ingest::Ingestor>,
+    /// C5 RAG · hybrid retrieval engine (dense pgvector + BM25 fused by RRF, isolation in-query).
+    pub retriever: Arc<dyn crate::rag::retrieve::RetrievalEngine>,
 }
 
 pub type SharedState = Arc<AppState>;

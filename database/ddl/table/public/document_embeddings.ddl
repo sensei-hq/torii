@@ -50,6 +50,8 @@ alter table document_embeddings add column if not exists tsv tsvector
 -- Version-scoped uniqueness: a prior version's chunks (marked superseded_at) coexist with the new
 -- version's identical chunk_sequence values during atomic retirement on re-ingest.
 alter table document_embeddings drop constraint if exists document_embeddings_tenant_id_document_id_chunk_sequence_key;
+-- drop the new name too so re-applying is idempotent (add constraint has no `if not exists`).
+alter table document_embeddings drop constraint if exists document_embeddings_tenant_doc_version_seq_key;
 alter table document_embeddings add constraint document_embeddings_tenant_doc_version_seq_key
   unique (tenant_id, document_id, version_id, chunk_sequence);
 create index if not exists idx_embeddings_tsv on document_embeddings using gin (tsv);

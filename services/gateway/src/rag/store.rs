@@ -182,6 +182,17 @@ impl DocStore {
             )));
         }
         let mut tx = self.pool.begin().await?;
+        // Idempotent re-ingest: clear THIS version's existing chunks first, else the version-scoped
+        // unique (tenant, document, version, chunk_sequence) collides on a re-run and the doc flips
+        // to failed (review finding). The prior-version retire below handles OTHER versions.
+        sqlx::query(
+            "delete from document_embeddings where tenant_id=$1 and document_id=$2 and version_id=$3",
+        )
+        .bind(tenant)
+        .bind(doc)
+        .bind(version_id)
+        .execute(&mut *tx)
+        .await?;
         for (i, c) in chunks.iter().enumerate() {
             let emb = Vector::from(embeddings[i].clone());
             let rc = redaction_counts.get(i).copied().unwrap_or(0);

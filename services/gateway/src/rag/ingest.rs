@@ -18,10 +18,10 @@ use uuid::Uuid;
 
 use super::chunk::Chunker;
 use super::embed::Embedder;
-use super::parse::{DocIR, DocumentParser, ParseOpts, Table};
+use super::parse::{DocIR, DocumentParser, ParseOpts};
 use super::storage::{object_path, ObjectStore};
 use super::store::{AssetRow, DocStore};
-use super::{signals, ChunkConfig, RagError};
+use super::{signals, RagError};
 use crate::redact::{Redaction, Redactor};
 
 /// Redaction kinds that indicate a live SECRET (→ flag for rotation), vs PII (email/card).
@@ -62,8 +62,8 @@ impl Ingestor {
 
     async fn run_inner(&self, tenant: Uuid, doc: Uuid, actor: Uuid) -> Result<(), RagError> {
         let (version_id, version_no, storage_path) = self.store.current_version(tenant, doc).await?;
-        let mime: String =
-            sqlx::query_scalar("select content_type from documents where tenant_id=$1 and id=$2")
+        let (mime, space_id): (String, Option<uuid::Uuid>) =
+            sqlx::query_as("select content_type, space_id from documents where tenant_id=$1 and id=$2")
                 .bind(tenant)
                 .bind(doc)
                 .fetch_one(&self.pool)
@@ -74,7 +74,15 @@ impl Ingestor {
         let bytes = self.storage.get(&storage_path).await?;
         let hash = content_hash(&bytes);
         self.store.set_version_provenance(tenant, version_id, &hash, "default").await?;
-        let ir = self.parser.parse(&bytes, &mime, &ParseOpts::default())?;
+        // Isolate a parser panic on malformed input (e.g. pdf-extract) → a clean `failed` status +
+        // status_reason via run(), instead of wedging the doc in `parsing` when the task aborts.
+        let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.parser.parse(&bytes, &mime, &ParseOpts::default())
+        }));
+        let ir = match parsed {
+            Ok(r) => r?,
+            Err(_) => return Err(RagError::Parse("parser panicked on malformed input".into())),
+        };
 
         // ---- redact-at-rest (BEFORE embed; whole IR so no secret slips a chunk boundary) --------
         self.store.set_status(tenant, doc, "redacting", None).await?;
@@ -86,7 +94,8 @@ impl Ingestor {
 
         // ---- chunk ------------------------------------------------------------------------------
         self.store.set_status(tenant, doc, "chunking", None).await?;
-        let cfg = ChunkConfig::default(); // TODO(no-hardcoded-ops): resolve per-space from settings
+        // no-hardcoded-ops: per-space chunk config over the fallback defaults.
+        let cfg = super::resolve_chunk_config(&self.pool, tenant, space_id).await;
         let chunks = self.chunker.chunk(&ir, &cfg)?;
         if chunks.is_empty() {
             // e.g. a scanned PDF with no text layer (OCR deferred) — ready with 0 chunks, not failed.
@@ -117,34 +126,35 @@ impl Ingestor {
         Ok(())
     }
 
-    /// Redact every text surface of the IR (markdown + block text + table CSVs) with the C4 redactor,
-    /// merging per-kind counts. Images are binary (text-redaction N/A; captioning deferred).
+    /// Redact EVERY text surface of the IR before embed — markdown, block text, AND the derived
+    /// surfaces that get persisted: each block's `section_path` (a parse-time copy of ancestor
+    /// heading text → written to `document_embeddings.section_path`) and each table's `csv` +
+    /// `caption` (→ `document_assets.label`/`caption` + the chunk's section_path). Missing any of
+    /// these lets a secret in a heading/sheet-name persist raw at rest (review finding). Images are
+    /// binary (text-redaction N/A; captioning deferred).
     fn redact_ir(&self, mut ir: DocIR) -> (DocIR, Vec<Redaction>) {
         let mut totals: HashMap<&'static str, usize> = HashMap::new();
-        let mut merge = |reds: Vec<Redaction>| {
+        let mut apply = |s: &str| -> String {
+            let (clean, reds) = self.redactor.redact(s);
             for r in reds {
                 *totals.entry(r.kind).or_insert(0) += r.count;
             }
+            clean
         };
 
-        let (md, reds) = self.redactor.redact(&ir.markdown);
-        ir.markdown = md;
-        merge(reds);
-
+        ir.markdown = apply(&ir.markdown);
         for b in &mut ir.blocks {
-            let (clean, reds) = self.redactor.redact(&b.text);
-            b.text = clean;
-            merge(reds);
+            b.text = apply(&b.text);
+            for seg in &mut b.section_path {
+                *seg = apply(seg);
+            }
         }
-        ir.tables = ir
-            .tables
-            .into_iter()
-            .map(|t| {
-                let (csv, reds) = self.redactor.redact(&t.csv);
-                merge(reds);
-                Table { csv, ..t }
-            })
-            .collect();
+        for t in &mut ir.tables {
+            t.csv = apply(&t.csv);
+            if let Some(cap) = t.caption.take() {
+                t.caption = Some(apply(&cap));
+            }
+        }
 
         let summary: Vec<Redaction> =
             totals.into_iter().map(|(kind, count)| Redaction { kind, count }).collect();
@@ -257,7 +267,8 @@ mod tests {
             space_id: None, collection_id: None, profile_id: owner,
         };
         let (doc, _v, path) = store.register_document(tenant, &meta).await.unwrap();
-        let raw = "# Config\n\napi_key = sk-ABCDEFGHIJKLMNOPQRSTUVWX\ncontact me@example.com for the roadmap.\n\nThe migration runs nightly.";
+        // secret in a HEADING (→ section_path) AND in body (→ content) — both must be redacted.
+        let raw = "# Prod key sk-ABCDEFGHIJKLMNOPQRSTUVWX\n\nThe migration runs nightly. Second key sk-ZYXWVUTSRQPONMLKJIHGF and contact me@example.com.";
         storage.put(&path, raw.as_bytes(), "text/markdown").await.unwrap();
 
         let ingestor = Ingestor {
@@ -277,11 +288,16 @@ mod tests {
             .bind(tenant).bind(doc).fetch_one(&pool).await.unwrap();
         assert_eq!(status, "completed");
 
-        // NO raw secret in the index (scan ALL chunk content).
+        // NO raw secret in the index (scan ALL chunk content AND section_path — the review found
+        // headings/captions bypassed redaction into section_path).
         let leaked: i64 = sqlx::query_scalar(
-            "select count(*) from document_embeddings where tenant_id=$1 and content like '%sk-ABCDEFGHIJKLMNOPQRSTUVWX%'")
+            "select count(*) from document_embeddings where tenant_id=$1 and (content like '%sk-Z%' or content like '%sk-A%')")
             .bind(tenant).fetch_one(&pool).await.unwrap();
         assert_eq!(leaked, 0, "raw secret found in document_embeddings.content");
+        let leaked_sp: i64 = sqlx::query_scalar(
+            "select count(*) from document_embeddings where tenant_id=$1 and section_path like '%sk-A%'")
+            .bind(tenant).fetch_one(&pool).await.unwrap();
+        assert_eq!(leaked_sp, 0, "raw secret found in document_embeddings.section_path (heading leak)");
         let redacted: i64 = sqlx::query_scalar(
             "select count(*) from document_embeddings where tenant_id=$1 and content like '%[REDACTED:%'")
             .bind(tenant).fetch_one(&pool).await.unwrap();
@@ -296,6 +312,13 @@ mod tests {
             "select count(*) from quality_signals where tenant_id=$1 and signal_key='redaction'")
             .bind(tenant).fetch_one(&pool).await.unwrap();
         assert!(sig >= 1, "no redaction quality signal written");
+
+        // re-ingest is idempotent: same version → chunks replaced (no version-scoped unique
+        // collision), doc stays completed (regression guard for the re-ingest-collision finding).
+        ingestor.run(tenant, doc, owner).await.unwrap();
+        let status2: String = sqlx::query_scalar("select status from documents where tenant_id=$1 and id=$2")
+            .bind(tenant).bind(doc).fetch_one(&pool).await.unwrap();
+        assert_eq!(status2, "completed", "re-ingest did not stay completed (unique collision?)");
 
         // cleanup
         sqlx::query("delete from quality_signals where tenant_id=$1").bind(tenant).execute(&pool).await.unwrap();

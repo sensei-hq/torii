@@ -28,7 +28,7 @@ async function onUnauthorized(): Promise<void> {
 	redirecting = false // re-arm: a future session can hit 401 and redirect again
 }
 
-async function gwGet<T>(path: string): Promise<T> {
+export async function gwGet<T>(path: string): Promise<T> {
 	const token = session.accessToken
 	const res = await fetch(`${GATEWAY_URL}${path}`, {
 		headers: token ? { authorization: `Bearer ${token}` } : {}
@@ -41,9 +41,24 @@ async function gwGet<T>(path: string): Promise<T> {
 	return res.json() as Promise<T>
 }
 
+// Gateway-mediated soft-delete (capability-checked server-side). The C5 doc-delete returns JSON.
+export async function gwDelete<T>(path: string): Promise<T> {
+	const token = session.accessToken
+	const res = await fetch(`${GATEWAY_URL}${path}`, {
+		method: 'DELETE',
+		headers: token ? { authorization: `Bearer ${token}` } : {}
+	})
+	if (res.status === 401) {
+		await onUnauthorized()
+		throw new Error('session expired — signing you in again')
+	}
+	if (!res.ok) throw new Error(`${path} → ${res.status}`)
+	return res.json() as Promise<T>
+}
+
 // Privileged writes go through C1 `/rpc/*` ONLY (never a direct PostgREST write). The gateway
 // re-checks the capability + tenant isolation server-side — UI gating is advisory (spec §5).
-async function gwPost<T>(path: string, body: unknown): Promise<T> {
+export async function gwPost<T>(path: string, body: unknown): Promise<T> {
 	const token = session.accessToken
 	const res = await fetch(`${GATEWAY_URL}${path}`, {
 		method: 'POST',

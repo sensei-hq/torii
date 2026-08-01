@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::Claims,
-    rag::{retrieve::RetrieveQuery, RetrievalConfig},
+    rag::retrieve::RetrieveQuery,
     routes::rpc::authorize,
     state::SharedState,
 };
@@ -56,10 +56,10 @@ pub async fn retrieve(
         Err(resp) => return resp,
     };
 
-    // TODO(no-hardcoded-ops seam): resolve per-space RetrievalConfig from
-    // public.settings(scope='space', space_id, key='retrieval') over this default, and merge any
-    // `session_only` override for THIS request only (never persisted). v1 uses the default.
-    let cfg = RetrievalConfig::default();
+    // no-hardcoded-ops: resolve the per-space RetrievalConfig from public.settings over the fallback
+    // defaults. (Merging a `session_only` override for THIS request only — never persisted — is a
+    // tracked follow-up; today session_only is accepted and ignored.)
+    let cfg = crate::rag::resolve_retrieval_config(&state.pool, tenant, Some(space_id)).await;
     let q = RetrieveQuery {
         text: body.query,
         profile_id: actor,
@@ -88,12 +88,12 @@ pub async fn retrieve(
 pub async fn retrieval_config(
     Extension(claims): Extension<Claims>,
     State(state): State<SharedState>,
-    Path(_space_id): Path<Uuid>,
+    Path(space_id): Path<Uuid>,
 ) -> Response {
-    if let Err(resp) = authorize(&state, &claims, "doc.read").await {
-        return resp;
-    }
-    // TODO(no-hardcoded-ops seam): read public.settings(scope='space', space_id, key='retrieval')
-    // and fall back to this default when unset.
-    (StatusCode::OK, Json(RetrievalConfig::default())).into_response()
+    let (tenant, _actor) = match authorize(&state, &claims, "doc.read").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let cfg = crate::rag::resolve_retrieval_config(&state.pool, tenant, Some(space_id)).await;
+    (StatusCode::OK, Json(cfg)).into_response()
 }

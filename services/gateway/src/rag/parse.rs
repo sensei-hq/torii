@@ -25,6 +25,40 @@ use std::io::{Cursor, Read};
 
 use super::RagError;
 
+/// Max compressed input the parser will accept (decompression-bomb defense). Operator-configurable
+/// via `TORII_MAX_DOC_BYTES`; default 64 MiB.
+fn max_doc_bytes() -> u64 {
+    std::env::var("TORII_MAX_DOC_BYTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(64 * 1024 * 1024)
+}
+
+/// Max DECOMPRESSED size of a single OOXML zip entry (a small archive can inflate to GBs).
+/// Operator-configurable via `TORII_MAX_PARSE_ENTRY_BYTES`; default 128 MiB.
+fn max_entry_bytes() -> u64 {
+    std::env::var("TORII_MAX_PARSE_ENTRY_BYTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(128 * 1024 * 1024)
+}
+
+/// Read a zip entry to a String, refusing to allocate past the decompressed cap (reads cap+1 and
+/// errors if the entry is larger — bounds the zip-bomb amplification).
+fn read_entry_capped<R: Read>(r: R, name: &str) -> Result<String, RagError> {
+    let cap = max_entry_bytes();
+    let mut s = String::new();
+    r.take(cap + 1)
+        .read_to_string(&mut s)
+        .map_err(|e| RagError::Parse(format!("zip read {name}: {e}")))?;
+    if s.len() as u64 > cap {
+        return Err(RagError::Parse(format!(
+            "zip entry {name} exceeds decompressed cap ({cap} bytes)"
+        )));
+    }
+    Ok(s)
+}
+
 /// Parse raw bytes of a known `mime` into the canonical [`DocIR`]. Provider-agnostic
 /// (no-hardcoded-ops): implementations are selected by [`ParseOpts::backend`].
 pub trait DocumentParser: Send + Sync {
@@ -113,6 +147,15 @@ pub struct DefaultParser;
 
 impl DocumentParser for DefaultParser {
     fn parse(&self, bytes: &[u8], mime: &str, _opts: &ParseOpts) -> Result<DocIR, RagError> {
+        // Bound the compressed input up-front (decompression-bomb / OOM defense on this
+        // untrusted-input path). Operator-configurable (no-hardcoded-ops).
+        if bytes.len() as u64 > max_doc_bytes() {
+            return Err(RagError::Parse(format!(
+                "document exceeds max size ({} bytes > {})",
+                bytes.len(),
+                max_doc_bytes()
+            )));
+        }
         // Normalize: drop any `; charset=…` parameter and lowercase (no-hardcoded-ops: the backend
         // would be dispatched from `_opts.backend` once more than one exists).
         let m = mime
@@ -331,12 +374,10 @@ fn parse_pptx(bytes: &[u8]) -> Result<DocIR, RagError> {
 
     let mut runs = Vec::new();
     for name in &slides {
-        let mut f = zip
+        let f = zip
             .by_name(name)
             .map_err(|e| RagError::Parse(format!("pptx entry {name}: {e}")))?;
-        let mut xml = String::new();
-        f.read_to_string(&mut xml)
-            .map_err(|e| RagError::Parse(format!("pptx read {name}: {e}")))?;
+        let xml = read_entry_capped(f, name)?;
         runs.extend(extract_runs(&xml, b"a:t"));
     }
     Ok(docir_from_runs(runs))
@@ -354,13 +395,10 @@ fn slide_index(name: &str) -> u32 {
 fn read_zip_entry(bytes: &[u8], name: &str) -> Result<String, RagError> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|e| RagError::Parse(format!("zip open: {e}")))?;
-    let mut f = zip
+    let f = zip
         .by_name(name)
         .map_err(|e| RagError::Parse(format!("zip entry {name}: {e}")))?;
-    let mut s = String::new();
-    f.read_to_string(&mut s)
-        .map_err(|e| RagError::Parse(format!("zip read {name}: {e}")))?;
-    Ok(s)
+    read_entry_capped(f, name)
 }
 
 /// Pull the text of every `<run_tag>…</run_tag>` element (e.g. `w:t`/`a:t`) via quick-xml. Matches

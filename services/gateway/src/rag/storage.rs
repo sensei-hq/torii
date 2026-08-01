@@ -13,6 +13,15 @@ use uuid::Uuid;
 
 use super::RagError;
 
+/// Max object size the store will download (OOM defense on the ingest path). Operator-configurable
+/// via `TORII_MAX_DOC_BYTES` (shared with the parser input cap); default 64 MiB.
+fn max_object_bytes() -> u64 {
+    std::env::var("TORII_MAX_DOC_BYTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(64 * 1024 * 1024)
+}
+
 /// Store + retrieve document bytes and mint signed URLs. All paths are tenant-scoped (the caller
 /// builds them via [`object_path`]); the store never widens access on its own.
 #[async_trait]
@@ -95,10 +104,21 @@ impl ObjectStore for SupabaseStorage {
         if !resp.status().is_success() {
             return Err(RagError::Storage(format!("get {path}: HTTP {}", resp.status())));
         }
-        resp.bytes()
+        // Bound the download (OOM defense): reject on the advertised length, then hard-cap the read.
+        let max = max_object_bytes();
+        if let Some(len) = resp.content_length() {
+            if len > max {
+                return Err(RagError::Storage(format!("object {path} too large ({len} > {max})")));
+            }
+        }
+        let body = resp
+            .bytes()
             .await
-            .map(|b| b.to_vec())
-            .map_err(|e| RagError::Storage(format!("get {path} body: {e}")))
+            .map_err(|e| RagError::Storage(format!("get {path} body: {e}")))?;
+        if body.len() as u64 > max {
+            return Err(RagError::Storage(format!("object {path} too large ({} > {max})", body.len())));
+        }
+        Ok(body.to_vec())
     }
 
     async fn signed_upload(&self, path: &str) -> Result<String, RagError> {

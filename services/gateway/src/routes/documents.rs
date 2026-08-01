@@ -60,6 +60,40 @@ fn signed_url_ttl_s() -> u32 {
         .unwrap_or(300)
 }
 
+/// Whether (tenant, actor) may READ document `doc` — the read predicate as an existence check. Used
+/// to gate mutations on existing docs (ingest/delete) so a caller can't act on a doc they can't see
+/// (no cross-classification over-reach, no existence leak — the caller gets a 404).
+async fn can_access_doc(pool: &sqlx::PgPool, tenant: Uuid, actor: Uuid, doc: Uuid) -> bool {
+    let sql =
+        format!("select exists(select 1 from public.documents d where d.id = $3 and {DOC_READ_PREDICATE})");
+    sqlx::query_scalar(&sql)
+        .bind(tenant)
+        .bind(actor)
+        .bind(doc)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(false)
+}
+
+/// Whether (tenant, actor) owns or is a member of `space` — the create-target space gate (a doc.write
+/// holder must not be able to inject a document into a space they don't belong to).
+async fn can_write_space(pool: &sqlx::PgPool, tenant: Uuid, actor: Uuid, space: Uuid) -> bool {
+    sqlx::query_scalar(
+        "select exists( \
+           select 1 from public.spaces s \
+           where s.tenant_id = $1 and s.id = $2 \
+             and ( s.owner_id = $3 \
+                or exists(select 1 from public.space_members m \
+                          where m.tenant_id = $1 and m.space_id = $2 and m.profile_id = $3)))",
+    )
+    .bind(tenant)
+    .bind(space)
+    .bind(actor)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false)
+}
+
 #[derive(Deserialize)]
 pub struct CreateDocument {
     #[serde(default)]
@@ -88,6 +122,12 @@ pub async fn create_document(
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    // No cross-space injection: registering INTO a space requires membership/ownership of it.
+    if let Some(space) = body.space_id {
+        if !can_write_space(&state.pool, tenant, actor, space).await {
+            return (StatusCode::FORBIDDEN, "not a member of the target space").into_response();
+        }
+    }
     let meta = NewDocument {
         title: body.title,
         original_filename: body.original_filename,
@@ -135,6 +175,9 @@ pub async fn ingest_document(
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    if !can_access_doc(&state.pool, tenant, actor, id).await {
+        return (StatusCode::NOT_FOUND, "document not found").into_response();
+    }
     spawn_ingest(&state, tenant, actor, id);
     audit(&state, tenant, actor, "document.ingest.queued", "document", Some(id)).await;
     (
@@ -165,6 +208,9 @@ pub async fn reingest_document(
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    if !can_access_doc(&state.pool, tenant, actor, id).await {
+        return (StatusCode::NOT_FOUND, "document not found").into_response();
+    }
     spawn_ingest(&state, tenant, actor, id);
     audit(&state, tenant, actor, "document.reingest.queued", "document", Some(id)).await;
     (
@@ -275,6 +321,7 @@ pub async fn list_documents(
               and ($3::uuid is null or d.space_id = $3) \
               and ($4::uuid is null or d.collection_id = $4) \
               and ($5::text is null or d.status = $5) \
+            order by d.uploaded_at desc \
             limit 500) t"
     );
     let rows: Result<Value, _> = sqlx::query_scalar(&sql)
@@ -385,6 +432,10 @@ pub async fn delete_document(
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    // Can't delete a doc you can't see (narrows doc.delete from tenant-wide to accessible docs).
+    if !can_access_doc(&state.pool, tenant, actor, id).await {
+        return (StatusCode::NOT_FOUND, "document not found").into_response();
+    }
     let store = DocStore::new(state.pool.clone());
     match store.delete_document(tenant, id).await {
         Ok(0) => (StatusCode::NOT_FOUND, "document not found in tenant").into_response(),

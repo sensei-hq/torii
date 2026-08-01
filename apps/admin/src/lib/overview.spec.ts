@@ -364,7 +364,7 @@ describe('header helpers', () => {
 
 	test('displayName takes the first token of the email local-part, title-cased', () => {
 		expect(displayName('jerry.thomas@x.co')).toBe('Jerry')
-		expect(displayName('owner2@strategos.local')).toBe('Owner2')
+		expect(displayName('owner2@torii.local')).toBe('Owner2')
 		expect(displayName('')).toBe('')
 		expect(displayName(null)).toBe('')
 	})

@@ -1,5 +1,5 @@
 project:
-  name: strategos
+  name: torii
 source:
   dialect: postgresql
 target:

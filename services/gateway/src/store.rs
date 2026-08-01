@@ -198,7 +198,7 @@ impl GatewayStore for PgGatewayStore {
     }
 
     /// MIG-2 (v0.4.6): required by the crate for AUTH rolling-window quota.
-    /// Strategos does NOT use the crate's soft quota — budgets are enforced by
+    /// Torii does NOT use the crate's soft quota — budgets are enforced by
     /// C3's hard synchronous reserve→commit (DECISIONS §2 W2). Returning zeros
     /// keeps the crate quota inert by design (no per-subject attribution exists
     /// until F1-rework RW7 anyway). C3 supersedes this path.

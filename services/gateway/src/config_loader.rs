@@ -1,6 +1,6 @@
 //! Load [`GatewayConfig`] from the Postgres config tables.
 //!
-//! The strategos schema stores routing configuration in `config.routers`,
+//! The torii schema stores routing configuration in `config.routers`,
 //! `config.models`, `config.model_capabilities`, `config.model_endpoints`,
 //! and `public.fallback_chains` / `public.fallback_chain_models` (tenant-scoped
 //! to the platform tenant: `core.tenants WHERE is_platform = true`).
@@ -418,7 +418,7 @@ pub async fn load_gateway_config(pool: &sqlx::PgPool) -> anyhow::Result<GatewayC
         chains,
         // MIG-2 (v0.4.6): new config surfaces — AUTH constraints, fan-out panels,
         // consensus workflows. Defaults are empty ⇒ no enforcement / none defined
-        // (Strategos drives budgets via C3's hard reserve, not the crate quota).
+        // (Torii drives budgets via C3's hard reserve, not the crate quota).
         constraints: Default::default(),
         panels: Default::default(),
         consensus: Default::default(),

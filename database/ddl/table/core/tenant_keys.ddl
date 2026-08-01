@@ -6,7 +6,7 @@ create table if not exists tenant_keys (
     references core.tenants(id) on delete cascade
 , encrypted_dek bytea      not null
     -- Layout: [12-byte IV][16-byte auth tag][32-byte ciphertext] = 60 bytes total
-    -- Encrypted with STRATEGOS_KEK (AES-256-GCM) by application layer
+    -- Encrypted with TORII_KEK (AES-256-GCM) by application layer
 , dek_version  integer     not null default 1
     -- Incremented by application layer on DEK rotation
 , created_at   timestamptz not null default now()
@@ -16,7 +16,7 @@ create table if not exists tenant_keys (
 
 comment on table tenant_keys is
 'Per-tenant Data Encryption Key (DEK) used to encrypt router API keys.
-- encrypted_dek: DEK encrypted with master KEK from STRATEGOS_KEK env var
+- encrypted_dek: DEK encrypted with master KEK from TORII_KEK env var
 - dek_version: incremented by application on DEK rotation
 - DEK rotation requires re-encrypting all router_credentials rows for this tenant atomically
 - KEK rotation only requires re-encrypting encrypted_dek rows (not router_credentials)';

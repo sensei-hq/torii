@@ -33,6 +33,7 @@ mod judge; // C6: opt-in LLM-as-judge (local gemma4) → judge_score signal
 mod keys;
 mod provision; // DB auto-provision (dbd deploy) on startup — fetch schema ref → apply/import/policies
 mod quality; // C6: quality-signal capture (one implicit batch per inference call)
+mod rag; // C5: RAG ingestion pipeline + hybrid retrieval (docs/plans/C5-rag-backend-build-plan.md)
 mod redact; // C4: secret/PII redaction (DLP, §2 W5)
 mod routes;
 mod siem; // O1: background audit → SIEM streamer (per-tenant cursor, at-least-once)

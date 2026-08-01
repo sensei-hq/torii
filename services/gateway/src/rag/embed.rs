@@ -7,9 +7,14 @@
 //! dimension check, so a mis-configured (non-1024-dim) model is caught here — fail-closed — rather
 //! than corrupting the `vector(1024)` index.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use gateway::types::{
+    capability::Capability,
+    request::{InferenceRequest, Payload},
+};
 use sha2::{Digest, Sha256};
 
 use super::{RagError, EMBED_DIM};
@@ -106,12 +111,37 @@ impl EngineEmbedder {
 
 #[async_trait]
 impl Embedder for EngineEmbedder {
-    async fn embed(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>, RagError> {
-        // Phase C: build InferenceRequest { capability: Capability::TextEmbed, chain: Some(self.chain),
-        // payload: Payload::Embed { texts }, allow_fallback: true, .. } → self.gw.execute(&req) →
-        // resp.embeddings.ok_or(Embed)?, then validate_dims(&rows)?.
-        let _ = (&self.gw, &self.chain);
-        Err(RagError::Unsupported("EngineEmbedder is wired in Phase C"))
+    async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, RagError> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+        // Config-driven: the named embedding chain binds the 1024-dim model (mxbai-embed-large),
+        // whether that is an in-process embedded adapter (feature `embed-local`) or a cloud/ollama
+        // model — no-hardcoded-ops. allow_fallback walks the chain's circuit-broken alternates.
+        let req = InferenceRequest {
+            capability: Capability::TextEmbed,
+            model: None,
+            router: None,
+            chain: Some(self.chain.clone()),
+            payload: Payload::Embed { texts: texts.to_vec() },
+            budget: None,
+            auth: None,
+            panel: None,
+            consensus: None,
+            allow_fallback: true,
+            credentials: HashMap::new(),
+        };
+        let resp = self
+            .gw
+            .execute(&req)
+            .await
+            .map_err(|e| RagError::Embed(e.to_string()))?;
+        let rows = resp
+            .embeddings
+            .ok_or_else(|| RagError::Embed("engine returned no embeddings".into()))?;
+        // THE enforcement point — the crate reads model output shape at runtime + does no check.
+        validate_dims(&rows)?;
+        Ok(rows)
     }
 }
 

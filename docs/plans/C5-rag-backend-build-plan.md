@@ -83,6 +83,17 @@ Unsupported). Routes: `routes/documents.rs`, `routes/retrieve.rs`, additive `rou
 /v1/spaces/:space_id/retrieval-config` · `POST /rpc/retrieval/set-config` (retrieval.manage) · `POST
 /rpc/documents/declassify` (doc.declassify).
 
+## Phase D — adversarial security review (done 2026-08-01)
+5 lenses (isolation / redaction / injection / authz / ops) → per-finding adversarial verification:
+**15 raised, 13 confirmed.** Fixed (10): heading/caption redaction into `section_path` (HIGH — a
+secret in a heading persisted raw at rest); re-ingest version-unique collision (HIGH); cross-space
+create injection (HIGH); zip/image/download size caps + pdf-panic isolation (HIGH/MED DoS);
+ingest/delete readable-gate (MED); per-space config read wired (no-hardcoded-ops); list ordering.
+Deferred (3, documented): declassify stays capability-gated governance (not owner-scoped);
+`hybrid_search`'s materialized `visible` CTE trades HNSW-ANN for exact correctness at v1 corpus
+sizes (revisit with pre-filtered/iterative ANN at scale — **backlog**); cross-doc `content_hash`
+dedup stored-but-not-enforced (**backlog**). Commit `84201ad`.
+
 ## Deferred (with seams left in place)
 Cross-encoder rerank (RerankProvider→Unsupported; wide two-stage k already retrieved) · contextual
 enrichment (`contextual_prefix` col exists, already in the generated `tsv`) · OCR Tier-1/2 (`ParseOpts.ocr`

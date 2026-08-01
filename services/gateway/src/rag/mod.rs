@@ -11,6 +11,9 @@
 pub mod chunk;
 pub mod embed;
 pub mod parse;
+pub mod secure;
+pub mod signals;
+pub mod storage;
 
 use serde::{Deserialize, Serialize};
 

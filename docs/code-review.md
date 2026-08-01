@@ -29,7 +29,7 @@ All findings addressed. Commits are local on `develop` (per-finding).
 | L1 | ✅ fixed | (this commit) | `~/.strategos/models` → `~/.torii/models` with a one-time migration; Makefile header + README; `strategos://` comment retired. Tauri id was already `dev.torii.app`. |
 | L2 | ✅ folds into H1 | `596a64d` | `make test`/`check` were red only because of H1; now green. |
 
-Deferred by design (not regressions): env-var fallbacks `STRATEGOS_ENV`/`STRATEGOS_KEK` (TORII_* is primary), the `owner2@strategos.local` dev seed identity, and the ~164-file doc-prose rename sweep (rebrand memory). Upstream: republish `@kavach/*` with `dist/` + extension-ful imports to retire the core shim.
+Since resolved (2026-07-31, "umbrella is torii" — no strategos in code/config/docs): the `STRATEGOS_*` env fallbacks were removed (TORII_* only), the doc-prose sweep landed (Strategos→Torii for engine/gateway, →Seiki for admin/web-SaaS), and the local-DB rebrand (project_id + `owner2@torii.local` seed) was done at a coordinated reset. Kept intentionally: the mockups' `StrategosUI`/`StrategosAPI` functional identifiers (design reference) + the byte-identical `uploads/Strategos-2` backup. Upstream: republish `@kavach/*` with `dist/` + extension-ful imports ([jerrythomas/kavach#25](https://github.com/jerrythomas/kavach/issues/25)) to retire the core shim.
 
 ---
 

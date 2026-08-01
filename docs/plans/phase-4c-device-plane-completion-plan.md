@@ -148,7 +148,7 @@ build order + dependency graph.
 - **Depends on:** P1b (D2·min boot), P3 (catalog dims)
 - **Spec/Decision:** D2 §2.1, §6 Flow 1, §8.1/§8.6; DECISIONS §3 (embedded in-process, no daemon; `fastembed` off)
 - **Acceptance criteria:**
-  - After `LocalEngine::boot`, `AdapterRegistry::list()` includes the `EmbeddedLlamaAdapter` id under **both** the chat and embed capability maps and the `OrtAdapter` id under embed; the `ChainedResolver` composes `ManagedResolver`(`~/.strategos/models`)→`OllamaResolver`(read-through `~/.ollama`)→`ExternalResolver`.
+  - After `LocalEngine::boot`, `AdapterRegistry::list()` includes the `EmbeddedLlamaAdapter` id under **both** the chat and embed capability maps and the `OrtAdapter` id under embed; the `ChainedResolver` composes `ManagedResolver`(`~/.torii/models`)→`OllamaResolver`(read-through `~/.ollama`)→`ExternalResolver`.
   - The `ProvisioningSupervisor` is registered as the `Arc<dyn ReadinessProbe>` the local wing consults; unready models degrade (fall-through) rather than block.
   - Build compiles with `llama-cpp`+`ort`+`hf-download` and **without** `fastembed` (no `FastembedAdapter`/`ProvisionPlan::Fastembed` symbol); there is **no** `InferenceAdapter` reference (MIG-2); every `ProvisionPlan` match carries a wildcard arm (`#[non_exhaustive]`).
 - **Test scenarios:**

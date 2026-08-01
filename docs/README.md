@@ -14,12 +14,12 @@ We separate the **config/governance plane** (central, the authority) from the **
 
 ```
         ┌──────────────────────── CLOUD: config / governance plane ────────────────────────┐
- Admin ▶│  admin.strategos.sensei-hq.com (Admin Portal, SvelteKit+Rokkit → Cloudflare Pages)│
-        │  app.strategos.sensei-hq.com   (Member Console, web)                              │
- Member▶│  strategos.sensei-hq.com       (Marketing site)                                   │
+ Admin ▶│  seiki.sensei-hq.com (Admin Portal, SvelteKit+Rokkit → Cloudflare Pages)│
+        │  app.torii.sensei-hq.com   (Member Console, web)                              │
+ Member▶│  torii.sensei-hq.com       (Marketing site)                                   │
         │                                                                                   │
         │  Supabase: Auth/SSO · Postgres (RLS, per-tenant, dbd-managed) · Storage · Realtime │
-        │  api.strategos.sensei-hq.com   (Central gateway — Rust/Axum, wraps `gateway` crate)│
+        │  api-torii.sensei-hq.com   (Central gateway — Rust/Axum, wraps `gateway` crate)│
         │     • cloud BYOK calls (keys never leave) · budgets · audit · guardrails · RAG     │
         └──────────────▲──────────────────────────────────────────────┬────────────────────┘
           usage/audit ─┘   pull config + wrapped keys                  │ Realtime: config changed
@@ -49,7 +49,7 @@ We separate the **config/governance plane** (central, the authority) from the **
 
 ## Domains
 
-`strategos.sensei-hq.com` (marketing) · `app.` (Member Console) · `admin.` (Admin Portal) · `api.` (central gateway).
+`torii.sensei-hq.com` (marketing) · `app.` (Member Console) · `admin.` (Admin Portal) · `api.` (central gateway).
 
 ## Module map
 

@@ -1,6 +1,6 @@
 # W2 · Member Console — Spec
 
-**Module:** [W2](../modules/W2-member-console.md) · **Status:** Planned — build-ready · **Plane:** Web client (reused verbatim in desktop D1) · **Domain:** `app.strategos.sensei-hq.com`
+**Module:** [W2](../modules/W2-member-console.md) · **Status:** Planned — build-ready · **Plane:** Web client (reused verbatim in desktop D1) · **Domain:** `app.torii.sensei-hq.com`
 **Depends on:** [W4](../modules/W4-design-system.md) (Rokkit tokens/atoms), [F2](./F2-identity-auth-rbac.md) (Supabase auth, JWT claims, capability set), [C1](./C1-gateway-service.md) (inference + gateway-mediated write RPC), [C5](./C5-rag-document-intelligence.md) (Library/document center + retrieval + datasets), [C6](./C6-quality-signals.md) (live meters + explicit-feedback capture) · **Hosts:** [W3](../modules/W3-playground.md) (Playground authored there, mounted here) · **Owns design-only:** X2 Workflows/agent-builder surfaces
 **Enables:** the member-facing product (Workspace/Ask/Library/Activity/Settings) on web and inside the desktop shell (D1).
 **Date:** 2026-07-23 · **Framework:** SvelteKit + Svelte 5 (Runes) + Rokkit · **Runtime:** static SPA served at `app.` (Cloudflare) + embedded in the Tauri desktop shell (D1)
@@ -107,7 +107,7 @@ Shared shell (rail, chrome, workspace switcher `⌘K`, mobile tabs, device foote
 
 ### 4.2 HTTP consumed — C1 (inference + gateway-mediated writes)
 
-All calls carry `Authorization: Bearer <supabase-jwt>`; base `https://api.strategos…/v1`.
+All calls carry `Authorization: Bearer <supabase-jwt>`; base `https://api.torii…/v1`.
 
 | Call | Purpose (W2) |
 |---|---|

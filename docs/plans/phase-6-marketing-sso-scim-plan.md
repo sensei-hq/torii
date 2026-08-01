@@ -61,7 +61,7 @@ milestone: Phase-P14
 | **Cloudflare Pages project + build/deploy creds** | W5-1 | Separate Pages project from the product apps (independent cadence). |
 | **`PUBLIC_TURNSTILE_SITE_KEY` + `TURNSTILE_SECRET_KEY`** | W5-5 | Turnstile widget + server-side siteverify on `/api/lead`. Site key public; secret is a Pages secret. |
 | **`SALES_INBOX` (+ optional `LEAD_WEBHOOK_URL`)** | W5-5 | Lead sink. v1 default = Cloudflare Email Routing transactional email to a sales inbox; CRM webhook optional via env. |
-| **`PUBLIC_APP_URL` / `PUBLIC_ADMIN_URL` / `PUBLIC_SIGNUP_URL` / `PUBLIC_STATUS_URL` / `PUBLIC_DOCS_URL`** | W5-3 | Env-configured funnel links (dev/staging/prod); **no hardcoded product URLs** in the bundle. Domain final form (`strategos.sensei-hq.com` apex + `app.`/`admin.`) confirmed at deploy. |
+| **`PUBLIC_APP_URL` / `PUBLIC_ADMIN_URL` / `PUBLIC_SIGNUP_URL` / `PUBLIC_STATUS_URL` / `PUBLIC_DOCS_URL`** | W5-3 | Env-configured funnel links (dev/staging/prod); **no hardcoded product URLs** in the bundle. Domain final form (`torii.sensei-hq.com` apex + `app.`/`admin.`) confirmed at deploy. |
 | **Supabase SAML SSO enabled on the project** | F2-1 | Native SAML 2.0 SSO must be turned on (Supabase Pro/enterprise feature) before any IdP is registered. Front-loaded like RS256/JWKS in P2a. |
 | **Per-tenant IdP metadata** (SAML metadata URL or XML, entity id, attribute mapping) | F2-1 | Enterprise-tenant onboarding artifact; supplied by the customer's IdP admin (Okta/Azure AD/etc.) at tenant setup. |
 | **Per-tenant SCIM bearer token issuance approval** | F2-3 | The reveal-once SCIM token handed to the customer's IdP SCIM connector. |
@@ -107,7 +107,7 @@ milestone: Phase-P14
   - All product URLs are resolved from Cloudflare Pages env vars at build; **no product URL string-literal exists in any component**.
 - **Test scenarios:**
   - Given `PUBLIC_SIGNUP_URL` is changed and the app re-deployed, When the "Get started" CTA is clicked, Then it navigates to the new URL (proving env resolution, not a literal).
-  - Given the built client bundle, When grepped for `app.strategos`/`admin.strategos`/`supabase.co`, Then no hardcoded product origin is found.
+  - Given the built client bundle, When grepped for `app.torii`/`admin.torii`/`supabase.co`, Then no hardcoded product origin is found.
 
 ### W5-4 — Pricing page + tier CTA routing (new surface)
 - **Layers:** content-schema → route → CTA routing

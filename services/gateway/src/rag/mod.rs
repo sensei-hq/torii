@@ -9,6 +9,7 @@
 //! and redact-at-rest before embedding (no raw secret ever reaches `document_embeddings`).
 
 pub mod embed;
+pub mod parse;
 
 use serde::{Deserialize, Serialize};
 

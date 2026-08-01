@@ -44,3 +44,18 @@ comment on table documents is
 - scope: system (global), tenant (shared within tenant), user (private)
 - space_id: optional FK to spaces; classification governs confidentiality
 - Access (incl. confidential/restricted) is enforced via RLS in policies/knowledge.sql';
+
+-- C5 RAG (2026-08-01): additive ingestion-pipeline + dedup/versioning columns. Trailing
+-- add-column-if-not-exists is the repo house style for post-ship additive changes (cf.
+-- budget_nodes.ddl) so `dbd apply` is idempotent + NON-destructive on the live data-bearing DB.
+alter table documents add column if not exists content_hash       char(64);
+-- current_version_id: plain uuid, NO FK — a documents<->document_versions FK would be a cyclic
+-- forward-ref (dbd rule); integrity is enforced in the ingest transaction.
+alter table documents add column if not exists current_version_id uuid;
+alter table documents add column if not exists status_reason       text;
+-- Broaden the status CHECK with the fine pipeline stages; KEEP 'completed' as the terminal value
+-- (similarity_search + hybrid_search + the W1/W2 admin screens all filter on 'completed').
+alter table documents drop constraint if exists documents_status_check;
+alter table documents add constraint documents_status_check check (status in (
+  'uploaded','queued','parsing','redacting','chunking','embedding','indexing','processing','completed','failed'));
+create index if not exists idx_documents_content_hash on documents(tenant_id, content_hash);

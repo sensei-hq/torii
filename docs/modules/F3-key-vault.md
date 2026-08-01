@@ -15,7 +15,7 @@ The **provider credential vault**: store two credential **types** per router —
 ## What we build
 
 - **`router_credentials`** (F1 RW13 generalizes `router_keys`, `type = api_key | oauth`): `api_key` stores the encrypted BYOK secret; `oauth` stores encrypted **access + refresh token** plus `expires_at`, `scopes`, `token_url`, and refresh metadata (`last_refreshed_at`, `refresh_status`).
-- **Envelope encryption**: per-tenant **DEK** encrypts credential material; DEK is encrypted by a master **KEK**. AES-256-GCM. **Production KEK lives in a cloud KMS/HSM; the `STRATEGOS_KEK` env var is local-dev only** (§2 W4). (Envelope carried from the `database/` design.)
+- **Envelope encryption**: per-tenant **DEK** encrypts credential material; DEK is encrypted by a master **KEK**. AES-256-GCM. **Production KEK lives in a cloud KMS/HSM; the `TORII_KEK` env var is local-dev only** (§2 W4). (Envelope carried from the `database/` design.)
 - **Decrypt only in the trusted central gateway** (C1) at call time; neither the key secret nor OAuth tokens are ever returned over any API or RLS view/function.
 - **RLS lockdown** on `router_credentials` — deny-all, `service_role`-only, no client `SELECT`.
 - **OAuth auto-refresh worker** (F3/central): a background refresher calls `token_url` to swap the access token **before `expires_at`**; the Connections screen supports connect-via-OAuth alongside paste-a-key. (The cloud adapter's bearer-credential support is a **gateway-repo issue** — create → implement → close.)
@@ -36,7 +36,7 @@ The **provider credential vault**: store two credential **types** per router —
 
 ## Resolved (by [`../DECISIONS.md`](../DECISIONS.md))
 
-- **KEK custody:** cloud KMS/HSM in production; `STRATEGOS_KEK` env var is local-dev only (§2 W4).
+- **KEK custody:** cloud KMS/HSM in production; `TORII_KEK` env var is local-dev only (§2 W4).
 - **Credential scope:** vault holds both `api_key` (BYOK) and `oauth` account types; credentials carry no budget (§2 W2).
 
 ## Open questions

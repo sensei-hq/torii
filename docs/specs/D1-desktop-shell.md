@@ -35,7 +35,7 @@ D1 is responsible for:
 
 ## 2. Responsibilities
 
-1. **Host the Tauri process**: window creation/restore, native menu bar, system tray + menu, single-instance guard, deep-link (`strategos://…`) routing to SvelteKit routes, graceful shutdown that drains in-flight IPC and flushes the buffer.
+1. **Host the Tauri process**: window creation/restore, native menu bar, system tray + menu, single-instance guard, deep-link (`torii://…`) routing to SvelteKit routes, graceful shutdown that drains in-flight IPC and flushes the buffer.
 2. **Expose a thin typed IPC surface** (§4.2/4.3) so the frontend never talks to the OS, filesystem, keychain, or SQLite directly; all privileged host actions are RAII-guarded commands, and host state changes are pushed as events.
 3. **Own the device-local store** (§3/§4.4): open/migrate the SQLite DB under the app data dir, expose a `LocalStore` trait to D2/D3/D4, enforce single-active-tenant segregation, and vacuum/GC.
 4. **Custody device session material in the OS keychain** (§5.2): generate/load the Ed25519 device keypair, persist the client-only Supabase session (refresh token) encrypted-at-rest by the OS keychain; expose signing for the offline buffer and enrollment challenge. Never store or accept a provider credential.
@@ -48,7 +48,7 @@ D1 is responsible for:
 
 ## 3. Data model — the device-local store (NOT F1/Postgres)
 
-D1 owns **no** F1 (Postgres) tables. Its store is a **device-local SQLite database** (`~/<app-data>/strategos/local.db`, `sqlite-vec` extension loaded) that **caches or buffers** F1 data; the authoritative copy always lives centrally. All tables carry `tenant_id` and are scoped to the **single active tenant** (§5.4).
+D1 owns **no** F1 (Postgres) tables. Its store is a **device-local SQLite database** (`~/<app-data>/torii/local.db`, `sqlite-vec` extension loaded) that **caches or buffers** F1 data; the authoritative copy always lives centrally. All tables carry `tenant_id` and are scoped to the **single active tenant** (§5.4).
 
 ### 3.1 Local-store engine decision — **SQLite + `sqlite-vec`** (RESOLVED, see §8.1)
 
@@ -82,7 +82,7 @@ All contracts are **frozen shapes** for D2/D3/D4/W2 to build against. IPC follow
 ### 4.1 Namespacing & error model
 
 - Commands are namespaced `d1_<area>_<verb>` (e.g. `d1_store_enqueue_usage`); auth/device commands reuse F2's names verbatim (§4.7 of F2) so the session contract is shared.
-- Events use `strategos://<area>/<name>` (e.g. `strategos://shell/sync-status`).
+- Events use `torii://<area>/<name>` (e.g. `torii://shell/sync-status`).
 - Every command returns `Result<T, IpcError>` where `IpcError = { code: enum, message, retryable: bool }`, `code ∈ { Unauthenticated, DeviceRevoked, Offline, StoreError, KeychainError, EngineNotReady, Conflict, Internal }`. The frontend maps `code` to shell UX (e.g. `DeviceRevoked` → hard sign-out + revoked screen; `Offline` → queued affordance).
 
 ### 4.2 Session & device commands (shared with F2 §4.7)
@@ -96,7 +96,7 @@ device_enroll() -> { device_id }                           // loads/creates keyp
 device_status() -> 'active' | 'revoked'                    // mirrors D4 Realtime cache for UX only
 ```
 
-`Session` never contains a provider credential. `access_token` is a short-TTL (1h, F2 §4.1.1) RS256 JWT; D1 auto-refreshes before expiry and re-emits `strategos://shell/session-changed`.
+`Session` never contains a provider credential. `access_token` is a short-TTL (1h, F2 §4.1.1) RS256 JWT; D1 auto-refreshes before expiry and re-emits `torii://shell/session-changed`.
 
 ### 4.3 Store, keychain & shell commands (D1-owned)
 
@@ -122,7 +122,7 @@ d1_store_index_delete({ doc_id }) -> void
 
 // ── shell + host ──
 d1_shell_state() -> ShellState                                          // snapshot (also pushed as events)
-d1_shell_open_deeplink(url) -> void                                     // routes strategos://… to a SvelteKit route
+d1_shell_open_deeplink(url) -> void                                     // routes torii://… to a SvelteKit route
 d1_shell_set_offline_sim(on: bool) -> void                             // TEST-MODE ONLY (§9); no-op in prod builds
 ```
 
@@ -180,13 +180,13 @@ Events (host → frontend):
 
 | Event | Payload | Emitted when |
 |-------|---------|--------------|
-| `strategos://shell/network-changed` | `{ network }` | reachability probe to Supabase/C1 changes |
-| `strategos://shell/engine-status` | `{ engine }` | D2 engine load/ready/crash |
-| `strategos://shell/sync-status` | `{ status, config_version, buffer }` | D4 pull / buffer flush progress |
-| `strategos://shell/device-status` | `{ device }` | D4 Realtime `devices` update (revoke → force sign-out) |
-| `strategos://shell/session-changed` | `{ authenticated, tenant_id, expires_at }` | sign-in/out, refresh, tenant switch |
-| `strategos://shell/deep-link` | `{ path, params }` | OS delivers a `strategos://` URL |
-| `strategos://shell/menu` | `{ id }` | tray/native-menu item activated |
+| `torii://shell/network-changed` | `{ network }` | reachability probe to Supabase/C1 changes |
+| `torii://shell/engine-status` | `{ engine }` | D2 engine load/ready/crash |
+| `torii://shell/sync-status` | `{ status, config_version, buffer }` | D4 pull / buffer flush progress |
+| `torii://shell/device-status` | `{ device }` | D4 Realtime `devices` update (revoke → force sign-out) |
+| `torii://shell/session-changed` | `{ authenticated, tenant_id, expires_at }` | sign-in/out, refresh, tenant switch |
+| `torii://shell/deep-link` | `{ path, params }` | OS delivers a `torii://` URL |
+| `torii://shell/menu` | `{ id }` | tray/native-menu item activated |
 
 ### 4.6 Tray, menus, window
 
@@ -221,7 +221,7 @@ The store is scoped to **one active tenant** at a time (F2 §8.5 single-tenant-p
 
 ### 5.5 Device revocation (UX mirror; authority is C1)
 
-D1 subscribes (via D4) to the Realtime `devices` signal; on `status='revoked'` it emits `strategos://shell/device-status revoked`, force-signs-out, wipes the session from the keychain, and shows the revoked screen. This is **defense-in-depth for UX** — the enforcement of record is C1's per-request device-status check (F2 §5.7 / C1 §6.1): a revoked device with a live JWT cannot spend even if a tampered client ignores the event.
+D1 subscribes (via D4) to the Realtime `devices` signal; on `status='revoked'` it emits `torii://shell/device-status revoked`, force-signs-out, wipes the session from the keychain, and shows the revoked screen. This is **defense-in-depth for UX** — the enforcement of record is C1's per-request device-status check (F2 §5.7 / C1 §6.1): a revoked device with a live JWT cannot spend even if a tampered client ignores the event.
 
 ### 5.6 Redaction / PII on-device
 
@@ -236,7 +236,7 @@ D1 stores no chat content beyond what the on-device RAG index needs for the loca
 1. Tauri boots `src-tauri`; D1 opens/migrates `local.db`, loads the `sqlite-vec` extension, and reads `kv` (device_id, active tenant, last config_version).
 2. `DeviceKeychain::load_session` → if a valid refresh token exists, refresh the Supabase session (RS256 access token) and emit `session-changed(authenticated)`; else route the SvelteKit frontend to the Sign-in screen.
 3. D1 probes reachability → sets `ShellState.network`; starts D4 (Realtime subscribe + config pull) and D2 (engine load) which push `sync-status`/`engine-status`.
-4. Frontend (W2) mounts, subscribes to all `strategos://shell/*` events, and calls `d1_shell_state()` for the initial snapshot.
+4. Frontend (W2) mounts, subscribes to all `torii://shell/*` events, and calls `d1_shell_state()` for the initial snapshot.
 
 ### 6.2 First device enrollment (→ device-bound session)
 
@@ -331,7 +331,7 @@ D1 **hosts** the engine but adds no engine capability itself; the crate work D1 
 10. **Device revocation force-signs-out** — a Realtime `devices` revoke emits `device-status revoked`, clears the keychain session, wipes the tenant-scoped store, and shows the revoked screen; a subsequent inference attempt is rejected `403 device_revoked` by C1 regardless of the client.
 11. **Tenant isolation on device** — after `auth_switch_tenant`/`auth_sign_out`, `purge_tenant` leaves zero rows of the departing tenant's config snapshot, kv, or local RAG index (assert empty); unflushed buffer rows retain their original tenant tag until flushed.
 12. **Locked toggles** — a `feature_states` entry that is `locked`/not `user-overridable` renders the control greyed with a lock + tooltip from the `config_snapshot`, and the direct-write path is absent client-side (server would reject anyway).
-13. **Deep-link + single-instance** — a second `strategos://ask?...` launch focuses the existing window and routes to `/ask` (no second process).
+13. **Deep-link + single-instance** — a second `torii://ask?...` launch focuses the existing window and routes to `/ask` (no second process).
 14. **E2E green** — the Playwright harness (globalSetup, test-mode flags, `TauriPage`) runs the sign-in → local-Ask → offline → reconnect-flush path headless and passes; lint + tests clean (zero-errors policy).
 
 ---

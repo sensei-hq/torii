@@ -24,7 +24,7 @@ roadmap, what is **done vs pending**? (2) where is there **duplication / optimiz
 **doc gaps** did the actual build surface that we should resolve?
 
 > **Tooling note:** the sensei code-graph is indexed against the `sensei-hq/sensei` tooling repo, **not
-> strategos/torii** (`get_project_summary` → name="sensei"; `get_duplicates` → 0 over the wrong tree).
+> torii** (`get_project_summary` → name="sensei"; `get_duplicates` → 0 over the wrong tree).
 > So MCP `search`/`get_patterns`/`get_duplicates` can't see this codebase — findings below come from
 > direct inspection + git history + the live stack (gateway on :8788, local Supabase 55322). Re-point
 > the sensei index at this repo to make those tools useful here.
@@ -96,7 +96,7 @@ interim or its exit.
 - **G3 — GH-1 placeholder not flagged.** `execution_location` ships as a heuristic; no doc marks it a
   temporary stand-in, risking "plane split = done" when P12/D3 read a guess.
 - **G4 — rebrand drift.** Code is torii/seiki; docs, DB `project_id`, env vars, and ~164 prose mentions
-  still say "Strategos" (deferred per memory). Growing doc/code divergence.
+  still say "Torii" (deferred per memory). Growing doc/code divergence.
 - **G5 — P9 ordering.** W2 Library + full Playground were partially built then blocked-in-place on C5
   (P7); the P9 plan doesn't flag C5 as a hard predecessor for those surfaces.
 

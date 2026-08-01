@@ -15,7 +15,7 @@ Define the **provider credential vault**: how Torii stores, protects, refreshes,
 
 F3 owns the **crypto envelope**, the **credential lifecycle** (create/connect, rotate, revoke), the **OAuth token auto-refresh worker**, and **DEK/KEK rotation**. It is the "K" in "sure, budgeted access for all via BYOK": once F3 lands, no phase deploys with plaintext keys.
 
-**In scope:** envelope encryption (AES-256-GCM), KEK provider abstraction (KMS/HSM in prod, `STRATEGOS_KEK` local-dev only), `router_credentials`/`tenant_keys` storage contract, the decrypt-at-call-time interface C1 consumes, the OAuth refresh worker (placement/cadence/retry/alert/grace), and DEK/KEK + dual-credential rotation.
+**In scope:** envelope encryption (AES-256-GCM), KEK provider abstraction (KMS/HSM in prod, `TORII_KEK` local-dev only), `router_credentials`/`tenant_keys` storage contract, the decrypt-at-call-time interface C1 consumes, the OAuth refresh worker (placement/cadence/retry/alert/grace), and DEK/KEK + dual-credential rotation.
 
 **Explicitly out of scope:** budget/metering (credentials **carry no budget** — budget binds to identity/node, [`../DECISIONS.md`](../DECISIONS.md) §2 W2); the Connections **UI** (W1, F3 supplies the contract); provider-side inference calls (C1 + the `sensei-cloud-providers` adapter, gated on **GH-2**); non-Anthropic OAuth (v1 = **Anthropic OAuth only**; all other providers = BYOK API key); reversible redaction / secret-mapping stores (§2 W5 → C4, one-way only in v1); field-level dataset encryption (§3c — reuses F3's DEK but owned by C5).
 
@@ -25,7 +25,7 @@ F3 owns the **crypto envelope**, the **credential lifecycle** (create/connect, r
 
 ## 2. Responsibilities
 
-1. **Envelope encryption.** Encrypt every credential secret field under a per-tenant **DEK** (AES-256-GCM); wrap each DEK under a master **KEK** held in a cloud **KMS/HSM** in production (`STRATEGOS_KEK` env var **local-dev only**). Ciphertext layout `[12-byte IV][16-byte tag][ciphertext]` per field.
+1. **Envelope encryption.** Encrypt every credential secret field under a per-tenant **DEK** (AES-256-GCM); wrap each DEK under a master **KEK** held in a cloud **KMS/HSM** in production (`TORII_KEK` env var **local-dev only**). Ciphertext layout `[12-byte IV][16-byte tag][ciphertext]` per field.
 2. **Credential lifecycle.** Create/connect (`api_key` paste, `oauth` connect), rotate, and revoke `router_credentials`; support **dual-credential cutover** (two active credentials for one router during rotation, no unique-per-router constraint blocking it).
 3. **OAuth token auto-refresh.** A background worker swaps OAuth **access tokens before `expires_at`** by calling the credential's `token_url` with the encrypted refresh token; handles retry/backoff, marks `refresh_status`, emits alerts on failure, and honors a grace window. Anthropic-only in v1.
 4. **Dispense to the trusted plane only.** Decrypt credentials **only inside the central gateway** (C1, `service_role`) at call time via the F3 interface; return in-memory, zeroize-on-drop material — **never** persist plaintext, log it, or surface it via any API/view/function.
@@ -87,7 +87,7 @@ Carries the built per-tenant wrapped DEK ([`database/ddl/table/core/tenant_keys.
 | `encrypted_dek` | `bytea` NOT NULL | DEK wrapped by the KEK, `[IV][tag][ct]` (KMS-native envelope for cloud KEK) |
 | `dek_version` | `integer` NOT NULL DEFAULT 1 | bumped on DEK rotation |
 | `kek_version` | `integer` NOT NULL DEFAULT 1 | which KEK wrapped `encrypted_dek` (bumped on KEK rotation) |
-| `kek_ref` | `text` | opaque KMS key reference/ARN (prod); NULL for local `STRATEGOS_KEK` |
+| `kek_ref` | `text` | opaque KMS key reference/ARN (prod); NULL for local `TORII_KEK` |
 | `created_at`/`modified_at`/`modified_by` | | F1 convention |
 
 ### 3.3 `core.tenant_key_archive` (new — rotation safety)
@@ -117,7 +117,7 @@ Holds superseded wrapped DEKs so ciphertext encrypted under an older `dek_versio
 ### 4.1 Rust traits (crate `torii-vault`, consumed by C1's `services/gateway`)
 
 ```rust
-/// Master-key custody. Prod = cloud KMS/HSM; local-dev = STRATEGOS_KEK env var.
+/// Master-key custody. Prod = cloud KMS/HSM; local-dev = TORII_KEK env var.
 /// The DEK plaintext never leaves this trait's implementation boundary except as
 /// zeroize-on-drop material handed to the AEAD.
 #[async_trait]
@@ -129,7 +129,7 @@ pub trait KekProvider: Send + Sync {
     /// The current active KEK version + opaque reference (ARN / key id); None ref for local dev.
     fn active_kek(&self) -> (i32, Option<String>);
 }
-// impls: KmsKekProvider (AWS KMS / GCP KMS / Vault Transit — prod), EnvKekProvider (STRATEGOS_KEK — local-dev only, refuses to start if used with a prod profile).
+// impls: KmsKekProvider (AWS KMS / GCP KMS / Vault Transit — prod), EnvKekProvider (TORII_KEK — local-dev only, refuses to start if used with a prod profile).
 
 /// The credential vault. All methods require a service_role DB handle; there is
 /// intentionally no read/decrypt path reachable by anon/authenticated.
@@ -201,7 +201,7 @@ F3 exposes **no public HTTP** and **no Tauri IPC** (desktop never holds provider
 - **`service_role`-only.** Only the central gateway (C1) `service_role` connection reads/writes these tables. `service_role` bypasses RLS; C1 enforces tenant scope + the `connection.manage` capability in code from the validated JWT before any `CredentialVault` mutation.
 - **Non-secret metadata read path.** The Connections screen needs status without secrets: expose a **view / column-restricted grant** (`router_credentials_meta`) selecting only `id, router_id, type, label, provider_account_label, is_active, priority, status, expires_at, last_refreshed_at, refresh_status, last_used_at`, tenant-scoped RLS (`tenant_id = (auth.jwt()->>'tenant_id')::uuid`), **SELECT to `authenticated`** — never any `encrypted_*`/`token`/`scopes` column. All raw secret columns remain unreadable.
 - **Capability gate.** Every lifecycle mutation (connect/rotate/revoke) requires the `connection.manage` capability (F2's canonical set; F2 owns the authoritative list). C1 checks it server-side; there is no client write path to these tables.
-- **KEK custody.** Production KEK in a cloud **KMS/HSM** (`KmsKekProvider`); DEK unwrap is a KMS call, so raw KEK bytes never touch the app process. `STRATEGOS_KEK` is **local-dev only** — `EnvKekProvider` refuses to start under a production profile (fail-closed).
+- **KEK custody.** Production KEK in a cloud **KMS/HSM** (`KmsKekProvider`); DEK unwrap is a KMS call, so raw KEK bytes never touch the app process. `TORII_KEK` is **local-dev only** — `EnvKekProvider` refuses to start under a production profile (fail-closed).
 - **Secrets never leak.** No secret is logged, returned by any API/view/function, or placed in `refresh_error`/audit payloads. In-memory secrets use `Secret<_>`/zeroize-on-drop. `refresh_error` and all event payloads are pre-redacted (defense-in-depth vs the §2 W5 detector).
 - **Redaction interplay.** F3 secrets are structurally isolated (never in prompts/context), so W5 in-flight redaction (C4) is a backstop, not the primary control; F3's control is *never dispensing plaintext outside the trusted boundary*.
 - **Tenant isolation.** All vault operations are tenant-scoped by DEK: a tenant's credentials are only decryptable with that tenant's DEK; cross-tenant decrypt is impossible even for `service_role` bugs that skip the `tenant_id` filter (wrong DEK ⇒ AEAD auth failure). Composite FKs keep credentials in-tenant.
@@ -243,7 +243,7 @@ Settling the F3 module's residual open questions per the ratified DEFAULTS:
 - **Concurrency of refresh → single-flight via `SELECT … FOR UPDATE SKIP LOCKED` per credential row**, so multiple worker instances / a reactive + proactive refresh never double-swap or race a rotated refresh token. *Rationale:* matches the reserve-lock discipline used for budgets; avoids invalidating a just-rotated refresh token.
 - **Custody model → `server-proxied` (central custody) only in v1.** The per-router `device-local` option (which would require re-wrapping DEKs for each device) is **deferred**; desktop steps that need a cloud credential proxy through C1. *Rationale:* central custody keeps the "no plaintext outside the trusted boundary" invariant simple and matches [`../DECISIONS.md`](../DECISIONS.md) (device pulls a config snapshot with **no secrets**).
 - **OAuth provider scope → Anthropic only in v1** (build + test connect/refresh for Anthropic); all other providers use BYOK `api_key`. *Rationale:* [`../DECISIONS.md`](../DECISIONS.md) §3 — generalize the OAuth flow later.
-- **KEK provider → cloud KMS/HSM in prod (`KmsKekProvider`); `EnvKekProvider`/`STRATEGOS_KEK` local-dev only, fail-closed under a prod profile.** *Rationale:* §2 W4; KEK bytes never enter the app process in prod.
+- **KEK provider → cloud KMS/HSM in prod (`KmsKekProvider`); `EnvKekProvider`/`TORII_KEK` local-dev only, fail-closed under a prod profile.** *Rationale:* §2 W4; KEK bytes never enter the app process in prod.
 - **Redaction of secret mappings → one-way only in v1** (no reversible mapping store); F3 stores no redaction mappings — it is the *source* being protected, and its control is non-dispensation, not redaction. *Rationale:* §2 W5.
 
 ---
@@ -262,7 +262,7 @@ Settling the F3 module's residual open questions per the ratified DEFAULTS:
 10. **Dual-credential cutover.** After `rotate_credential`, both credentials coexist; `resolve_for_call` returns the higher-priority (new) one; after `revoke` of the old, only the new resolves — with **no call failing** during the overlap.
 11. **DEK rotation.** `rotate_dek` re-encrypts every tenant credential under a new `dek_version`; all pre- and post-rotation credentials still decrypt correctly; the archive row is removed once unreferenced.
 12. **KEK rotation.** `rotate_kek` re-wraps the DEK (bumps `kek_version`) without modifying any `router_credentials` row; credentials still decrypt.
-13. **No plaintext leak.** Across logs, `refresh_error`, audit payloads, and error responses, no secret/token substring appears (verified by a scan test); local `STRATEGOS_KEK` startup under a prod profile **fails closed**.
+13. **No plaintext leak.** Across logs, `refresh_error`, audit payloads, and error responses, no secret/token substring appears (verified by a scan test); local `TORII_KEK` startup under a prod profile **fails closed**.
 14. **Build gate.** C1's real-credential path is guarded so it cannot decrypt/use a provider credential unless the F3 vault (envelope + lockdown) is present — no plaintext-env fallback deploys.
 15. **No budget coupling.** `router_credentials` has no budget column and F3 emits/consumes no budget event; two API keys for one identity, when exercised, accrue spend to the identity's single budget node (verified via C3), not per-credential.
 

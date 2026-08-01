@@ -8,6 +8,7 @@
 //! per-tenant filter in `hybrid_search` (cross-tenant recall = 0), the fixed 4-level classification,
 //! and redact-at-rest before embedding (no raw secret ever reaches `document_embeddings`).
 
+pub mod chunk;
 pub mod embed;
 pub mod parse;
 

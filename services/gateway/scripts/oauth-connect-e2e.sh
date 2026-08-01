@@ -18,7 +18,7 @@ ANON_KEY="${ANON_KEY:-$(supabase status -o json 2>/dev/null |
 	echo "FAIL: set ANON_KEY (get it from: supabase status)"
 	exit 1
 }
-EMAIL="${TORII_E2E_EMAIL:-owner2@strategos.local}"
+EMAIL="${TORII_E2E_EMAIL:-owner2@torii.local}"
 PASSWORD="${TORII_E2E_PASSWORD:-testpass123}"
 ROUTER="${ROUTER:-anthropic}"
 TOKEN="oauth-e2e-$$-tok"   # a stand-in setup-token; write-only, never echoed

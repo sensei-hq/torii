@@ -172,7 +172,7 @@ type ShellState = {
   sync:     { status: 'synced'|'syncing'|'stale'|'offline'; config_version: number|null; last_sync_at?: string };
   buffer:   { pending: number; flushing: boolean; failed: number };
   device:   'active' | 'revoked' | 'unknown';       // mirror of D4 Realtime signal (UX only)
-  plane_hint: 'desktop';                             // StrategosEnv capability flag (enables local-only UI)
+  plane_hint: 'desktop';                             // ToriiEnv capability flag (enables local-only UI)
 };
 ```
 
@@ -203,7 +203,7 @@ D1 is a client; it holds **no** service role and enforces **no** authorization d
 
 ### 5.1 Capabilities & locked controls (client-side rendering only)
 
-D1 renders the shell chrome and gates local-only UI via the `StrategosEnv`/`plane_hint` flag; it renders admin-governed toggles as **locked** (greyed + lock + tooltip) from the `config_snapshot` `feature_states`/`user_preferences` read model per the 4-state governance precedence (DECISIONS §4). This is **UX only** — the authoritative check is server-side; a tampered client that unlocks a control still fails at C1/RLS. Self-owned benign writes (own `user_preferences`, own drafts) go direct to PostgREST under RLS; all privileged writes go through C1 `/rpc/*` (never from the device shell).
+D1 renders the shell chrome and gates local-only UI via the `ToriiEnv`/`plane_hint` flag; it renders admin-governed toggles as **locked** (greyed + lock + tooltip) from the `config_snapshot` `feature_states`/`user_preferences` read model per the 4-state governance precedence (DECISIONS §4). This is **UX only** — the authoritative check is server-side; a tampered client that unlocks a control still fails at C1/RLS. Self-owned benign writes (own `user_preferences`, own drafts) go direct to PostgREST under RLS; all privileged writes go through C1 `/rpc/*` (never from the device shell).
 
 ### 5.2 Keychain & secret custody (DECISIONS §2 W4)
 

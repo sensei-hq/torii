@@ -36,6 +36,7 @@
 			label: 'Tools',
 			items: [
 				{ href: '/playground', label: 'Playground', icon: 'i-solar-chat-square-code-bold-duotone' },
+				{ href: '/retrieval', label: 'Retrieval', icon: 'i-solar-magnifer-zoom-in-bold-duotone' },
 				{ href: '/compare', label: 'Compare', icon: 'i-solar-layers-minimalistic-bold-duotone' },
 				{ href: '/workflows', label: 'Workflows', icon: 'i-solar-refresh-bold-duotone' },
 				{ href: '/models', label: 'Local models', icon: 'i-solar-cpu-bold-duotone' }

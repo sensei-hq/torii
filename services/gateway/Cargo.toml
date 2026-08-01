@@ -33,6 +33,17 @@ regex = "1"
 once_cell = "1"
 # C5 RAG (2026-08-01): SHA-256 content-hash dedup/versioning + the deterministic StubEmbedder seed.
 sha2 = "0.10"
+# C5 Tier-0 document parsers (2026-08-01) — all pure-Rust, Fly-Linux-safe, clean-text-layer only
+# (NO OCR: OCR Tier-1/2 is the deferred `ParseOpts.ocr` seam). pdf-extract = PDF text layer;
+# calamine = XLSX; zip + quick-xml = one shared DOCX/PPTX OOXML run extractor (docx-rs dropped);
+# htmd = HTML→markdown; image = dimension/format decode; csv = RFC-4180 table serialization.
+pdf-extract = "0.9"
+calamine = "0.36"
+zip = "2"
+quick-xml = "0.41"
+htmd = "0.5"
+image = "0.25"
+csv = "1"
 # MIG-1: real package is `sensei-gateway` (v0.4.6); alias to `gateway` so imports stay short.
 gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", tag = "v0.5.0" }
 # V5: shared BYOK credential vault (envelope crypto / KEK / store / Vault / TenantKeyCache).

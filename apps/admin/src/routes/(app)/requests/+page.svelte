@@ -10,7 +10,9 @@
 		triageSummary,
 		toCsv,
 		csvFilename,
-		money
+		money,
+		summarizeTrace,
+		attemptTone
 	} from '$lib/requests'
 
 	// The admin Requests screen is an operational lens (mock: scope='org'), NOT a raw ledger:
@@ -36,6 +38,30 @@
 			loading = false
 		}
 	})
+
+	// ── "why this model" per-call routing trace (right panel) ──────────────────
+	/** the exception row selected to trace (null = nothing selected). */
+	let selected = $state(/** @type {import('$lib/api').RequestRow | null} */ (null))
+	/** @type {import('$lib/api').RoutingTrace | null} */
+	let trace = $state(null)
+	let traceLoading = $state(false)
+	let traceError = $state('')
+
+	/** @param {import('$lib/api').RequestRow} r */
+	async function selectInstance(r) {
+		selected = r
+		trace = null
+		traceError = ''
+		traceLoading = true
+		try {
+			const res = await api.requestTrace(r.id)
+			trace = res.trace
+		} catch (e) {
+			traceError = e instanceof Error ? e.message : String(e)
+		} finally {
+			traceLoading = false
+		}
+	}
 
 	// ── header lens ──────────────────────────────────────────────────────────
 	const stats = $derived(usageStats(requests))
@@ -68,7 +94,12 @@
 			sub: 'across the org',
 			deferred: false
 		},
-		{ label: 'Fallback rate', value: '—', sub: 'routing trace · soon', deferred: true },
+		{
+			label: 'Fallback rate',
+			value: stats.fallbackRate == null ? '—' : `${stats.fallbackRate}%`,
+			sub: stats.fallbackRate == null ? 'no calls yet' : 'of calls fell back',
+			deferred: stats.fallbackRate == null
+		},
 		{ label: 'Step-downs', value: '—', sub: 'routing trace · soon', deferred: true },
 		{ label: 'Failovers', value: '—', sub: 'routing trace · soon', deferred: true },
 		{ label: 'Avg cost', value: fmtCost(stats.avgCost), sub: 'per call', deferred: false }
@@ -230,8 +261,15 @@
 						{#if instances.length}
 							<div>
 								{#each instances as r (r.id)}
-									<div
-										class="flex items-center gap-3 border-b border-paper-edge px-6 py-2.5 last:border-b-0"
+									<button
+										type="button"
+										data-instance-row
+										onclick={() => selectInstance(r)}
+										aria-pressed={selected?.id === r.id}
+										class="flex w-full items-center gap-3 border-b border-paper-edge px-6 py-2.5 text-left transition-colors last:border-b-0 hover:bg-paper-mute/40 {selected?.id ===
+										r.id
+											? 'bg-paper-mute'
+											: ''}"
 									>
 										<span class="h-[7px] w-[7px] shrink-0 rounded-full {dotClass(toneOf(r.status))}"
 										></span>
@@ -247,7 +285,7 @@
 										<span class="shrink-0 font-mono text-xs text-ink-mute">{money(r.cost_usd)}</span
 										>
 										<Chip tone={toneOf(r.status)}>{r.status}</Chip>
-									</div>
+									</button>
 								{/each}
 							</div>
 						{:else}
@@ -310,18 +348,51 @@
 				<!-- right column: "why this model" trace — deferred to the routing-trace backend -->
 				<div>
 					<Card flush class="xl:sticky xl:top-4">
-						<CardHead title="Why this model" icon="i-solar-routing-bold-duotone" />
-						<div class="flex flex-col items-start gap-3 px-6 py-6">
-							<span class="i-solar-routing-bold-duotone h-6 w-6 text-ink-faint"></span>
-							<p class="text-sm text-ink-soft">
-								Select an exception to trace it — the step-by-step routing decision (requested vs
-								served model, budget checks, guardrails, citations) surfaces here.
-							</p>
-							<p class="text-xs text-ink-mute">
-								The per-call routing trace ships with the trace backend (GH-5); until then this
-								panel stays intentionally empty rather than showing invented reasoning.
-							</p>
-						</div>
+						<CardHead title="Why this model" icon="i-solar-routing-bold-duotone">
+							{#snippet right()}
+								{#if selected}
+									<span class="font-mono text-xs text-ink-mute">{selected.model}</span>
+								{/if}
+							{/snippet}
+						</CardHead>
+						{#if traceLoading}
+							<div class="px-6 py-6"><p class="text-sm text-ink-mute">Tracing…</p></div>
+						{:else if selected && trace && trace.attempts.length}
+							<div data-trace class="space-y-3 px-6 py-5">
+								<p data-why class="text-sm text-ink-soft">
+									{summarizeTrace(trace, selected.chain_id)}
+								</p>
+								<ol class="space-y-1.5">
+									{#each trace.attempts as a (a.sequence)}
+										<li data-attempt class="flex items-center gap-2 text-xs">
+											<span class="w-4 shrink-0 font-mono text-ink-faint">{a.sequence}</span>
+											<Chip tone={attemptTone(a.status)}>{a.status}</Chip>
+											<span class="min-w-0 flex-1 truncate text-ink">{a.adapter} → {a.model}</span>
+											<span class="shrink-0 font-mono text-ink-mute">{a.duration_ms}ms</span>
+										</li>
+									{/each}
+								</ol>
+								{#each trace.attempts.filter((a) => a.error) as a (a.sequence)}
+									<p class="text-xs text-danger">↳ {a.adapter}: {a.error}</p>
+								{/each}
+							</div>
+						{:else if selected && traceError}
+							<div class="px-6 py-6">
+								<p class="text-sm text-ink-soft">Couldn’t load the trace — {traceError}</p>
+							</div>
+						{:else if selected}
+							<div class="px-6 py-6">
+								<p class="text-sm text-ink-mute">No routing trace recorded for this call.</p>
+							</div>
+						{:else}
+							<div class="flex flex-col items-start gap-3 px-6 py-6">
+								<span class="i-solar-routing-bold-duotone h-6 w-6 text-ink-faint"></span>
+								<p class="text-sm text-ink-soft">
+									Select an exception to trace it — the routing decision (which model answered, the
+									fallback chain, and the error that triggered each step) surfaces here.
+								</p>
+							</div>
+						{/if}
 					</Card>
 				</div>
 			</div>

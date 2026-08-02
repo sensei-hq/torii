@@ -103,7 +103,36 @@ export interface RequestRow {
 	cost_usd: number
 	duration_ms: number
 	status: string
+	/** which position in the fallback chain answered (1 = primary, >1 = fell back). */
+	fallback_sequence: number
 	recorded_at: string
+}
+
+/** One hop of the engine's routing decision — mirrors the server `Attempt` (trace.rs). */
+export interface RoutingAttempt {
+	sequence: number
+	adapter: string
+	model: string
+	api_model_id: string
+	status: 'success' | 'failed'
+	duration_ms: number
+	/** present on a hop that failed and triggered a fallback — the "why it fell back". */
+	error?: string | null
+	fallback_triggered: boolean
+}
+
+/**
+ * The per-call routing trace behind a request — the "why this model" chain. Mirrors the
+ * server `ExecutionTrace` (trace.rs); `candidates`/`skipped` are empty from the chat path
+ * today, so only `attempts` is surfaced.
+ */
+export interface RoutingTrace {
+	request_id: string
+	capability: string
+	status: 'success' | 'failed'
+	duration_ms: number
+	attempts: RoutingAttempt[]
+	created_at: string
 }
 
 export interface BudgetNode {
@@ -319,6 +348,9 @@ export const api = {
 	whoami: () => gwGet<WhoAmI>('/v1/whoami'),
 	audit: (limit = 100) => gwGet<{ events: AuditEvent[] }>(`/v1/audit?limit=${limit}`),
 	requests: (limit = 100) => gwGet<{ requests: RequestRow[] }>(`/v1/requests?limit=${limit}`),
+	// the per-call routing trace ("why this model") for one request — fetched on row select.
+	requestTrace: (id: string) =>
+		gwGet<{ trace: RoutingTrace | null }>(`/v1/requests/${id}/trace`),
 	budgets: () => gwGet<{ nodes: BudgetNode[]; requests: BudgetRequest[] }>('/v1/budgets'),
 	connections: () => gwGet<{ providers: Provider[] }>('/v1/connections'),
 	apikeys: () => gwGet<{ keys: ApiKey[] }>('/v1/apikeys'),

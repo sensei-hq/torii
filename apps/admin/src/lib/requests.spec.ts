@@ -1,18 +1,21 @@
 import { describe, expect, test } from 'vitest'
 import {
+	attemptTone,
 	avgCost,
 	callsInWindow,
 	cascadePath,
 	csvFilename,
+	fallbackRate,
 	groupByStatus,
 	leafNodes,
 	nodePct,
+	summarizeTrace,
 	toCsv,
 	triageSummary,
 	usageByModel,
 	usageStats
 } from './requests'
-import type { BudgetNode, RequestRow } from './api'
+import type { BudgetNode, RequestRow, RoutingTrace } from './api'
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 const row = (over: Partial<RequestRow> = {}): RequestRow => ({
@@ -27,6 +30,7 @@ const row = (over: Partial<RequestRow> = {}): RequestRow => ({
 	duration_ms: 500,
 	recorded_at: '2026-07-25T10:37:00Z',
 	status: 'success',
+	fallback_sequence: 1,
 	...over
 })
 
@@ -186,7 +190,7 @@ describe('usageByModel', () => {
 describe('usageStats', () => {
 	const NOW = new Date('2026-07-25T12:00:00Z')
 
-	test('calls24h and avgCost are real; trace-derived figures are null (deferred, not faked)', () => {
+	test('calls24h/avgCost/fallbackRate are real; step-down vs failover split is deferred', () => {
 		const s = usageStats(
 			[
 				row({ recorded_at: '2026-07-25T11:00:00Z', cost_usd: 0.02 }), // 1h ago — in window
@@ -196,9 +200,124 @@ describe('usageStats', () => {
 		)
 		expect(s.calls24h).toBe(1) // only the in-window row
 		expect(s.avgCost).toBeCloseTo(0.03) // mean over ALL rows, window-independent
-		expect(s.fallbackRate).toBeNull()
-		expect(s.stepDowns).toBeNull()
+		expect(s.fallbackRate).toBe(0) // neither row fell back
+		expect(s.stepDowns).toBeNull() // needs the per-hop trace reason — deferred
 		expect(s.failovers).toBeNull()
+	})
+})
+
+// ── fallbackRate ───────────────────────────────────────────────────────────────
+describe('fallbackRate', () => {
+	test('is the share of calls whose fallback_sequence > 1, as a whole percent', () => {
+		expect(
+			fallbackRate([
+				row({ fallback_sequence: 1 }),
+				row({ fallback_sequence: 2 }),
+				row({ fallback_sequence: 3 }),
+				row({ fallback_sequence: 1 })
+			])
+		).toBe(50)
+	})
+	test('null on an empty ledger (rendered "—", never faked as 0)', () => {
+		expect(fallbackRate([])).toBeNull()
+	})
+})
+
+// ── attemptTone ─────────────────────────────────────────────────────────────────
+describe('attemptTone', () => {
+	test('maps status to a chip tone', () => {
+		expect(attemptTone('success')).toBe('success')
+		expect(attemptTone('failed')).toBe('danger')
+		expect(attemptTone('other')).toBe('mute')
+	})
+})
+
+// ── summarizeTrace ────────────────────────────────────────────────────────────────
+describe('summarizeTrace', () => {
+	const trace = (over: Partial<RoutingTrace> = {}): RoutingTrace => ({
+		request_id: 'r1',
+		capability: 'text_chat',
+		status: 'success',
+		duration_ms: 900,
+		attempts: [
+			{
+				sequence: 1,
+				adapter: 'ollama',
+				model: 'gemma2:2b',
+				api_model_id: 'gemma2:2b',
+				status: 'success',
+				duration_ms: 900,
+				fallback_triggered: false
+			}
+		],
+		created_at: '2026-07-25T10:37:00Z',
+		...over
+	})
+
+	test('no trace / empty attempts → empty string', () => {
+		expect(summarizeTrace(null, 'chat')).toBe('')
+		expect(summarizeTrace(trace({ attempts: [] }), 'chat')).toBe('')
+	})
+
+	test('single success reads as primary, no fallback; null chain → capability routing', () => {
+		expect(summarizeTrace(trace(), 'chat')).toContain('no fallback')
+		expect(summarizeTrace(trace(), null)).toContain('capability routing')
+	})
+
+	test('a fallback names the winner, the count, and the first failure reason', () => {
+		const s = summarizeTrace(
+			trace({
+				status: 'success',
+				attempts: [
+					{
+						sequence: 1,
+						adapter: 'anthropic',
+						model: 'claude-sonnet-4-5',
+						api_model_id: 'claude-sonnet-4-5',
+						status: 'failed',
+						duration_ms: 120,
+						error: '429 rate limited',
+						fallback_triggered: true
+					},
+					{
+						sequence: 2,
+						adapter: 'openai',
+						model: 'gpt-4o',
+						api_model_id: 'gpt-4o-2024-11-20',
+						status: 'success',
+						duration_ms: 1380,
+						fallback_triggered: false
+					}
+				]
+			}),
+			'chat'
+		)
+		expect(s).toContain('gpt-4o')
+		expect(s).toContain('after 1 fallback')
+		expect(s).toContain('anthropic failed: 429 rate limited')
+	})
+
+	test('an all-failed call is reported as failed with the last error', () => {
+		const s = summarizeTrace(
+			trace({
+				status: 'failed',
+				attempts: [
+					{
+						sequence: 1,
+						adapter: 'anthropic',
+						model: 'claude-sonnet-4-5',
+						api_model_id: 'claude-sonnet-4-5',
+						status: 'failed',
+						duration_ms: 120,
+						error: '503 unavailable',
+						fallback_triggered: true
+					}
+				]
+			}),
+			'chat'
+		)
+		expect(s).toContain('failed')
+		expect(s).toContain('503 unavailable')
 	})
 })
 

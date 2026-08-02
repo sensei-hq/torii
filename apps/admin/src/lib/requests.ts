@@ -3,10 +3,43 @@
 // figure is computed from the real gateway reads (/v1/requests, /v1/budgets) — no mock
 // data. Three concerns: exception triage (group the ledger by outcome status), the
 // member budget cascade (walk the budget tree), and CSV export of the request table.
-import type { BudgetNode, RequestRow } from './api'
+import type { BudgetNode, RequestRow, RoutingTrace } from './api'
 import { money } from './overview'
 
 export { money }
+
+// ── routing trace: the "why this model" explanation for one request ──────────
+/** Tone for an attempt's status chip: served (success) → success, failed → danger. */
+export function attemptTone(status: string): 'success' | 'danger' | 'mute' {
+	return status === 'success' ? 'success' : status === 'failed' ? 'danger' : 'mute'
+}
+
+/**
+ * A one-line "why this model" summary from the routing trace: which model answered, via
+ * which adapter and route (the chain, or capability routing), and — if it wasn't the
+ * primary — how many fallbacks it took and what triggered the first failure. When the whole
+ * call failed, it says so with the last error. Returns '' when there's no usable trace.
+ */
+export function summarizeTrace(trace: RoutingTrace | null, chainId: string | null): string {
+	if (!trace || trace.attempts.length === 0) return ''
+	const via = chainId ? `chain '${chainId}'` : 'capability routing'
+	const attempts = trace.attempts
+	if (trace.status === 'failed') {
+		const last = attempts[attempts.length - 1]
+		const reason = last.error ? `: ${last.error}` : ''
+		const noun = attempts.length === 1 ? 'attempt' : 'attempts'
+		return `All ${attempts.length} routing ${noun} failed (${via})${reason}.`
+	}
+	const winner = attempts[attempts.length - 1]
+	const fallbacks = attempts.length - 1
+	if (fallbacks <= 0) {
+		return `Answered by ${winner.model} via ${winner.adapter} (${via}) — primary model, no fallback.`
+	}
+	const firstFail = attempts.find((a) => a.status === 'failed')
+	const reason = firstFail?.error ? ` (${firstFail.adapter} failed: ${firstFail.error})` : ''
+	const noun = fallbacks === 1 ? 'fallback' : 'fallbacks'
+	return `Answered by ${winner.model} via ${winner.adapter} (${via}) after ${fallbacks} ${noun}${reason}.`
+}
 
 // ── exception triage: group the ledger by outcome status ─────────────────────
 export type Tone = 'success' | 'warning' | 'danger' | 'mute'
@@ -165,28 +198,39 @@ export function usageByModel(requests: RequestRow[], limit = 8): ModelUsage[] {
 		.slice(0, limit)
 }
 
+/**
+ * The share of calls that fell back to a later chain step (`fallback_sequence > 1`), as a
+ * whole percent. `null` when there are no calls (rendered "—") — never faked.
+ */
+export function fallbackRate(requests: RequestRow[]): number | null {
+	if (!requests.length) return null
+	const fell = requests.filter((r) => (r.fallback_sequence ?? 1) > 1).length
+	return Math.round((fell / requests.length) * 100)
+}
+
 export interface UsageStats {
 	/** calls in the trailing 24h — REAL. */
 	calls24h: number
 	/** mean $/call over the window — REAL. */
 	avgCost: number
-	/**
-	 * Fallback-rate / step-down / failover counts classify *why* a call fell back, which
-	 * needs the per-call routing trace (GH-5). Today the ledger's `status` is only
-	 * success|failed — it can't distinguish a budget step-down from a provider failover —
-	 * so these stay `null` (rendered "—") until the trace column lands, rather than faked.
-	 */
+	/** share of calls that fell back to a later chain step (%); null when no calls — REAL. */
 	fallbackRate: number | null
+	/**
+	 * Step-down (budget) vs failover (provider error) split the fallbacks by *why* the
+	 * primary was abandoned — that reason lives in the per-call routing trace's attempt
+	 * errors, not the ledger row, so classifying it across the whole window would need a
+	 * trace fetch per row. Deferred (rendered "—"); the per-row trace is available on select.
+	 */
 	stepDowns: number | null
 	failovers: number | null
 }
 
-/** The five header tiles: two computed from real reads, three deferred to the trace backend. */
+/** The five header tiles: three computed from real reads, two deferred to per-row trace. */
 export function usageStats(requests: RequestRow[], now: Date = new Date()): UsageStats {
 	return {
 		calls24h: callsInWindow(requests, 24, now),
 		avgCost: avgCost(requests),
-		fallbackRate: null,
+		fallbackRate: fallbackRate(requests),
 		stepDowns: null,
 		failovers: null
 	}

@@ -148,7 +148,7 @@ fn build_inference_request(
 /// worst-case estimate BEFORE inference. **Fail-closed** — a token with no tenant,
 /// a caller with no resolvable node, or an over-cap `hard` node is denied (402).
 /// Returns `(tenant, node, hold)` for the commit/release at the end of the call.
-async fn reserve_budget(
+pub(crate) async fn reserve_budget(
     state: &SharedState,
     claims: &Claims,
     input_est: u32,
@@ -227,7 +227,7 @@ async fn reserve_budget(
 /// Chain-routed calls (no explicit model) are governed instead by per-step
 /// activation on the Routing screen, resolved inside the engine. Fail-closed on a
 /// DB error (honest 500, not a misleading "disabled").
-async fn ensure_model_enabled(
+pub(crate) async fn ensure_model_enabled(
     state: &SharedState,
     claims: &Claims,
     model: Option<&str>,
@@ -262,7 +262,7 @@ async fn ensure_model_enabled(
 /// The workspace's DLP masking posture (Settings → "PII & tenant masking"). Default ON
 /// (absent setting = masked); an admin can disable it as a capability-gated, audited
 /// workspace policy. Fail-safe: a DB read error keeps masking ON.
-async fn masking_enabled(state: &SharedState, tenant: Option<Uuid>) -> bool {
+pub(crate) async fn masking_enabled(state: &SharedState, tenant: Option<Uuid>) -> bool {
     let Some(tenant) = tenant else { return true };
     sqlx::query_scalar::<_, bool>(
         "select coalesce((select enabled from public.tenant_settings \
@@ -278,7 +278,7 @@ async fn masking_enabled(state: &SharedState, tenant: Option<Uuid>) -> bool {
 /// provider error without asking). Default ON (absent setting = enabled); an admin can
 /// disable it as a capability-gated, audited workspace policy, pinning inference to the
 /// primary model. Fail-safe: a DB read error keeps fallback ON (preserves availability).
-async fn auto_fallback_enabled(state: &SharedState, tenant: Option<Uuid>) -> bool {
+pub(crate) async fn auto_fallback_enabled(state: &SharedState, tenant: Option<Uuid>) -> bool {
     let Some(tenant) = tenant else { return true };
     sqlx::query_scalar::<_, bool>(
         "select coalesce((select enabled from public.tenant_settings \
@@ -294,7 +294,7 @@ async fn auto_fallback_enabled(state: &SharedState, tenant: Option<Uuid>) -> boo
 /// per-call `credentials` override (the engine prefers them over the platform/env key
 /// per router). **Fail-safe** — no tenant, an empty map, or a vault error leaves the
 /// request on platform keys; a bad BYOK setup never denies inference.
-async fn inject_tenant_credentials(
+pub(crate) async fn inject_tenant_credentials(
     state: &SharedState,
     tenant: Option<Uuid>,
     ireq: &mut InferenceRequest,
@@ -327,7 +327,7 @@ async fn inject_tenant_credentials(
 /// — each hop's adapter/model/status/duration plus the error that forced a fallback — which
 /// is exactly the "why this model" story Activity/Requests replay per call. The engine's
 /// internal candidate/skipped lists are not surfaced on the response, so those stay empty.
-fn build_trace(
+pub(crate) fn build_trace(
     call_id: Uuid,
     capability: Capability,
     resp: &InferenceResponse,

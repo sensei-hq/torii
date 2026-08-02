@@ -1,3 +1,4 @@
+pub mod ask; // C1/C4: grounded Ask — RAG generation with citations (/v1/spaces, /v1/spaces/:id/ask)
 pub mod chat;
 pub mod documents; // C5: RAG document HTTP surface (/v1/documents/*)
 pub mod health;

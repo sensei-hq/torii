@@ -30,6 +30,20 @@ pub trait Resolver: Send + Sync {
     fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, ToolError>;
 }
 
+/// The real system DNS resolver. NB: `to_socket_addrs` is blocking — acceptable on the
+/// infrequent admin-triggered discovery path; a non-blocking resolver is a tracked follow-up.
+pub struct StdResolver;
+
+impl Resolver for StdResolver {
+    fn resolve(&self, host: &str) -> Result<Vec<IpAddr>, ToolError> {
+        use std::net::ToSocketAddrs;
+        let addrs = (host, 0u16)
+            .to_socket_addrs()
+            .map_err(|e| ToolError::Ssrf(format!("dns resolution failed for '{host}': {e}")))?;
+        Ok(addrs.map(|s| s.ip()).collect())
+    }
+}
+
 /// Egress policy knobs. Defaults are the safe production posture.
 #[derive(Debug, Clone)]
 pub struct EgressPolicy {

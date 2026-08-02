@@ -17,6 +17,8 @@
 //! types at its boundary).
 
 pub mod client;
+#[cfg(feature = "db")]
+pub mod discovery;
 pub mod egress;
 pub mod error;
 pub mod invoker;
@@ -24,9 +26,11 @@ pub mod resolver;
 pub mod types;
 
 pub use client::{DiscoveredTool, McpClient, RawToolOutput};
-pub use invoker::{InvokeCtx, ToolAudit, ToolAuditSink, ToolInvoker, ToolRedactor, ToolTransport};
-pub use egress::{is_blocked_ip, EgressFilter, EgressPolicy, PinnedTarget, Resolver};
+#[cfg(feature = "db")]
+pub use discovery::discover_and_cache;
+pub use egress::{is_blocked_ip, EgressFilter, EgressPolicy, PinnedTarget, Resolver, StdResolver};
 pub use error::ToolError;
+pub use invoker::{InvokeCtx, ToolAudit, ToolAuditSink, ToolInvoker, ToolRedactor, ToolTransport};
 #[cfg(feature = "db")]
 pub use resolver::AllowListResolver;
 pub use resolver::{build_allowed_set, parse_transport, ResolveCtx, ResolvedRow};

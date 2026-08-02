@@ -1,14 +1,16 @@
 import { describe, expect, test } from 'vitest'
 import {
+	attemptTone,
 	cascadePath,
 	csvFilename,
 	leafNodes,
 	matchesRequest,
 	money,
 	nodePct,
+	summarizeTrace,
 	toCsv
 } from './activity'
-import type { BudgetNode, RequestRow } from './api'
+import type { BudgetNode, RequestRow, RoutingTrace } from './api'
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 const node = (over: Partial<BudgetNode> = {}): BudgetNode => ({
@@ -35,7 +37,28 @@ const row = (over: Partial<RequestRow> = {}): RequestRow => ({
 	cost_usd: 0.0123,
 	duration_ms: 1200,
 	status: 'success',
+	fallback_sequence: 1,
 	recorded_at: '2026-07-30T09:42:00.000Z',
+	...over
+})
+
+const trace = (over: Partial<RoutingTrace> = {}): RoutingTrace => ({
+	request_id: 'r1',
+	capability: 'text_chat',
+	status: 'success',
+	duration_ms: 900,
+	attempts: [
+		{
+			sequence: 1,
+			adapter: 'ollama',
+			model: 'gemma2:2b',
+			api_model_id: 'gemma2:2b',
+			status: 'success',
+			duration_ms: 900,
+			fallback_triggered: false
+		}
+	],
+	created_at: '2026-07-30T09:42:00.000Z',
 	...over
 })
 
@@ -171,6 +194,89 @@ describe('toCsv', () => {
 		expect(toCsv([])).toBe(
 			'Time,Model,Adapter,Plane,Input tokens,Output tokens,Cost USD,Duration ms,Status,ID'
 		)
+	})
+})
+
+// ── attemptTone ──────────────────────────────────────────────────────────────
+describe('attemptTone', () => {
+	test('maps status to a chip tone', () => {
+		expect(attemptTone('success')).toBe('success')
+		expect(attemptTone('failed')).toBe('danger')
+		expect(attemptTone('anything-else')).toBe('mute')
+	})
+})
+
+// ── summarizeTrace ─────────────────────────────────────────────────────────────
+describe('summarizeTrace', () => {
+	test('no trace / empty attempts → empty string', () => {
+		expect(summarizeTrace(null, 'chat')).toBe('')
+		expect(summarizeTrace(trace({ attempts: [] }), 'chat')).toBe('')
+	})
+
+	test('single successful attempt reads as the primary, no fallback', () => {
+		const s = summarizeTrace(trace(), 'chat')
+		expect(s).toContain('gemma2:2b')
+		expect(s).toContain('ollama')
+		expect(s).toContain("chain 'chat'")
+		expect(s).toContain('no fallback')
+	})
+
+	test('a null chain is described as capability routing, not a chain', () => {
+		const s = summarizeTrace(trace(), null)
+		expect(s).toContain('capability routing')
+		expect(s).not.toContain('chain')
+	})
+
+	test('a fallback chain names the winner + the count + the first failure reason', () => {
+		const t = trace({
+			status: 'success',
+			attempts: [
+				{
+					sequence: 1,
+					adapter: 'anthropic',
+					model: 'claude-sonnet-4-5',
+					api_model_id: 'claude-sonnet-4-5',
+					status: 'failed',
+					duration_ms: 120,
+					error: '429 rate limited',
+					fallback_triggered: true
+				},
+				{
+					sequence: 2,
+					adapter: 'openai',
+					model: 'gpt-4o',
+					api_model_id: 'gpt-4o-2024-11-20',
+					status: 'success',
+					duration_ms: 1380,
+					fallback_triggered: false
+				}
+			]
+		})
+		const s = summarizeTrace(t, 'chat')
+		expect(s).toContain('gpt-4o') // the winner
+		expect(s).toContain('after 1 fallback')
+		expect(s).toContain('anthropic failed: 429 rate limited')
+	})
+
+	test('an all-failed call is reported as failed with the last error', () => {
+		const t = trace({
+			status: 'failed',
+			attempts: [
+				{
+					sequence: 1,
+					adapter: 'anthropic',
+					model: 'claude-sonnet-4-5',
+					api_model_id: 'claude-sonnet-4-5',
+					status: 'failed',
+					duration_ms: 120,
+					error: '503 unavailable',
+					fallback_triggered: true
+				}
+			]
+		})
+		const s = summarizeTrace(t, 'chat')
+		expect(s).toContain('failed')
+		expect(s).toContain('503 unavailable')
 	})
 })
 

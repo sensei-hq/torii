@@ -11,6 +11,11 @@ use async_trait::async_trait;
 
 use crate::error::ToolError;
 
+#[cfg(feature = "net")]
+pub mod http;
+#[cfg(feature = "net")]
+pub use http::HttpClient;
+
 /// A tool as returned by an MCP server's `tools/list` (before allow-list resolution). Cached
 /// into `mcp_server_tools` by discovery.
 #[derive(Debug, Clone, PartialEq)]

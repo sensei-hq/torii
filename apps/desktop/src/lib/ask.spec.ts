@@ -2,7 +2,9 @@ import { describe, expect, test } from 'vitest'
 import {
 	LATENCY_MAX_MS,
 	LATENCY_SLOW_MS,
+	citationLabel,
 	fmtLatency,
+	groundedReason,
 	latencyTone,
 	pinnableForPlane,
 	routingReason,
@@ -10,6 +12,7 @@ import {
 	type PinnableModel
 } from './ask'
 import type { AvailableModel } from './api'
+import type { Citation } from './rag'
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 const cloud = (over: Partial<AvailableModel> = {}): AvailableModel => ({
@@ -136,5 +139,39 @@ describe('latencyTone', () => {
 	})
 	test('the slow threshold sits within the meter full-scale (so it renders as partial fill)', () => {
 		expect(LATENCY_SLOW_MS).toBeLessThan(LATENCY_MAX_MS)
+	})
+})
+
+// ── grounded Ask: citationLabel / groundedReason ────────────────────────────────
+describe('citationLabel', () => {
+	const cite = (over: Partial<Citation> = {}): Citation => ({
+		index: 1,
+		document_id: 'd1',
+		chunk_id: 'c1',
+		section_path: 'Refund policy › Eligibility',
+		page_ref: 3,
+		score: 0.87,
+		snippet: '…',
+		...over
+	})
+	test('formats as "[n] section"', () => {
+		expect(citationLabel(cite())).toBe('[1] Refund policy › Eligibility')
+	})
+	test('falls back to "source" when the section is missing or blank', () => {
+		expect(citationLabel(cite({ index: 2, section_path: null }))).toBe('[2] source')
+		expect(citationLabel(cite({ index: 3, section_path: '   ' }))).toBe('[3] source')
+	})
+})
+
+describe('groundedReason', () => {
+	test('names the space and pluralizes the source count', () => {
+		expect(groundedReason('Product docs', 2)).toContain('Product docs')
+		expect(groundedReason('Product docs', 2)).toContain('2 sources')
+		expect(groundedReason('Product docs', 1)).toContain('1 source')
+	})
+	test('zero sources is flagged as possibly incomplete, not silently grounded', () => {
+		const r = groundedReason('Product docs', 0)
+		expect(r.toLowerCase()).toContain('no matching sources')
+		expect(r.toLowerCase()).toContain('incomplete')
 	})
 })

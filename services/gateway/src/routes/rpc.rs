@@ -169,6 +169,7 @@ pub async fn budgets_upsert_node(
         Some(id),
     )
     .await;
+    crate::routes::config::bump(&state.pool, tenant, "budgets").await;
     (StatusCode::OK, Json(json!({ "id": id }))).into_response()
 }
 
@@ -238,6 +239,7 @@ pub async fn budgets_delete_node(
         Some(body.id),
     )
     .await;
+    crate::routes::config::bump(&state.pool, tenant, "budgets").await;
     (StatusCode::OK, Json(json!({ "id": body.id }))).into_response()
 }
 
@@ -982,6 +984,7 @@ pub async fn governance_set_feature(
         None,
     )
     .await;
+    crate::routes::config::bump(&state.pool, tenant, "features").await;
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
@@ -1027,6 +1030,7 @@ pub async fn models_set_enabled(
         None,
     )
     .await;
+    crate::routes::config::bump(&state.pool, tenant, "catalog").await;
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
@@ -1072,6 +1076,7 @@ pub async fn routing_set_step(
                 Some(body.id),
             )
             .await;
+            crate::routes::config::bump(&state.pool, tenant, "routing").await;
             (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
         }
         Err(e) => {
@@ -1488,6 +1493,7 @@ pub async fn settings_set(
         None,
     )
     .await;
+    crate::routes::config::bump(&state.pool, tenant, "settings").await;
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
@@ -1544,6 +1550,7 @@ pub async fn mcp_set_enabled(
         Some(body.mcp_server_id),
     )
     .await;
+    crate::routes::config::bump(&state.pool, tenant, "tools").await;
     (StatusCode::OK, Json(json!({ "enabled": body.enabled }))).into_response()
 }
 
@@ -1632,6 +1639,7 @@ pub async fn mcp_set_tool_grant(
         Some(body.role_id),
     )
     .await;
+    crate::routes::config::bump(&state.pool, tenant, "tools").await;
     (
         StatusCode::OK,
         Json(json!({ "role_id": body.role_id, "tool_name": body.tool_name, "allowed": body.allowed })),

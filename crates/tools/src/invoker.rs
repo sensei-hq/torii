@@ -421,6 +421,7 @@ mod tests {
                 &ctx(),
                 &allowed_web_fetch(),
                 &ToolInvocation {
+                    id: "call-1".into(),
                     offered_name: "web__delete".into(),
                     arguments: "{}".into(),
                 },
@@ -447,6 +448,7 @@ mod tests {
                 &ctx(),
                 &allowed_web_fetch(),
                 &ToolInvocation {
+                    id: "call-1".into(),
                     offered_name: "web__fetch".into(),
                     arguments: "{\"key\":\"sk-live-SECRET\"}".into(),
                 },
@@ -485,6 +487,7 @@ mod tests {
                 &ctx(),
                 &allowed_web_fetch(),
                 &ToolInvocation {
+                    id: "call-1".into(),
                     offered_name: "web__fetch".into(),
                     arguments: "{\"key\":\"sk-live-SECRET\"}".into(),
                 },
@@ -515,6 +518,7 @@ mod tests {
                 &ctx(),
                 &allowed_web_fetch(),
                 &ToolInvocation {
+                    id: "call-1".into(),
                     offered_name: "web__fetch".into(),
                     arguments: "{}".into(),
                 },
@@ -539,6 +543,7 @@ mod tests {
                 &ctx(),
                 &allowed_web_fetch(),
                 &ToolInvocation {
+                    id: "call-1".into(),
                     offered_name: "web__fetch".into(),
                     arguments: "{}".into(),
                 },

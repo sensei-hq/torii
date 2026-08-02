@@ -17,12 +17,25 @@ use gateway::{
     store::{CallStatus, GatewayStore, InferenceCall, StoredTrace},
     types::{
         capability::Capability,
-        request::{InferenceRequest, InferenceResponse, Message, MessageRole, Payload},
+        request::{
+            InferenceRequest, InferenceResponse, Message, MessageContent, MessageRole, Payload,
+            ToolDefinition,
+        },
         trace::{ExecutionTrace, TraceStatus},
     },
 };
 
-use crate::{auth::Claims, state::SharedState, store::PgGatewayStore};
+use tools::{
+    run_tool_loop, AllowListResolver, InvokeCtx, ModelTurn, ToolDef, ToolInvocation, ToolInvoker,
+    ToolLoopConfig, ToolResultMessage, TurnOutput,
+};
+
+use crate::{
+    auth::Claims,
+    routes::mcp::{resolve_ctx, GatewayAudit, GatewayRedactor, GatewayTransport},
+    state::SharedState,
+    store::PgGatewayStore,
+};
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -45,6 +58,14 @@ pub struct ChatRequest {
     pub system: Option<String>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// X1 (P11): the space whose (role×space) tool allow-list applies. Optional — with no space
+    /// only role-wide grants resolve.
+    #[serde(default)]
+    pub space_id: Option<Uuid>,
+    /// X1: `"auto"` enables the MCP agentic tool loop (offering only allow-listed tools); any
+    /// other value / absent = no tools (the existing single-shot path, unchanged).
+    #[serde(default)]
+    pub tools: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -54,6 +75,10 @@ pub struct ChatResponse {
     pub cost_usd: f64,
     pub input_tokens: Option<u32>,
     pub output_tokens: Option<u32>,
+    /// X1: per-tool provenance for an agentic answer (`governance.tools[]`) — server/tool/
+    /// outcome/redaction type+count/plane/latency, never raw args/output. Empty for plain chat.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<tools::ToolProvenance>,
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +406,11 @@ pub async fn post_chat(
     State(state): State<SharedState>,
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, String)> {
+    // X1 (P11): opt-in MCP agentic tool loop. Gated on `tools == "auto"` so every existing caller
+    // (no `tools` field) takes the unchanged single-shot path below — no regression.
+    if req.tools.as_deref() == Some("auto") {
+        return post_chat_with_tools(&claims, &state, &req).await;
+    }
     let mask = masking_enabled(&state, claims.tenant_id).await;
     let allow_fallback = auto_fallback_enabled(&state, claims.tenant_id).await;
     let (mut ireq, redactions) = build_inference_request(&req, mask, allow_fallback);
@@ -451,6 +481,7 @@ pub async fn post_chat(
         cost_usd,
         input_tokens,
         output_tokens,
+        tools: Vec::new(),
     };
 
     // --- Persist (best-effort) — tenant is known (reserve_budget errored otherwise) ---
@@ -778,6 +809,276 @@ pub async fn post_chat_stream(
         })
 }
 
+// ---------------------------------------------------------------------------
+// X1 (P11) · agentic MCP tool loop over /v1/chat
+// ---------------------------------------------------------------------------
+
+/// The tools-enabled path: resolve the caller's default-deny `(role×space)` allow-list, then run
+/// the bounded agentic loop (offering ONLY allowed tools; every tool call enforced + redacted by
+/// the runtime). Budget is metered per model turn (reserve→commit each turn). Returns the answer
+/// + `governance.tools[]` provenance. On any resolver error we offer NO tools (fail-safe) rather
+/// than opening the surface.
+async fn post_chat_with_tools(
+    claims: &Claims,
+    state: &SharedState,
+    req: &ChatRequest,
+) -> Result<Json<ChatResponse>, (StatusCode, String)> {
+    let tenant = claims.tenant_id.ok_or((
+        StatusCode::PAYMENT_REQUIRED,
+        "budgeted access required: token carries no tenant".to_string(),
+    ))?;
+    let rctx = resolve_ctx(claims).ok_or((
+        StatusCode::FORBIDDEN,
+        "no tenant/roles resolved for tool use".to_string(),
+    ))?;
+
+    // Default-deny: a resolver error offers NO tools (never widen the surface on failure).
+    let allowed = AllowListResolver::new(&state.pool)
+        .resolve(&rctx, req.space_id)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("chat/tools: allow-list resolve failed, offering no tools: {e}");
+            Default::default()
+        });
+
+    let mask = masking_enabled(state, Some(tenant)).await;
+    let allow_fallback = auto_fallback_enabled(state, Some(tenant)).await;
+
+    // Redact the base prompt in-flight (parity with the single-shot path).
+    let clean = |s: &str| -> String {
+        if mask {
+            crate::redact::Redactor.redact(s).0
+        } else {
+            s.to_string()
+        }
+    };
+    let base: Vec<Message> = req
+        .messages
+        .iter()
+        .map(|m| Message::text(map_role(&m.role), clean(&m.content)))
+        .collect();
+    let system = req.system.as_ref().map(|s| clean(s));
+
+    let turn = GatewayModelTurn {
+        state,
+        claims,
+        tenant,
+        mask,
+        allow_fallback,
+        max_tokens: req.max_tokens.unwrap_or(1024),
+        system,
+        messages: std::sync::Mutex::new(base),
+        total_cost: std::sync::Mutex::new(0.0),
+        last_model: std::sync::Mutex::new(None),
+    };
+    let transport = GatewayTransport {
+        pool: state.pool.clone(),
+    };
+    let redactor = GatewayRedactor { mask };
+    let audit = GatewayAudit {
+        pool: state.pool.clone(),
+    };
+    let invoker = ToolInvoker::new(&transport, &redactor, &audit);
+    let ictx = InvokeCtx {
+        tenant_id: tenant,
+        actor_id: rctx.actor_id,
+    };
+
+    let result = run_tool_loop(&ToolLoopConfig::default(), &ictx, &allowed, &invoker, &turn)
+        .await
+        .map_err(|e| {
+            tracing::error!("chat/tools: loop error: {e}");
+            (StatusCode::BAD_GATEWAY, "tool loop error".to_string())
+        })?;
+
+    let model = turn.last_model.lock().unwrap().clone();
+    let cost_usd = *turn.total_cost.lock().unwrap();
+    Ok(Json(ChatResponse {
+        content: result.answer,
+        model,
+        cost_usd,
+        input_tokens: None,
+        output_tokens: None,
+        tools: result.provenance,
+    }))
+}
+
+/// One metered model turn for the agentic loop. Owns the growing engine transcript (interior
+/// mutable) + the running cost/model, so the pure `crates/tools` driver stays engine-independent.
+struct GatewayModelTurn<'a> {
+    state: &'a SharedState,
+    claims: &'a Claims,
+    tenant: Uuid,
+    mask: bool,
+    allow_fallback: bool,
+    max_tokens: u32,
+    system: Option<String>,
+    /// user/assistant/tool messages accumulated across turns (NOT the system prompt).
+    messages: std::sync::Mutex<Vec<Message>>,
+    total_cost: std::sync::Mutex<f64>,
+    last_model: std::sync::Mutex<Option<String>>,
+}
+
+#[async_trait::async_trait]
+impl ModelTurn for GatewayModelTurn<'_> {
+    async fn turn(
+        &self,
+        tools_offered: &[ToolDef],
+        results: &[ToolResultMessage],
+    ) -> Result<TurnOutput, tools::ToolError> {
+        // Append the prior round's tool results, then snapshot the transcript (lock never held
+        // across an await).
+        let snapshot = {
+            let mut msgs = self.messages.lock().unwrap();
+            for r in results {
+                msgs.push(Message::tool_result(r.id.clone(), r.content.clone()));
+            }
+            msgs.clone()
+        };
+
+        // Offer ONLY the resolved allowed tools (default-deny at the offer point).
+        let tool_defs: Vec<ToolDefinition> = tools_offered
+            .iter()
+            .map(|t| ToolDefinition {
+                name: t.offered_name.clone(),
+                description: t.description.clone(),
+                input_schema: t.input_schema.clone(),
+            })
+            .collect();
+
+        let input_est = (snapshot
+            .iter()
+            .map(|m| m.content.as_text().chars().count())
+            .sum::<usize>()
+            / 4)
+        .min(u32::MAX as usize) as u32;
+
+        let mut ireq = InferenceRequest {
+            capability: Capability::TextChat,
+            model: None,
+            router: None,
+            chain: Some("chat".to_string()),
+            payload: Payload::Chat {
+                messages: snapshot,
+                system: self.system.clone(),
+                max_tokens: Some(self.max_tokens),
+                temperature: None,
+                tools: tool_defs,
+            },
+            budget: None,
+            auth: None,
+            panel: None,
+            consensus: None,
+            allow_fallback: self.allow_fallback,
+            credentials: Default::default(),
+        };
+        inject_tenant_credentials(self.state, Some(self.tenant), &mut ireq).await;
+
+        // Per-turn budget reserve (D6: one metered call per turn).
+        let (_t, node, hold) = reserve_budget(self.state, self.claims, input_est, self.max_tokens)
+            .await
+            .map_err(|(code, msg)| tools::ToolError::Transport(format!("budget {code}: {msg}")))?;
+
+        let start = Instant::now();
+        let exec = self.state.gateway.execute(&ireq).await;
+        let duration_ms = start.elapsed().as_millis() as u64;
+        let resp = match exec {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = crate::budgets::release(&self.state.pool, self.tenant, hold).await;
+                return Err(tools::ToolError::Transport(format!("engine: {e}")));
+            }
+        };
+
+        let cost = resp
+            .actual_cost
+            .as_ref()
+            .map(|c| c.total_cost)
+            .or_else(|| resp.estimated_cost.as_ref().map(|e| e.estimated))
+            .unwrap_or(0.0);
+        if let Err(e) = crate::budgets::commit(&self.state.pool, self.tenant, hold, cost).await {
+            tracing::warn!("chat/tools: budget commit failed: {e}");
+        }
+        *self.total_cost.lock().unwrap() += cost;
+        if let Some(m) = &resp.model {
+            *self.last_model.lock().unwrap() = Some(m.clone());
+        }
+
+        // Ledger row + trace per turn, so agentic turns show in Activity like any inference.
+        let store = PgGatewayStore {
+            pool: self.state.pool.clone(),
+            tenant_id: self.tenant,
+        };
+        let call = InferenceCall {
+            id: Uuid::new_v4(),
+            session_id: None,
+            project_id: None,
+            subject_id: Some(node),
+            tier: None,
+            capability: Capability::TextChat,
+            chain_id: Some("chat".to_string()),
+            adapter: resp
+                .attempts
+                .last()
+                .map(|a| a.adapter.clone())
+                .unwrap_or_else(|| "unknown".to_string()),
+            model: resp.model.clone().unwrap_or_default(),
+            api_model_id: resp.attempts.last().map(|a| a.api_model_id.clone()),
+            input_tokens: resp.usage.as_ref().map(|u| u.input_tokens),
+            output_tokens: resp.usage.as_ref().map(|u| u.output_tokens),
+            cost_usd: cost,
+            duration_ms,
+            status: if resp.success {
+                CallStatus::Success
+            } else {
+                CallStatus::Failed
+            },
+            error_type: None,
+            fallback_sequence: resp.attempts.len() as u8,
+            recorded_at: Utc::now(),
+        };
+        if store.insert_inference_call(&call).await.is_ok() {
+            let stored_trace =
+                build_trace(call.id, call.capability.clone(), &resp, duration_ms, call.recorded_at);
+            let _ = store.insert_execution_trace(&stored_trace).await;
+        }
+
+        // Tool calls → dispatch; otherwise the (redacted) final answer.
+        if resp.tool_calls.is_empty() {
+            let raw = resp.content.clone().unwrap_or_default();
+            let answer = if self.mask {
+                crate::redact::Redactor.redact(&raw).0
+            } else {
+                raw
+            };
+            Ok(TurnOutput::Answer(answer))
+        } else {
+            // Record the assistant's tool-call turn so the next turn's tool_results thread to it.
+            {
+                let mut msgs = self.messages.lock().unwrap();
+                msgs.push(Message {
+                    role: MessageRole::Assistant,
+                    content: MessageContent::Text {
+                        text: resp.content.clone().unwrap_or_default(),
+                    },
+                    tool_calls: resp.tool_calls.clone(),
+                    attachments: Vec::new(),
+                });
+            }
+            let calls = resp
+                .tool_calls
+                .iter()
+                .map(|tc| ToolInvocation {
+                    id: tc.id.clone(),
+                    offered_name: tc.name.clone(),
+                    arguments: tc.arguments.clone(),
+                })
+                .collect();
+            Ok(TurnOutput::ToolCalls(calls))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -792,6 +1093,8 @@ mod tests {
             chain: None,
             system: None,
             max_tokens: Some(16),
+            space_id: None,
+            tools: None,
         }
     }
 

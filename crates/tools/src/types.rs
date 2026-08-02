@@ -104,6 +104,9 @@ impl AllowedToolSet {
 /// only).
 #[derive(Debug, Clone)]
 pub struct ToolInvocation {
+    /// the engine's opaque tool-call id — threaded back onto the matching `tool_result` so the
+    /// model can pair a result with its call (not used for enforcement).
+    pub id: String,
     /// the namespaced function name the model emitted.
     pub offered_name: String,
     pub arguments: String,

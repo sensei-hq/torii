@@ -217,6 +217,8 @@ pub async fn register_server(
     .execute(&state.pool)
     .await;
 
+    crate::routes::config::bump(&state.pool, tenant, "tools").await;
+
     (
         StatusCode::OK,
         Json(json!({ "server_id": server_id, "discovered": discovered })),
@@ -260,7 +262,10 @@ pub async fn refresh_tools(
     let transport: String = row.get("transport");
     let url: Option<String> = row.get("url");
     match discover_now(&state, body.server_id, &transport, url.as_deref()).await {
-        Some(n) => (StatusCode::OK, Json(json!({ "discovered": n }))).into_response(),
+        Some(n) => {
+            crate::routes::config::bump(&state.pool, tenant, "tools").await;
+            (StatusCode::OK, Json(json!({ "discovered": n }))).into_response()
+        }
         None => (
             StatusCode::BAD_GATEWAY,
             "could not reach the server to discover its tools",

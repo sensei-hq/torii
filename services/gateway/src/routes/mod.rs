@@ -1,5 +1,6 @@
 pub mod ask; // C1/C4: grounded Ask — RAG generation with citations (/v1/spaces, /v1/spaces/:id/ask)
 pub mod chat;
+pub mod config; // D4: versioned config snapshot spine (/v1/config/snapshot) + bump
 pub mod documents; // C5: RAG document HTTP surface (/v1/documents/*)
 pub mod health;
 pub mod judge; // C6: synchronous quality-judge scoring (/v1/judge) — desktop Compare

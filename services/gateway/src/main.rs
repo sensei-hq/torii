@@ -281,6 +281,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/routing", get(routes::ledger::get_routing))
         .route("/governance", get(routes::ledger::get_governance))
         .route("/settings", get(routes::ledger::get_settings))
+        // D4: versioned, credential-free config snapshot the desktop pulls to hot-reload.
+        .route("/config/snapshot", get(routes::config::get_snapshot))
         // C5 · RAG document surface + hybrid retrieval (docs/plans/C5-rag-backend-build-plan.md).
         .route(
             "/documents",

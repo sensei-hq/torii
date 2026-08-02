@@ -1,0 +1,235 @@
+//! D4 · versioned config snapshot spine.
+//!
+//! [`bump`] increments a tenant's `config_version` + the touched component sub-version on every
+//! config `/rpc/*` write (D4-1); [`get_snapshot`] serves the tenant's coherent, **credential-free**
+//! config keyed by that atomic version, with a `since`→`304`/full contract (D4-2). This is the
+//! spine every device consumer (hot-reload, offline cache, fleet parity) pulls through.
+
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Extension, Json,
+};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use uuid::Uuid;
+
+use crate::{auth::Claims, capabilities::check_claims_version, state::SharedState};
+
+/// Bump a tenant's `config_version` + `component` sub-version after a config write. Best-effort:
+/// a bump failure never fails the underlying write (the snapshot just lags by one version).
+pub(crate) async fn bump(pool: &sqlx::PgPool, tenant: Uuid, component: &str) {
+    if let Err(e) = sqlx::query("select config.bump_config_version($1, $2)")
+        .bind(tenant)
+        .bind(component)
+        .execute(pool)
+        .await
+    {
+        tracing::warn!("config bump ({component}) failed (best-effort): {e}");
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SnapshotQuery {
+    /// the caller's last-known `config_version`; equal ⇒ `304`, else a full snapshot.
+    #[serde(default)]
+    pub since: Option<i64>,
+}
+
+/// `GET /v1/config/snapshot?since=N` — the caller tenant's credential-free config snapshot keyed
+/// by one atomic `config_version`. Any authenticated member of the tenant may read it (the desktop
+/// pulls it to hot-reload). `since == config_version` ⇒ `304 Not Modified`; otherwise the full
+/// snapshot (delta pulls are a tracked optimization). Contains **no** credential/key material —
+/// cloud routing steps are labelled `plane` and carry no secret.
+pub async fn get_snapshot(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Query(q): Query<SnapshotQuery>,
+) -> Response {
+    let Some(tenant) = claims.tenant_id else {
+        return (StatusCode::FORBIDDEN, "no active tenant").into_response();
+    };
+    if check_claims_version(&state.pool, &claims).await.is_err() {
+        return (StatusCode::UNAUTHORIZED, "stale token — re-authenticate").into_response();
+    }
+
+    // Current version + component sub-versions (absent tenant row ⇒ version 0).
+    let vc: Result<Option<(i64, Value)>, _> =
+        sqlx::query_as("select version, components from config.config_versions where tenant_id = $1")
+            .bind(tenant)
+            .fetch_optional(&state.pool)
+            .await;
+    let (version, components) = match vc {
+        Ok(Some((v, c))) => (v, c),
+        Ok(None) => (0, json!({})),
+        Err(e) => {
+            tracing::error!("config snapshot version read: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response();
+        }
+    };
+
+    // Unchanged since the caller's version → nothing to send.
+    if q.since == Some(version) {
+        return StatusCode::NOT_MODIFIED.into_response();
+    }
+
+    match assemble_snapshot(&state.pool, tenant).await {
+        Ok(snapshot) => (
+            StatusCode::OK,
+            Json(json!({
+                "config_version": version,
+                "components": components,
+                "snapshot": snapshot,
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("config snapshot assemble: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}
+
+/// Assemble the credential-free config: routing chains (router→model, plane, sequence — NO keys),
+/// the model catalog with per-tenant enablement, workspace settings, and resolved feature policies.
+async fn assemble_snapshot(pool: &sqlx::PgPool, tenant: Uuid) -> sqlx::Result<Value> {
+    let routing: Value = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.chain_name, t.sequence_order), '[]'::json) from ( \
+           select fc.name as chain_name, fcm.sequence_order, fcm.plane, fcm.is_active, \
+                  coalesce(r.name, '—') as router, coalesce(m.full_name, '—') as model \
+             from public.fallback_chain_models fcm \
+             join public.fallback_chains fc on fc.id = fcm.fallback_chain_id \
+             left join config.models m on m.id = fcm.model_id \
+             left join config.routers r on r.id = fcm.router_id \
+            where fcm.tenant_id = $1) t",
+    )
+    .bind(tenant)
+    .fetch_one(pool)
+    .await?;
+
+    let catalog: Value = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.full_name), '[]'::json) from ( \
+           select m.full_name, coalesce(tms.enabled, true) as enabled \
+             from config.models m \
+             left join public.tenant_model_state tms \
+               on tms.model_full_name = m.full_name and tms.tenant_id = $1 \
+            where m.deprecated_on is null) t",
+    )
+    .bind(tenant)
+    .fetch_one(pool)
+    .await?;
+
+    let settings: Value = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.setting_key), '[]'::json) from ( \
+           select setting_key, enabled from public.tenant_settings where tenant_id = $1) t",
+    )
+    .bind(tenant)
+    .fetch_one(pool)
+    .await?;
+
+    let features: Value = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.feature_key), '[]'::json) from ( \
+           select feature_key, state, scope_type from public.feature_policies \
+            where tenant_id = $1 and scope_type = 'workspace') t",
+    )
+    .bind(tenant)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(json!({
+        "routing": routing,
+        "catalog": catalog,
+        "settings": settings,
+        "features": features,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Live-DB (55322). Ignored by default:
+    //!   `cargo test -p torii-gateway -- --ignored config_snapshot`
+    use super::*;
+    use sqlx::postgres::PgPoolOptions;
+
+    async fn pool() -> sqlx::PgPool {
+        let url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgresql://postgres:postgres@127.0.0.1:55322/postgres".into());
+        PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .expect("connect local Supabase (55322)")
+    }
+
+    /// The bump increments the version + component sub-version, and the assembled snapshot carries
+    /// routing/catalog/settings/features for the tenant with **no** credential material.
+    #[tokio::test]
+    #[ignore = "requires local Supabase (55322)"]
+    async fn config_snapshot_bumps_version_and_leaks_no_credentials() {
+        let pool = pool().await;
+        let tenant = Uuid::new_v4();
+        sqlx::query("insert into core.tenants (id, name, slug, modified_by) values ($1,'cfg',$2,'cfg')")
+            .bind(tenant)
+            .bind(format!("cfg-{tenant}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "insert into public.tenant_settings (tenant_id, setting_key, enabled) values ($1,'masking',true)",
+        )
+        .bind(tenant)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into public.feature_policies (tenant_id, feature_key, scope_type, state) \
+             values ($1, 'tools', 'workspace', 'locked')",
+        )
+        .bind(tenant)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // two config writes → two bumps.
+        bump(&pool, tenant, "settings").await;
+        bump(&pool, tenant, "features").await;
+        let (version, components): (i64, Value) =
+            sqlx::query_as("select version, components from config.config_versions where tenant_id=$1")
+                .bind(tenant)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(version, 2, "two bumps → monotonic version 2");
+        assert_eq!(components["settings"], serde_json::json!(1));
+        assert_eq!(components["features"], serde_json::json!(1));
+
+        let snap = assemble_snapshot(&pool, tenant).await.unwrap();
+        // the tenant's settings + features are present.
+        assert!(snap["settings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["setting_key"] == "masking"));
+        assert!(snap["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["feature_key"] == "tools"));
+        // the model catalog is present (seeded rows).
+        assert!(!snap["catalog"].as_array().unwrap().is_empty());
+
+        // NO credential material anywhere in the snapshot (setting_key/feature_key/full_name are
+        // fine — we scan for real secret indicators only).
+        let text = snap.to_string().to_lowercase();
+        for bad in ["encrypted", "credential", "secret", "bearer", "password", "api_key"] {
+            assert!(!text.contains(bad), "snapshot leaked '{bad}'");
+        }
+
+        sqlx::query("delete from core.tenants where id=$1")
+            .bind(tenant)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+}

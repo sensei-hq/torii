@@ -2,6 +2,7 @@ import { type ChatMessage, type InferResult, gateway } from './gateway'
 import { route, type Plane } from './plane'
 import { api, type AvailableModel } from './api'
 import { pinnableForPlane, toPinnable, type LocalModelInfo, type PinnableModel } from './ask'
+import { rag, type Citation, type SpaceRow } from './rag'
 
 export interface Turn {
 	role: 'user' | 'assistant'
@@ -9,6 +10,12 @@ export interface Turn {
 	exec?: InferResult
 	/** did this answer run against a member-pinned model (vs plane auto-route)? drives the reason. */
 	pinned?: boolean
+	/** grounding sources for a grounded (space) answer — drives the Sources list. */
+	citations?: Citation[]
+	/** was this a grounded answer (asked within a space)? */
+	grounded?: boolean
+	/** the space this turn was grounded in (captured at send time, not the current selection). */
+	spaceName?: string
 }
 
 class AskStore {
@@ -28,9 +35,36 @@ class AskStore {
 	#localModels = $state<LocalModelInfo[]>([])
 	loaded = $state(false)
 
+	// ── grounded Ask: ask within a space → retrieval-augmented, cited answer ──
+	#spaces = $state<SpaceRow[]>([])
+	/** the space to ground answers in; '' = no grounding (plain plane routing). */
+	spaceId = $state('')
+	/** the RW5 Ask thread id, so follow-up grounded turns append to the same conversation. */
+	#conversationId = $state<string | null>(null)
+
 	/** Pinnable models for the CURRENT plane (the picker is plane-scoped so a pin is runnable). */
 	get pinnable(): PinnableModel[] {
 		return pinnableForPlane(toPinnable(this.#cloudModels, this.#localModels), this.plane)
+	}
+
+	/** Spaces the member can ground answers in (owned or member-of). */
+	get spaces(): SpaceRow[] {
+		return this.#spaces
+	}
+	/** Is the next Ask grounded in a space (retrieval-augmented, cited)? */
+	get grounded(): boolean {
+		return this.spaceId !== ''
+	}
+	/** The selected space's display name (for the grounded-reason line). */
+	get spaceName(): string {
+		return this.#spaces.find((s) => s.id === this.spaceId)?.name ?? 'this space'
+	}
+
+	setSpace(id: string) {
+		if (id === this.spaceId) return
+		this.spaceId = id
+		// A new grounding target starts a fresh Ask thread.
+		this.#conversationId = null
 	}
 
 	setPlane(p: Plane) {
@@ -60,6 +94,12 @@ class AskStore {
 		} catch {
 			this.#localModels = []
 		}
+		// Spaces the member can ground in. A failure just means no grounding option — not an error.
+		try {
+			this.#spaces = (await rag.spaces()).spaces
+		} catch {
+			this.#spaces = []
+		}
 		this.loaded = true
 	}
 
@@ -69,20 +109,44 @@ class AskStore {
 		this.turns.push({ role: 'user', content: q })
 		this.loading = true
 		this.error = null
-		const pinned = this.model !== ''
 		const started = performance.now()
 		try {
-			const history: ChatMessage[] = this.turns.map((t) => ({ role: t.role, content: t.content }))
-			const res = await route(history, this.plane, this.model || undefined)
-			// gateway.infer returns a real duration; the cloud leg reports 0 → measure the
-			// round-trip client-side so the latency meter is never a fabricated/blank value.
-			const duration_ms = res.duration_ms || Math.round(performance.now() - started)
-			this.turns.push({
-				role: 'assistant',
-				content: res.content,
-				exec: { ...res, duration_ms },
-				pinned
-			})
+			if (this.grounded) {
+				// Grounded Ask: retrieve → generate → cite, through the gateway (always cloud-plane).
+				const res = await rag.ask(this.spaceId, q, this.#conversationId ?? undefined)
+				this.#conversationId = res.conversation_id
+				const duration_ms = Math.round(performance.now() - started)
+				this.turns.push({
+					role: 'assistant',
+					content: res.content,
+					exec: {
+						content: res.content,
+						model: res.model ?? undefined,
+						plane: 'cloud',
+						cost_usd: res.cost_usd,
+						duration_ms
+					},
+					citations: res.citations,
+					grounded: res.grounded,
+					spaceName: this.spaceName
+				})
+			} else {
+				const pinned = this.model !== ''
+				const history: ChatMessage[] = this.turns.map((t) => ({
+					role: t.role,
+					content: t.content
+				}))
+				const res = await route(history, this.plane, this.model || undefined)
+				// gateway.infer returns a real duration; the cloud leg reports 0 → measure the
+				// round-trip client-side so the latency meter is never a fabricated/blank value.
+				const duration_ms = res.duration_ms || Math.round(performance.now() - started)
+				this.turns.push({
+					role: 'assistant',
+					content: res.content,
+					exec: { ...res, duration_ms },
+					pinned
+				})
+			}
 		} catch (e) {
 			this.error = String(e)
 		} finally {
@@ -93,6 +157,7 @@ class AskStore {
 	reset() {
 		this.turns = []
 		this.error = null
+		this.#conversationId = null
 	}
 }
 

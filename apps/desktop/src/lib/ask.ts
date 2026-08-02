@@ -5,6 +5,7 @@
 // member may call (`/v1/models/available` + the embedded engine's `list_models`). No mock data.
 import type { AvailableModel } from './api'
 import type { Plane } from './plane'
+import type { Citation } from './rag'
 
 /** A model the member can pin as the answering model, tagged by the plane it runs on. */
 export interface PinnableModel {
@@ -73,6 +74,25 @@ export function routingReason(input: {
 	return input.pinned
 		? `You pinned ${model}, so the gateway used it directly instead of auto-routing. Provider keys stayed server-side.`
 		: `Auto-routed to ${model} through the gateway — the balanced default. Provider keys stayed server-side.`
+}
+
+// ── grounded Ask: citation legibility ─────────────────────────────────────────
+/** A compact label for a source: "[n] section" — falls back to "source" when unlabelled. */
+export function citationLabel(c: Citation): string {
+	const where = (c.section_path ?? '').trim()
+	return `[${c.index}] ${where || 'source'}`
+}
+
+/**
+ * The grounded-answer reason line: which space grounded the answer and how many sources it
+ * cited. When zero sources matched, it says so honestly (the answer may be incomplete).
+ */
+export function groundedReason(spaceName: string, count: number): string {
+	if (count === 0) {
+		return `Grounded in ${spaceName} — no matching sources were found, so this may be incomplete.`
+	}
+	const noun = count === 1 ? 'source' : 'sources'
+	return `Grounded in ${spaceName} · ${count} ${noun} cited from your documents.`
 }
 
 /** Full-scale value for the latency meter (ms). A slower answer clamps to 100% (Meter clamps). */

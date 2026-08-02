@@ -1,7 +1,14 @@
 <script>
 	import { onMount } from 'svelte'
 	import { ask } from '$lib/ask.svelte.js'
-	import { LATENCY_MAX_MS, fmtLatency, latencyTone, routingReason } from '$lib/ask'
+	import {
+		LATENCY_MAX_MS,
+		citationLabel,
+		fmtLatency,
+		groundedReason,
+		latencyTone,
+		routingReason
+	} from '$lib/ask'
 	import { ExecBadge, Meter } from '@torii/ui'
 	import { session } from '@torii/core'
 
@@ -37,6 +44,27 @@
 			<h1 class="text-lg font-medium text-ink">Ask your workspace</h1>
 		</div>
 		<div class="flex items-center gap-3">
+			<!-- grounding control: ask within a space → retrieval-augmented, cited answer (via the
+			     gateway). "No grounding" falls back to plain plane routing. Only shown if the member
+			     has spaces to ground in. -->
+			{#if ask.spaces.length}
+				<label class="flex items-center gap-1.5 text-xs text-ink-mute">
+					<span class="i-solar-folder-with-files-bold-duotone h-3.5 w-3.5 text-accent"></span>
+					<select
+						data-space-picker
+						aria-label="Ground in space"
+						value={ask.spaceId}
+						onchange={(e) => ask.setSpace(e.currentTarget.value)}
+						class="rounded border border-paper-edge bg-paper-soft px-2 py-1 text-xs text-ink focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+					>
+						<option value="">No grounding</option>
+						{#each ask.spaces as s (s.id)}
+							<option value={s.id}>{s.name} · {s.document_count}</option>
+						{/each}
+					</select>
+				</label>
+			{/if}
+
 			<!-- pinned-model control: pin the answering model (opts.model) or let the plane
 			     auto-route. Options are scoped to the current plane so a pin is always runnable. -->
 			<label class="flex items-center gap-1.5 text-xs text-ink-mute">
@@ -118,14 +146,45 @@
 						</div>
 
 						{#if turn.exec != null}
-							<!-- routing-reason: which plane/model answered and why (client-side legibility) -->
-							<p data-routing-reason class="mt-2 text-xs leading-relaxed text-ink-soft">
-								{routingReason({
-									plane: turn.exec.plane,
-									pinned: turn.pinned ?? false,
-									model: turn.exec.model
-								})}
-							</p>
+							<!-- reason line: for a grounded turn, which space + how many sources; otherwise
+							     which plane/model answered and why (client-side legibility) -->
+							{#if turn.grounded}
+								<p data-routing-reason class="mt-2 text-xs leading-relaxed text-ink-soft">
+									{groundedReason(turn.spaceName ?? 'this space', turn.citations?.length ?? 0)}
+								</p>
+							{:else}
+								<p data-routing-reason class="mt-2 text-xs leading-relaxed text-ink-soft">
+									{routingReason({
+										plane: turn.exec.plane,
+										pinned: turn.pinned ?? false,
+										model: turn.exec.model
+									})}
+								</p>
+							{/if}
+
+							<!-- grounded answer sources: the cited excerpts the answer was grounded on -->
+							{#if turn.grounded && turn.citations && turn.citations.length}
+								<div data-sources class="mt-2 space-y-1.5">
+									<p class="text-xs font-medium uppercase tracking-wider text-ink-mute">Sources</p>
+									{#each turn.citations as c (c.chunk_id)}
+										<div
+											data-citation
+											class="rounded border border-paper-edge bg-paper-soft px-2.5 py-1.5"
+										>
+											<div class="flex items-center gap-2 text-xs">
+												<span class="font-mono text-accent">{citationLabel(c)}</span>
+												{#if c.page_ref != null}
+													<span class="text-ink-mute">p.{c.page_ref}</span>
+												{/if}
+												<span class="flex-1"></span>
+												<span class="font-mono text-ink-mute">{c.score.toFixed(2)}</span>
+											</div>
+											<p class="mt-0.5 line-clamp-2 text-xs text-ink-soft">{c.snippet}</p>
+										</div>
+									{/each}
+								</div>
+							{/if}
+
 							<!-- latency meter: the real round-trip duration of this answer -->
 							<div data-latency class="mt-2 max-w-[220px]">
 								<Meter
@@ -177,13 +236,19 @@
 				Send
 			</button>
 		</div>
-		{#if ask.plane === 'cloud' && !session.authenticated}
-			<p class="mt-1.5 text-xs text-warning">Sign in to use the cloud plane.</p>
+		{#if (ask.plane === 'cloud' || ask.grounded) && !session.authenticated}
+			<p class="mt-1.5 text-xs text-warning">
+				Sign in to {ask.grounded ? 'ground answers in a space' : 'use the cloud plane'}.
+			</p>
 		{:else}
 			<p class="mt-1.5 text-xs text-ink-mute">
-				{ask.plane === 'cloud'
-					? 'Cloud plane · routed through the gateway — provider keys stay server-side'
-					: 'Local plane · answered on-device, no data leaves your machine'}
+				{#if ask.grounded}
+					Grounded · answered from {ask.spaceName}'s documents through the gateway, with citations
+				{:else if ask.plane === 'cloud'}
+					Cloud plane · routed through the gateway — provider keys stay server-side
+				{:else}
+					Local plane · answered on-device, no data leaves your machine
+				{/if}
 			</p>
 		{/if}
 	</div>

@@ -106,10 +106,87 @@ export interface NewDocument {
 	scope?: string
 }
 
+// ── grounded Ask (C1/C4) ──────────────────────────────────────────────────────────────────────
+/** A space the member can ground answers in (GET /v1/spaces). */
+export interface SpaceRow {
+	id: string
+	name: string
+	description: string | null
+	classification: string
+	document_count: number
+}
+
+/** One grounding source behind a grounded answer — mirrors the server `Citation` (ask.rs). */
+export interface Citation {
+	/** 1-based ordinal matching the `[n]` marker in the answer. */
+	index: number
+	document_id: string
+	chunk_id: string
+	section_path: string | null
+	page_ref: number | null
+	score: number
+	/** short preview of the grounding excerpt. */
+	snippet: string
+}
+
+/** A grounded, cited answer (POST /v1/spaces/{id}/ask). */
+export interface AskResult {
+	conversation_id: string
+	content: string
+	model: string | null
+	cost_usd: number
+	/** were any sources found to ground the answer? */
+	grounded: boolean
+	citations: Citation[]
+}
+
 const enc = encodeURIComponent
 
 // ── deterministic e2e fixtures ───────────────────────────────────────────────────────────────
 const E2E_SPACE = 'e2e-space-0000-0000-0000-000000000001'
+const E2E_SPACES: SpaceRow[] = [
+	{
+		id: E2E_SPACE,
+		name: 'Product docs',
+		description: 'Handbooks, specs, and policies.',
+		classification: 'confidential',
+		document_count: 3
+	},
+	{
+		id: 'e2e-space-0000-0000-0000-000000000002',
+		name: 'Engineering',
+		description: null,
+		classification: 'internal',
+		document_count: 1
+	}
+]
+const E2E_ASK: AskResult = {
+	conversation_id: 'e2e-conv-0000-0000-0000-000000000001',
+	content: 'Refunds are available within 30 days of purchase [1], and store credit never expires [2].',
+	model: 'gpt-4o',
+	cost_usd: 0.0021,
+	grounded: true,
+	citations: [
+		{
+			index: 1,
+			document_id: 'e2e-doc-ready',
+			chunk_id: 'e2e-chunk-1',
+			section_path: 'Refund policy › Eligibility',
+			page_ref: 3,
+			score: 0.87,
+			snippet: 'Customers may request a full refund within 30 days of the original purchase date…'
+		},
+		{
+			index: 2,
+			document_id: 'e2e-doc-ready',
+			chunk_id: 'e2e-chunk-2',
+			section_path: 'Store credit',
+			page_ref: 4,
+			score: 0.71,
+			snippet: 'Store credit issued for returns does not expire and is tied to the member account…'
+		}
+	]
+}
 const E2E_DOCS: DocumentRow[] = [
 	{
 		document_id: 'e2e-doc-ready',
@@ -317,6 +394,21 @@ export const rag = {
 	retrievalConfig(spaceId: string): Promise<RetrievalConfig> {
 		if (IS_E2E) return Promise.resolve(DEFAULT_CONFIG)
 		return gwGet(`/v1/spaces/${enc(spaceId)}/retrieval-config`)
+	},
+
+	/** The spaces the member can ground answers in (owned or member-of). */
+	spaces(): Promise<{ spaces: SpaceRow[] }> {
+		if (IS_E2E) return Promise.resolve({ spaces: E2E_SPACES })
+		return gwGet('/v1/spaces')
+	},
+
+	/** Grounded, cited answer over a space's documents — retrieve → generate → citations. */
+	ask(spaceId: string, query: string, conversationId?: string): Promise<AskResult> {
+		if (IS_E2E) return Promise.resolve(E2E_ASK)
+		return gwPost(`/v1/spaces/${enc(spaceId)}/ask`, {
+			query,
+			conversation_id: conversationId
+		})
 	}
 }
 

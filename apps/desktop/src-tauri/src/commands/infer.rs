@@ -63,7 +63,11 @@ pub async fn infer(
 
     let req = InferenceRequest {
         capability: Capability::TextChat,
-        model: args.model.or_else(|| Some("gemma2:2b".into())),
+        // Default to the user's persisted choice (falls back to "gemma2:2b" when
+        // unset) — see `commands::models::{set_default_model, read_default}`.
+        model: args
+            .model
+            .or_else(|| Some(crate::commands::models::read_default())),
         router: None,
         chain: Some("local-chat".into()),
         payload: Payload::Chat {
@@ -162,6 +166,9 @@ mod tests {
             auth: None,
             panel: None,
             consensus: None,
+            // gateway v0.5.0 added these to `InferenceRequest`; mirror the non-test path.
+            allow_fallback: true,
+            credentials: Default::default(),
         };
 
         let res = gw.execute(&req).await.expect("infer ok");

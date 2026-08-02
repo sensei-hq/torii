@@ -14,10 +14,11 @@ use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 use gateway::{
-    store::{CallStatus, GatewayStore, InferenceCall},
+    store::{CallStatus, GatewayStore, InferenceCall, StoredTrace},
     types::{
         capability::Capability,
-        request::{InferenceRequest, Message, MessageRole, Payload},
+        request::{InferenceRequest, InferenceResponse, Message, MessageRole, Payload},
+        trace::{ExecutionTrace, TraceStatus},
     },
 };
 
@@ -321,6 +322,42 @@ async fn inject_tenant_credentials(
     }
 }
 
+/// Snapshot the engine's routing decision as an `ExecutionTrace` for the ledger, linked to
+/// the ledger row `call_id`. The engine returns the ordered `attempts` chain on the response
+/// — each hop's adapter/model/status/duration plus the error that forced a fallback — which
+/// is exactly the "why this model" story Activity/Requests replay per call. The engine's
+/// internal candidate/skipped lists are not surfaced on the response, so those stay empty.
+fn build_trace(
+    call_id: Uuid,
+    capability: Capability,
+    resp: &InferenceResponse,
+    duration_ms: u64,
+    recorded_at: chrono::DateTime<Utc>,
+) -> StoredTrace {
+    let trace = ExecutionTrace {
+        request_id: call_id.to_string(),
+        capability,
+        status: if resp.success {
+            TraceStatus::Success
+        } else {
+            TraceStatus::Failed
+        },
+        duration_ms,
+        candidates: Vec::new(),
+        skipped: Vec::new(),
+        attempts: resp.attempts.clone(),
+        estimated_cost: resp.estimated_cost.clone(),
+        actual_cost: resp.actual_cost.clone(),
+        created_at: recorded_at,
+    };
+    StoredTrace {
+        id: Uuid::new_v4(),
+        inference_call_id: Some(call_id),
+        trace,
+        created_at: recorded_at,
+    }
+}
+
 /// A JSON error `Response` (used by the streaming handler, which can't `?`-return a tuple).
 fn error_response(code: StatusCode, msg: &str) -> Response {
     Response::builder()
@@ -458,6 +495,13 @@ pub async fn post_chat(
         if let Err(e) = store.insert_inference_call(&call).await {
             tracing::warn!("chat: persist inference_call failed (best-effort): {}", e);
         } else {
+            // Per-call routing trace (the "why this model" attempt chain) → execution_traces,
+            // linked to this ledger row. Best-effort: a trace failure never affects the answer.
+            let stored_trace =
+                build_trace(call.id, call.capability.clone(), &resp, duration_ms, call.recorded_at);
+            if let Err(e) = store.insert_execution_trace(&stored_trace).await {
+                tracing::warn!("chat: persist execution_trace failed (best-effort): {}", e);
+            }
             // C6: one implicit quality-signal batch per call, keyed to the ledger row.
             let exec_loc = if call.adapter.contains("embedded")
                 || call.adapter.contains("ollama")
@@ -632,6 +676,13 @@ pub async fn post_chat_stream(
                 // Best-effort persist (mirror of post_chat) — tenant known via reserve.
                 {
                     let duration_ms = start.elapsed().as_millis() as u64;
+                    // Hoist the id/timestamp so the ledger row + its routing trace share them,
+                    // and snapshot the trace while `resp` is still fully intact (before its
+                    // `model` field is moved into the call below).
+                    let call_id = Uuid::new_v4();
+                    let recorded_at = Utc::now();
+                    let stored_trace =
+                        build_trace(call_id, Capability::TextChat, &resp, duration_ms, recorded_at);
                     let successful_attempt = resp.attempts.last();
                     let adapter = successful_attempt
                         .map(|a| a.adapter.clone())
@@ -639,7 +690,7 @@ pub async fn post_chat_stream(
                     let api_model_id = successful_attempt.map(|a| a.api_model_id.clone());
 
                     let call = InferenceCall {
-                        id: Uuid::new_v4(),
+                        id: call_id,
                         session_id: None,
                         project_id: None,
                         subject_id: Some(node), // C3: metered against the resolved budget node
@@ -656,7 +707,7 @@ pub async fn post_chat_stream(
                         status: CallStatus::Success,
                         error_type: None,
                         fallback_sequence: resp.attempts.len() as u8,
-                        recorded_at: Utc::now(),
+                        recorded_at,
                     };
 
                     let store = PgGatewayStore {
@@ -666,6 +717,13 @@ pub async fn post_chat_stream(
                     if let Err(e) = store.insert_inference_call(&call).await {
                         tracing::warn!("chat/stream: persist failed (best-effort): {}", e);
                     } else {
+                        // Per-call routing trace → execution_traces (best-effort), like post_chat.
+                        if let Err(e) = store.insert_execution_trace(&stored_trace).await {
+                            tracing::warn!(
+                                "chat/stream: persist execution_trace failed (best-effort): {}",
+                                e
+                            );
+                        }
                         // C6: one implicit quality-signal batch per call, keyed to the ledger row.
                         let exec_loc = if call.adapter.contains("embedded")
                             || call.adapter.contains("ollama")
@@ -735,6 +793,82 @@ mod tests {
             system: None,
             max_tokens: Some(16),
         }
+    }
+
+    // A 2-attempt response (primary failed → local fallback answered) becomes a trace whose
+    // attempt chain preserves order + the fallback error, and whose status mirrors success —
+    // the per-call "why this model" data Activity/Requests replay.
+    #[test]
+    fn build_trace_captures_the_attempt_chain() {
+        use gateway::types::trace::{Attempt, AttemptStatus, TraceStatus};
+
+        fn attempt(
+            sequence: u8,
+            adapter: &str,
+            model: &str,
+            status: AttemptStatus,
+            error: Option<&str>,
+            fallback_triggered: bool,
+        ) -> Attempt {
+            Attempt {
+                sequence,
+                adapter: adapter.into(),
+                model: model.into(),
+                api_model_id: model.into(),
+                status,
+                duration_ms: 10,
+                tokens: None,
+                cost: None,
+                error: error.map(|e| e.to_string()),
+                fallback_triggered,
+            }
+        }
+
+        let resp = InferenceResponse {
+            success: true,
+            content: Some("hi".into()),
+            embeddings: None,
+            transcription: None,
+            audio: None,
+            images: None,
+            videos: None,
+            model: Some("gemma2:2b".into()),
+            usage: None,
+            tool_calls: Vec::new(),
+            estimated_cost: None,
+            actual_cost: None,
+            attempts: vec![
+                attempt(
+                    1,
+                    "anthropic",
+                    "claude-sonnet-4-5",
+                    AttemptStatus::Failed,
+                    Some("429 rate limited"),
+                    true,
+                ),
+                attempt(2, "ollama", "gemma2:2b", AttemptStatus::Success, None, false),
+            ],
+        };
+
+        let call_id = Uuid::new_v4();
+        let now = Utc::now();
+        let stored = build_trace(call_id, Capability::TextChat, &resp, 1_500, now);
+
+        assert_eq!(stored.inference_call_id, Some(call_id));
+        assert_eq!(stored.trace.request_id, call_id.to_string());
+        assert_eq!(stored.trace.duration_ms, 1_500);
+        assert!(matches!(stored.trace.status, TraceStatus::Success));
+        assert_eq!(stored.trace.attempts.len(), 2);
+        // the first hop is the failed primary, carrying the error that triggered the fallback.
+        assert_eq!(stored.trace.attempts[0].status, AttemptStatus::Failed);
+        assert!(stored.trace.attempts[0].fallback_triggered);
+        assert_eq!(
+            stored.trace.attempts[0].error.as_deref(),
+            Some("429 rate limited")
+        );
+        // the winning hop is the local fallback that actually answered.
+        assert_eq!(stored.trace.attempts[1].adapter, "ollama");
+        assert_eq!(stored.trace.attempts[1].status, AttemptStatus::Success);
     }
 
     // The masking toggle must actually gate C4 redaction: on → secrets stripped from

@@ -11,11 +11,12 @@
 //! under RLS, a later surface).
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Extension, Json,
 };
+use gateway::store::GatewayStore;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -24,6 +25,7 @@ use crate::{
     auth::Claims,
     capabilities::{check_claims_version, CapabilitySet},
     state::SharedState,
+    store::PgGatewayStore,
 };
 
 /// Freshness gate + capability check for a read; returns the caller's tenant.
@@ -121,7 +123,7 @@ pub async fn get_requests(
         "select coalesce(json_agg(t order by t.recorded_at desc), '[]'::json) from ( \
            select id, chain_id, adapter, model, budget_node_id, execution_location, \
                   input_tokens, output_tokens, cost_usd::float8 as cost_usd, \
-                  duration_ms, status, recorded_at \
+                  duration_ms, status, fallback_sequence, recorded_at \
              from public.inference_calls where tenant_id = $1 \
             order by recorded_at desc limit $2) t",
     )
@@ -133,6 +135,39 @@ pub async fn get_requests(
         Ok(requests) => (StatusCode::OK, Json(json!({ "requests": requests }))).into_response(),
         Err(e) => {
             tracing::error!("get_requests: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}
+
+/// `GET /v1/requests/{id}/trace` — the per-call routing trace for one inference call: the
+/// ordered attempt chain (adapter → model, status, duration, and the error that triggered
+/// each fallback) that explains WHY a given model answered. Capability `audit.read`; the
+/// store filters by the caller's tenant, so one tenant can never read another's trace.
+/// Returns `{ "trace": null }` when no trace was recorded for the id (calls that predate
+/// the trace write, or a best-effort trace write that failed) — never a 404 for a real row.
+pub async fn get_request_trace(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Path(id): Path<Uuid>,
+) -> Response {
+    let tenant = match require_read(&state, &claims, "audit.read").await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let store = PgGatewayStore {
+        pool: state.pool.clone(),
+        tenant_id: tenant,
+    };
+    match store.get_traces_by_call(id).await {
+        // Rows come back recorded_at ASC; there is one trace per call today, so the last is
+        // the most recent. `pop()` yields None (→ null) when the call has no trace.
+        Ok(mut traces) => {
+            let trace = traces.pop().map(|t| t.trace);
+            (StatusCode::OK, Json(json!({ "trace": trace }))).into_response()
+        }
+        Err(e) => {
+            tracing::error!("get_request_trace: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
         }
     }
@@ -663,6 +698,161 @@ mod connections_view {
         );
 
         // cleanup — `on delete cascade` clears router_credentials with the tenant.
+        for t in [a, b] {
+            sqlx::query("delete from core.tenants where id = $1")
+                .bind(t)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
+mod trace_roundtrip {
+    //! Hits local Supabase (55322). Ignored by default — run with:
+    //!   `cargo test -- --ignored trace_persists_and_is_tenant_isolated`
+    use crate::store::PgGatewayStore;
+    use chrono::Utc;
+    use gateway::store::{CallStatus, GatewayStore, InferenceCall, StoredTrace};
+    use gateway::types::capability::Capability;
+    use gateway::types::trace::{Attempt, AttemptStatus, ExecutionTrace, TraceStatus};
+    use sqlx::postgres::PgPoolOptions;
+    use uuid::Uuid;
+
+    async fn pool() -> sqlx::PgPool {
+        let url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgresql://postgres:postgres@127.0.0.1:55322/postgres".into());
+        PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .expect("connect local Supabase (55322)")
+    }
+
+    fn attempt(
+        sequence: u8,
+        adapter: &str,
+        model: &str,
+        status: AttemptStatus,
+        error: Option<&str>,
+        fallback_triggered: bool,
+    ) -> Attempt {
+        Attempt {
+            sequence,
+            adapter: adapter.into(),
+            model: model.into(),
+            api_model_id: model.into(),
+            status,
+            duration_ms: 15,
+            tokens: None,
+            cost: None,
+            error: error.map(|e| e.to_string()),
+            fallback_triggered,
+        }
+    }
+
+    /// A trace persisted for a call round-trips through the live JSONB column with its attempt
+    /// chain intact, is fetchable by call id via the store, and is tenant-isolated (tenant B
+    /// can't read tenant A's trace) — exactly what `GET /v1/requests/{id}/trace` relies on.
+    #[tokio::test]
+    #[ignore = "requires local Supabase (55322)"]
+    async fn trace_persists_and_is_tenant_isolated() {
+        let pool = pool().await;
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        for t in [a, b] {
+            sqlx::query(
+                "insert into core.tenants (id, name, slug, modified_by) \
+                 values ($1, 'trace-test', $2, 'trace-test')",
+            )
+            .bind(t)
+            .bind(format!("trace-test-{t}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let store_a = PgGatewayStore {
+            pool: pool.clone(),
+            tenant_id: a,
+        };
+        let store_b = PgGatewayStore {
+            pool: pool.clone(),
+            tenant_id: b,
+        };
+
+        // a real inference_call row for tenant A (subject_id None → attribution cols NULL).
+        let call_id = Uuid::new_v4();
+        let call = InferenceCall {
+            id: call_id,
+            session_id: None,
+            project_id: None,
+            subject_id: None,
+            tier: None,
+            capability: Capability::TextChat,
+            chain_id: Some("chat".into()),
+            adapter: "ollama".into(),
+            model: "gemma2:2b".into(),
+            api_model_id: Some("gemma2:2b".into()),
+            input_tokens: Some(10),
+            output_tokens: Some(20),
+            cost_usd: 0.0,
+            duration_ms: 900,
+            status: CallStatus::Success,
+            error_type: None,
+            fallback_sequence: 2,
+            recorded_at: Utc::now(),
+        };
+        store_a.insert_inference_call(&call).await.expect("insert call");
+
+        let trace = ExecutionTrace {
+            request_id: call_id.to_string(),
+            capability: Capability::TextChat,
+            status: TraceStatus::Success,
+            duration_ms: 900,
+            candidates: Vec::new(),
+            skipped: Vec::new(),
+            attempts: vec![
+                attempt(
+                    1,
+                    "anthropic",
+                    "claude-sonnet-4-5",
+                    AttemptStatus::Failed,
+                    Some("429 rate limited"),
+                    true,
+                ),
+                attempt(2, "ollama", "gemma2:2b", AttemptStatus::Success, None, false),
+            ],
+            estimated_cost: None,
+            actual_cost: None,
+            created_at: Utc::now(),
+        };
+        let stored = StoredTrace {
+            id: Uuid::new_v4(),
+            inference_call_id: Some(call_id),
+            trace,
+            created_at: Utc::now(),
+        };
+        store_a
+            .insert_execution_trace(&stored)
+            .await
+            .expect("insert trace");
+
+        // tenant A reads it back with the attempt chain intact.
+        let got = store_a.get_traces_by_call(call_id).await.expect("read A");
+        assert_eq!(got.len(), 1, "exactly one trace for the call");
+        let t = &got[0].trace;
+        assert_eq!(t.attempts.len(), 2);
+        assert_eq!(t.attempts[0].status, AttemptStatus::Failed);
+        assert_eq!(t.attempts[0].error.as_deref(), Some("429 rate limited"));
+        assert_eq!(t.attempts[1].adapter, "ollama");
+        assert!(matches!(t.status, TraceStatus::Success));
+
+        // tenant B must never see tenant A's trace (the core isolation property).
+        let none = store_b.get_traces_by_call(call_id).await.expect("read B");
+        assert!(none.is_empty(), "tenant B must not read tenant A's trace");
+
+        // cleanup — `on delete cascade` clears inference_calls + execution_traces with the tenant.
         for t in [a, b] {
             sqlx::query("delete from core.tenants where id = $1")
                 .bind(t)

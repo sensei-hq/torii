@@ -19,10 +19,12 @@
 pub mod client;
 pub mod egress;
 pub mod error;
+pub mod invoker;
 pub mod resolver;
 pub mod types;
 
 pub use client::{DiscoveredTool, McpClient, RawToolOutput};
+pub use invoker::{InvokeCtx, ToolAudit, ToolAuditSink, ToolInvoker, ToolRedactor, ToolTransport};
 pub use egress::{is_blocked_ip, EgressFilter, EgressPolicy, PinnedTarget, Resolver};
 pub use error::ToolError;
 #[cfg(feature = "db")]

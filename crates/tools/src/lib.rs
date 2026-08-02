@@ -16,6 +16,7 @@
 //! crate is engine-independent (the gateway maps `ToolDef`/`ToolInvocation` to/from the engine
 //! types at its boundary).
 
+pub mod agentic;
 pub mod client;
 #[cfg(feature = "db")]
 pub mod discovery;
@@ -25,6 +26,7 @@ pub mod invoker;
 pub mod resolver;
 pub mod types;
 
+pub use agentic::{run_tool_loop, LoopResult, ModelTurn, ToolLoopConfig, ToolResultMessage, TurnOutput};
 pub use client::{DiscoveredTool, McpClient, RawToolOutput};
 #[cfg(feature = "db")]
 pub use discovery::discover_and_cache;

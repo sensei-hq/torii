@@ -19,11 +19,15 @@
 pub mod client;
 pub mod egress;
 pub mod error;
+pub mod resolver;
 pub mod types;
 
 pub use client::{DiscoveredTool, McpClient, RawToolOutput};
 pub use egress::{is_blocked_ip, EgressFilter, EgressPolicy, PinnedTarget, Resolver};
 pub use error::ToolError;
+#[cfg(feature = "db")]
+pub use resolver::AllowListResolver;
+pub use resolver::{build_allowed_set, parse_transport, ResolveCtx, ResolvedRow};
 pub use types::{
     offered_name, AllowedToolSet, Direction, Plane, RedactionSummary, ToolBinding, ToolDef,
     ToolInvocation, ToolKey, ToolOutcome, ToolProvenance, ToolResult, Transport,

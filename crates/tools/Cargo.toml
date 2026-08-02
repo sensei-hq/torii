@@ -24,4 +24,8 @@ db = ["dep:sqlx"]
 net = ["dep:reqwest"]
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# `full` + axum + regex power the T10 acceptance harness: spawn a real HTTP MCP demo server and
+# drive the real HttpClient + ToolInvoker against it (the three-pillar gate, live).
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["json"] }
+regex = "1"

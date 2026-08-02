@@ -29,6 +29,8 @@ impl Default for ToolLoopConfig {
 /// `tool_result` message. `content` is already redacted (Invoked) or a safe block notice.
 #[derive(Debug, Clone)]
 pub struct ToolResultMessage {
+    /// the engine tool-call id this result answers (paired back onto the `tool_result`).
+    pub id: String,
     pub offered_name: String,
     pub content: String,
     pub is_error: bool,
@@ -71,11 +73,13 @@ pub async fn run_tool_loop(
     invoker: &ToolInvoker<'_>,
     model: &dyn ModelTurn,
 ) -> Result<LoopResult, ToolError> {
-    let mut results: Vec<ToolResultMessage> = Vec::new();
+    // The results of the LAST round only — the ModelTurn impl accumulates full history itself,
+    // so each turn is fed just the new tool results to append (not the cumulative list).
+    let mut pending: Vec<ToolResultMessage> = Vec::new();
     let mut provenance: Vec<ToolProvenance> = Vec::new();
 
     for _ in 0..cfg.max_iterations.max(1) {
-        match model.turn(&allowed.tools, &results).await? {
+        match model.turn(&allowed.tools, &pending).await? {
             TurnOutput::Answer(answer) => {
                 return Ok(LoopResult {
                     answer,
@@ -92,6 +96,7 @@ pub async fn run_tool_loop(
                 });
             }
             TurnOutput::ToolCalls(calls) => {
+                let mut round: Vec<ToolResultMessage> = Vec::new();
                 for call in calls {
                     // Enforce every call — a non-allowed one is blocked here, never executed.
                     let result = invoker.invoke(ctx, allowed, &call).await;
@@ -106,12 +111,14 @@ pub async fn run_tool_loop(
                         result.output.clone().unwrap_or_default()
                     };
                     provenance.push(result.provenance());
-                    results.push(ToolResultMessage {
+                    round.push(ToolResultMessage {
+                        id: call.id,
                         offered_name: call.offered_name,
                         content,
                         is_error,
                     });
                 }
+                pending = round;
             }
         }
     }
@@ -232,6 +239,7 @@ mod tests {
     }
     fn call(name: &str) -> ToolInvocation {
         ToolInvocation {
+            id: "call-1".into(),
             offered_name: name.into(),
             arguments: "{}".into(),
         }

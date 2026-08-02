@@ -362,6 +362,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/settings/set", post(routes::rpc::settings_set))
         .route("/mcp/set-enabled", post(routes::rpc::mcp_set_enabled))
         .route("/mcp/set-tool-grant", post(routes::rpc::mcp_set_tool_grant))
+        // X1 (P11): registry write handlers — register a server (+ discover) / refresh its tools.
+        .route("/mcp/register-server", post(routes::mcp::register_server))
+        .route("/mcp/refresh-tools", post(routes::mcp::refresh_tools))
         .route("/spaces/create", post(routes::rpc::spaces_create))
         .route(
             "/connections/connect",

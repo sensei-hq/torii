@@ -263,6 +263,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/status", get(routes::status::get_status))
         .route("/audit", get(routes::ledger::get_audit))
         .route("/requests", get(routes::ledger::get_requests))
+        .route(
+            "/requests/{id}/trace",
+            get(routes::ledger::get_request_trace),
+        )
         .route("/budgets", get(routes::ledger::get_budgets))
         .route("/apikeys", get(routes::ledger::get_apikeys))
         .route("/connections", get(routes::ledger::get_connections))

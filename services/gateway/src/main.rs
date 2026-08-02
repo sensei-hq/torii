@@ -310,6 +310,9 @@ async fn main() -> anyhow::Result<()> {
             "/spaces/{space_id}/retrieval-config",
             get(routes::retrieve::retrieval_config),
         )
+        // C1/C4 · grounded Ask — list spaces + retrieval-augmented, cited generation.
+        .route("/spaces", get(routes::ask::list_spaces))
+        .route("/spaces/{space_id}/ask", post(routes::ask::ask))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             auth::require_auth,

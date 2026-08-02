@@ -3,7 +3,7 @@
 // type-only imports mean no $env/Tauri is pulled in at runtime (mirrors src/lib/home.ts).
 // Every value here is derived from the REAL gateway reads: /v1/requests (the member's
 // interaction ledger) and /v1/budgets (their ceiling + the org→…→you cascade). No mock data.
-import type { BudgetNode, RequestRow } from './api'
+import type { BudgetNode, RequestRow, RoutingTrace } from './api'
 
 /** Format a number as USD with 2 decimals; a non-finite input degrades to `$0.00`. */
 export function money(n: number): string {
@@ -56,6 +56,39 @@ export function matchesRequest(r: RequestRow, needle: string, plane: string): bo
 	return `${r.model} ${r.adapter} ${r.status} ${r.execution_location ?? ''}`
 		.toLowerCase()
 		.includes(needle)
+}
+
+// ── routing trace: the "why this model" explanation for one request ──────────
+/** Tone for an attempt's status chip: served (success) → success, failed → danger. */
+export function attemptTone(status: string): 'success' | 'danger' | 'mute' {
+	return status === 'success' ? 'success' : status === 'failed' ? 'danger' : 'mute'
+}
+
+/**
+ * A one-line "why this model" summary from the routing trace: which model answered, via
+ * which adapter and route (the chain, or capability routing), and — if it wasn't the
+ * primary — how many fallbacks it took and what triggered the first failure. When the whole
+ * call failed, it says so with the last error. Returns '' when there's no usable trace.
+ */
+export function summarizeTrace(trace: RoutingTrace | null, chainId: string | null): string {
+	if (!trace || trace.attempts.length === 0) return ''
+	const via = chainId ? `chain '${chainId}'` : 'capability routing'
+	const attempts = trace.attempts
+	if (trace.status === 'failed') {
+		const last = attempts[attempts.length - 1]
+		const reason = last.error ? `: ${last.error}` : ''
+		const noun = attempts.length === 1 ? 'attempt' : 'attempts'
+		return `All ${attempts.length} routing ${noun} failed (${via})${reason}.`
+	}
+	const winner = attempts[attempts.length - 1]
+	const fallbacks = attempts.length - 1
+	if (fallbacks <= 0) {
+		return `Answered by ${winner.model} via ${winner.adapter} (${via}) — primary model, no fallback.`
+	}
+	const firstFail = attempts.find((a) => a.status === 'failed')
+	const reason = firstFail?.error ? ` (${firstFail.adapter} failed: ${firstFail.error})` : ''
+	const noun = fallbacks === 1 ? 'fallback' : 'fallbacks'
+	return `Answered by ${winner.model} via ${winner.adapter} (${via}) after ${fallbacks} ${noun}${reason}.`
 }
 
 // ── CSV export of the (filtered) activity table ──────────────────────────────

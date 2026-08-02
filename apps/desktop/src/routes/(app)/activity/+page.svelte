@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte'
 	import { PageHeader, Card, CardHead, Chip, Meter, Async, Empty } from '@torii/ui'
 	import { activity } from '$lib/activity.svelte.js'
-	import { money, nodePct, toCsv, csvFilename } from '$lib/activity'
+	import { money, nodePct, toCsv, csvFilename, summarizeTrace, attemptTone } from '$lib/activity'
 
 	// Load seam (runbook B4): pulls the REAL ledger (/v1/requests) + budget tree (/v1/budgets).
 	// The store degrades the two reads independently, so a budget denial never blanks the table.
@@ -295,8 +295,28 @@
 						</thead>
 						<tbody class="[&_td]:px-4 [&_td]:py-2">
 							{#each activity.filtered as r (r.id)}
-								<tr class="border-b border-paper-edge last:border-b-0 hover:bg-paper-mute/40">
-									<td class="font-mono text-ink-mute">{fmtTime(r.recorded_at)}</td>
+								{@const open = activity.expandedId === r.id}
+								<tr
+									data-request-row
+									class="border-b border-paper-edge last:border-b-0 hover:bg-paper-mute/40"
+								>
+									<td class="font-mono text-ink-mute">
+										<button
+											type="button"
+											data-trace-toggle
+											onclick={() => activity.toggleTrace(r.id)}
+											aria-expanded={open}
+											title="Why this model?"
+											class="inline-flex items-center gap-1 text-ink-mute hover:text-ink"
+										>
+											<span
+												class="{open
+													? 'i-solar-alt-arrow-down-linear'
+													: 'i-solar-alt-arrow-right-linear'} h-3 w-3"
+											></span>
+											{fmtTime(r.recorded_at)}
+										</button>
+									</td>
 									<td class="text-ink">{r.model}</td>
 									<td
 										><Chip tone={planeTone(r.execution_location)}
@@ -308,6 +328,39 @@
 									>
 									<td class="text-right font-mono text-ink-soft">{fmtCost(r.cost_usd)}</td>
 								</tr>
+								{#if open}
+									<tr data-trace class="border-b border-paper-edge bg-paper-mute/30">
+										<td colspan="5" class="px-4 py-3">
+											{#if activity.traceLoading === r.id}
+												<p class="text-xs text-ink-mute">Loading routing trace…</p>
+											{:else}
+												{@const trace = activity.traceFor(r.id)}
+												{#if trace && trace.attempts.length}
+													<p data-why class="mb-2 text-xs text-ink-soft">
+														{summarizeTrace(trace, r.chain_id)}
+													</p>
+													<ol class="space-y-1">
+														{#each trace.attempts as a (a.sequence)}
+															<li data-attempt class="flex items-center gap-2 text-xs">
+																<span class="w-4 font-mono text-ink-faint">{a.sequence}</span>
+																<Chip tone={attemptTone(a.status)}>{a.status}</Chip>
+																<span class="text-ink">{a.adapter} → {a.model}</span>
+																<span class="font-mono text-ink-mute">{a.duration_ms}ms</span>
+																{#if a.error}
+																	<span class="truncate text-danger" title={a.error}>{a.error}</span>
+																{/if}
+															</li>
+														{/each}
+													</ol>
+												{:else}
+													<p class="text-xs text-ink-mute">
+														No routing trace recorded for this request.
+													</p>
+												{/if}
+											{/if}
+										</td>
+									</tr>
+								{/if}
 							{/each}
 							{#if activity.filtered.length === 0}
 								<tr

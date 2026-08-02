@@ -16,9 +16,13 @@
 //! crate is engine-independent (the gateway maps `ToolDef`/`ToolInvocation` to/from the engine
 //! types at its boundary).
 
+pub mod client;
+pub mod egress;
 pub mod error;
 pub mod types;
 
+pub use client::{DiscoveredTool, McpClient, RawToolOutput};
+pub use egress::{is_blocked_ip, EgressFilter, EgressPolicy, PinnedTarget, Resolver};
 pub use error::ToolError;
 pub use types::{
     offered_name, AllowedToolSet, Direction, Plane, RedactionSummary, ToolBinding, ToolDef,

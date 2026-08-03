@@ -290,6 +290,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/analytics/spend", get(routes::analytics::get_spend))
         .route("/analytics/quality", get(routes::analytics::get_quality))
         .route("/analytics/export", get(routes::analytics::get_export))
+        .route("/analytics/metrics", get(routes::analytics::get_metrics))
         // D4: versioned, credential-free config snapshot the desktop pulls to hot-reload.
         .route("/config/snapshot", get(routes::config::get_snapshot))
         // C5 · RAG document surface + hybrid retrieval (docs/plans/C5-rag-backend-build-plan.md).

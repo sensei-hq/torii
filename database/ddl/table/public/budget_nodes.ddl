@@ -23,6 +23,10 @@ create table if not exists budget_nodes (
 , created_at         timestamptz not null default now()
 , modified_at        timestamptz not null default now()
 , modified_by        varchar not null
+  -- RW7 (DECISIONS §2 W2): hard-reserve columns.
+, reserved_amount      numeric(14,6) not null default 0
+, period_started_at    timestamptz   not null default now()
+, soft_overshoot_limit numeric(14,6)
 , primary key (tenant_id, id)
 , foreign key (tenant_id, parent_id)
     references budget_nodes(tenant_id, id) on delete cascade
@@ -40,9 +44,5 @@ comment on table budget_nodes is
   free local model when exhausted.
 - spent_amount: rollup maintained by C3 (budgets & metering); ref_id links a node to
   the profile/team it represents.
-- A call is allowed only if every ancestor node (user→team→dept→org) has headroom.';
-
--- RW7 (DECISIONS §2 W2): hard-reserve columns.
-alter table budget_nodes add column if not exists reserved_amount     numeric(14,6) not null default 0;
-alter table budget_nodes add column if not exists period_started_at   timestamptz   not null default now();
-alter table budget_nodes add column if not exists soft_overshoot_limit numeric(14,6);
+- A call is allowed only if every ancestor node (user→team→dept→org) has headroom.
+- RW7 hard-reserve columns (reserved_amount, period_started_at, soft_overshoot_limit) inline above.';

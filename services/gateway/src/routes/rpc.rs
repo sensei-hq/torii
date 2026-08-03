@@ -1845,6 +1845,64 @@ pub async fn devices_revoke(
 }
 
 #[derive(Deserialize)]
+pub struct SetSyncPolicy {
+    pub id: Uuid,
+    pub sync_policy: Value,
+}
+
+/// `POST /rpc/devices/set-sync-policy` — capability `device.manage`. Sets one device's
+/// `sync_policy` jsonb (O3 §3.4: `{config_pull, pull_interval_s, offline_grace_h,
+/// buffer_flush}`), which D4 reads to drive its config-pull cadence + buffer flushing.
+/// Tenant-scoped (404 if the device isn't in the caller's tenant), fail-closed validated
+/// (400 on a malformed policy), audited `device.sync_policy_changed`.
+///
+/// Deliberately does **not** bump the tenant `config_version`: sync_policy is per-device and
+/// is not part of the tenant-wide config snapshot (`config::assemble_snapshot`), so a
+/// tenant-wide bump would force every device to re-pull for a one-device change carrying no
+/// snapshot delta. The device receives its own policy over its per-device channel (D4).
+pub async fn devices_set_sync_policy(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<SetSyncPolicy>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "device.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if let Err(reason) = crate::devices::validate_sync_policy(&body.sync_policy) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": reason }))).into_response();
+    }
+    let write = sqlx::query(
+        "update public.devices set sync_policy = $3 where id = $1 and tenant_id = $2",
+    )
+    .bind(body.id)
+    .bind(tenant)
+    .bind(&body.sync_policy)
+    .execute(&state.pool)
+    .await;
+    let affected = match write {
+        Ok(r) => r.rows_affected(),
+        Err(e) => {
+            tracing::error!("devices_set_sync_policy: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+        }
+    };
+    if affected == 0 {
+        return (StatusCode::NOT_FOUND, "device not found in tenant").into_response();
+    }
+    audit(
+        &state,
+        tenant,
+        actor,
+        "device.sync_policy_changed",
+        "device",
+        Some(body.id),
+    )
+    .await;
+    (StatusCode::OK, Json(json!({ "ok": true, "id": body.id }))).into_response()
+}
+
+#[derive(Deserialize)]
 pub struct ConnectRouter {
     /// Router NAME (`config.routers.name`), e.g. "openai".
     pub router: String,

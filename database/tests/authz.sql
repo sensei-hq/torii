@@ -267,4 +267,46 @@ begin;
   end $$;
 rollback;
 
+-- 13. O3-4 device fleet — own-vs-`device.manage` read scope + no client write. A member
+-- without device.manage must see ONLY their own devices (regression guard against the
+-- tenant-wide devices_read policy reopening), and sync_policy is service_role-only.
+begin;
+  insert into core.profiles (id) values
+    ('11111111-1111-1111-1111-111111111111'),
+    ('22222222-2222-2222-2222-222222222222') on conflict do nothing;
+  -- two devices in the platform tenant: one owned by member M (11111111), one by another user.
+  insert into public.devices(tenant_id, id, profile_id, name, status) values
+    ('00000000-0000-0000-0000-000000000000','deac0000-0000-0000-0000-0000000000a1',
+     '11111111-1111-1111-1111-111111111111','M own laptop','active'),
+    ('00000000-0000-0000-0000-000000000000','deac0000-0000-0000-0000-0000000000a2',
+     '22222222-2222-2222-2222-222222222222','other user phone','active')
+    on conflict do nothing;
+
+  set local role authenticated;
+  set local request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111","tenant_id":"00000000-0000-0000-0000-000000000000"}';
+  do $$
+  begin
+    -- (a) own-vs-manage: a member WITHOUT device.manage sees ONLY their own device.
+    if (select count(*) from public.devices) <> 1 then
+      raise exception 'FAIL O3-4: member sees % devices (expected 1 — own only; devices_read leak reopened?)',
+        (select count(*) from public.devices); end if;
+    if (select count(*) from public.devices
+          where profile_id='22222222-2222-2222-2222-222222222222') <> 0 then
+      raise exception 'FAIL O3-4: member can read another user''s device (own-vs-manage broken)'; end if;
+    if (select count(*) from public.devices
+          where profile_id='11111111-1111-1111-1111-111111111111') <> 1 then
+      raise exception 'FAIL O3-4: member cannot see their OWN device'; end if;
+
+    -- (b) sync_policy is service_role-only — a direct client UPDATE is denied (SELECT-only grant),
+    -- so the only write path is /rpc/devices/set-sync-policy (capability device.manage).
+    begin
+      update public.devices set sync_policy = '{"config_pull":"manual"}'::jsonb
+        where id='deac0000-0000-0000-0000-0000000000a1';
+      raise exception 'FAIL O3-4: member could UPDATE devices.sync_policy directly (bypassing /rpc)';
+    exception when insufficient_privilege then null; end;
+
+    raise notice 'O3-4 device fleet: member sees own device only + no direct sync_policy write ✓';
+  end $$;
+rollback;
+
 \echo 'ALL RW12 ADVERSARIAL AUTHZ TESTS PASSED'

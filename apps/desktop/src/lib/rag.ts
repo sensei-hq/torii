@@ -162,7 +162,8 @@ const E2E_SPACES: SpaceRow[] = [
 ]
 const E2E_ASK: AskResult = {
 	conversation_id: 'e2e-conv-0000-0000-0000-000000000001',
-	content: 'Refunds are available within 30 days of purchase [1], and store credit never expires [2].',
+	content:
+		'Refunds are available within 30 days of purchase [1], and store credit never expires [2].',
 	model: 'gpt-4o',
 	cost_usd: 0.0021,
 	grounded: true,

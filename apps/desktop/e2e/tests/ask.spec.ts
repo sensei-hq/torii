@@ -79,7 +79,9 @@ test.describe('Ask — grounded (space)', () => {
 			'Refunds are available within 30 days'
 		)
 		// The reason line marks the answer as grounded in the space, with its source count.
-		await expect(tauriPage.locator('[data-routing-reason]')).toContainText(/Grounded in Product docs/i)
+		await expect(tauriPage.locator('[data-routing-reason]')).toContainText(
+			/Grounded in Product docs/i
+		)
 
 		// The Sources list renders both cited excerpts.
 		await expect(tauriPage.locator('[data-sources]')).toBeVisible()

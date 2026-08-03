@@ -61,6 +61,18 @@ const E2E_NODES: BudgetNode[] = [
 	}
 ]
 
+// Deterministic plane-split rollup for the e2e build: 1 local + 1 cloud call, the local
+// call's cloud-equivalent ($0.0025) = the savings the "saved vs cloud" line renders. Its
+// cost total (0 + 0.0031) matches E2E_REQUESTS so the Spend tile is unchanged.
+const E2E_PLANE: PlaneSplit = {
+	local: { calls: 1, cost_usd: 0, cloud_equiv_usd: 0.0025 },
+	cloud: { calls: 1, cost_usd: 0.0031, cloud_equiv_usd: 0.0031 },
+	savings_usd: 0.0025,
+	savings_pct: 44.6,
+	baseline: 'cheapest_cloud_in_chain',
+	series: []
+}
+
 const E2E_TRACES: Record<string, RoutingTrace> = {
 	// primary local model answered — no fallback.
 	'e2e-req-1': {
@@ -262,6 +274,7 @@ class ActivityStore {
 		if (IS_E2E) {
 			this.#requests = E2E_REQUESTS
 			this.#nodes = E2E_NODES
+			this.#plane = E2E_PLANE
 			this.#pending = []
 			this.error = ''
 			this.budgetError = ''

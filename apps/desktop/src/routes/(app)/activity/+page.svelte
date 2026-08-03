@@ -82,7 +82,7 @@
 					<div class="font-heading text-2xl font-light text-ink">{fmtCost(activity.spend)}</div>
 					{#if activity.savings > 0}
 						<!-- O2: cloud-equivalent of the local calls (cheapest-cloud baseline). -->
-						<div class="mt-0.5 text-[11px] font-medium text-success">
+						<div class="mt-0.5 text-[11px] font-medium text-success" data-savings>
 							{fmtCost(activity.savings)} saved vs cloud
 						</div>
 					{/if}

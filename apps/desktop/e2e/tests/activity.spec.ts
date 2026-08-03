@@ -28,6 +28,12 @@ test.describe('Activity — ledger + why-this-model trace', () => {
 		// two stubbed ledger rows.
 		await expect(tauriPage.locator('[data-request-row]')).toHaveCount(2)
 
+		// O2 (W2): the Spend tile shows the cloud-equivalent savings of the local call —
+		// the plane-split fixture's $0.0025 avoided cloud spend, from the analytics rollup.
+		await expect(tauriPage.locator('[data-savings]')).toBeVisible()
+		await expect(tauriPage.locator('[data-savings]')).toContainText(/saved vs cloud/i)
+		await expect(tauriPage.locator('[data-savings]')).toContainText('0.0025')
+
 		// expand the SECOND row (the cloud call that rate-limited → fell back) → its trace panel.
 		await tauriPage.locator('[data-request-row] [data-trace-toggle]').nth(1).click()
 		await sleep(500)

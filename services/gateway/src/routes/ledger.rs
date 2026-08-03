@@ -16,6 +16,7 @@ use axum::{
     response::{IntoResponse, Response},
     Extension, Json,
 };
+use chrono::Utc;
 use gateway::store::GatewayStore;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -494,35 +495,83 @@ pub async fn get_tools(
     }
 }
 
-/// `GET /v1/devices` — O3 device fleet. Capability `device.manage`. The tenant's
-/// enrolled devices with owner + version/liveness. `status='revoked'` cuts a device's
-/// access on the auth hot path (see auth::finish_authed) even with a still-live token.
+/// `GET /v1/devices` — O3-4 device fleet read model. Any authenticated member may read;
+/// without `device.manage` they see only their **own** devices, with it the whole tenant
+/// fleet (mirrors the `devices_access` RLS policy — the gateway pool runs as service_role
+/// and bypasses RLS, so the own-vs-manage scope is reproduced in the query). Each row
+/// carries a `buffer_verdict` (O3 §3.3, NULL-safe until D4-8 populates `buffer_health`) and
+/// a `drifted` flag (last-synced `config_version` vs the tenant current); the operator stale
+/// threshold is surfaced once at the top level. `public_key`/token material is never
+/// projected. `status='revoked'` cuts a device's access on the auth hot path
+/// (auth::finish_authed) even with a still-live token; revoke it via `/rpc/devices/revoke`.
 pub async fn get_devices(
     Extension(claims): Extension<Claims>,
     State(state): State<SharedState>,
 ) -> Response {
-    let tenant = match require_read(&state, &claims, "device.manage").await {
+    let tenant = match require_member(&state, &claims).await {
         Ok(t) => t,
         Err(resp) => return resp,
     };
+    let actor = match Uuid::parse_str(&claims.sub) {
+        Ok(a) => a,
+        Err(_) => return (StatusCode::UNAUTHORIZED, "bad subject").into_response(),
+    };
+    // own-vs-manage: `device.manage` → whole tenant fleet; else only the caller's devices.
+    let has_manage = match CapabilitySet::resolve(&state.pool, &claims).await {
+        Ok(caps) => caps.require("device.manage").is_ok(),
+        Err(e) => {
+            tracing::error!("get_devices: capability resolve: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let own_only: Option<Uuid> = if has_manage { None } else { Some(actor) };
+
     let rows: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.last_seen_at desc nulls last), '[]'::json) from ( \
            select d.id, d.name, d.platform, d.app_version, d.config_version, d.status, \
-                  d.enrolled_at, d.last_seen_at, p.display_name as owner \
+                  d.enrolled_at, d.last_seen_at, d.sync_policy, d.buffer_health, \
+                  p.display_name as owner, cv.version as tenant_config_version \
              from public.devices d \
              left join core.profiles p on p.id = d.profile_id \
-            where d.tenant_id = $1) t",
+             left join config.config_versions cv on cv.tenant_id = d.tenant_id \
+            where d.tenant_id = $1 and ($2::uuid is null or d.profile_id = $2)) t",
     )
     .bind(tenant)
+    .bind(own_only)
     .fetch_one(&state.pool)
     .await;
-    match rows {
-        Ok(devices) => (StatusCode::OK, Json(json!({ "devices": devices }))).into_response(),
+
+    let mut devices = match rows {
+        Ok(v) => v,
         Err(e) => {
             tracing::error!("get_devices: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+            return (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response();
+        }
+    };
+
+    // Enrich each row with the buffer-health verdict + config-drift flag. Computed in Rust so
+    // the stale threshold stays an operator env constant and the logic is unit-tested
+    // (crate::devices); the SQL stays the field-shape authority.
+    let threshold = crate::devices::stale_threshold_s();
+    let now = Utc::now();
+    if let Value::Array(list) = &mut devices {
+        for row in list.iter_mut() {
+            let verdict = crate::devices::buffer_verdict(row.get("buffer_health"), now, threshold);
+            let dv = row.get("config_version").and_then(Value::as_i64);
+            let tv = row.get("tenant_config_version").and_then(Value::as_i64);
+            let drifted = crate::devices::is_drifted(dv, tv);
+            if let Value::Object(obj) = row {
+                obj.insert("buffer_verdict".into(), Value::from(verdict));
+                obj.insert("drifted".into(), Value::from(drifted));
+            }
         }
     }
+
+    (
+        StatusCode::OK,
+        Json(json!({ "devices": devices, "stale_threshold_s": threshold })),
+    )
+        .into_response()
 }
 
 /// `GET /v1/routing` — the tenant's fallback chains as ordered steps

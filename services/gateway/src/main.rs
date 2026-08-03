@@ -29,6 +29,7 @@ mod auth;
 mod budgets; // C3: budget-node resolution + hard reserve→commit on the inference hot path
 mod capabilities; // F2: server-side capability resolution + claims-version gate
 mod config_loader;
+mod devices; // O3-4: device-fleet pure logic (buffer-health verdict, config drift, sync-policy validation)
 mod governance; // C4: output redaction + injection scan + why-this-model governance
 mod judge; // C6: opt-in LLM-as-judge (local gemma4) → judge_score signal
 mod keys;
@@ -354,6 +355,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/apikeys/issue", post(routes::rpc::apikeys_issue))
         .route("/apikeys/revoke", post(routes::rpc::apikeys_revoke))
         .route("/devices/revoke", post(routes::rpc::devices_revoke))
+        .route(
+            "/devices/set-sync-policy",
+            post(routes::rpc::devices_set_sync_policy),
+        )
         .route("/rbac/assign-role", post(routes::rpc::rbac_assign_role))
         .route("/rbac/unassign-role", post(routes::rpc::rbac_unassign_role))
         .route("/rbac/create-role", post(routes::rpc::rbac_create_role))

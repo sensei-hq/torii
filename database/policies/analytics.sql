@@ -24,12 +24,17 @@ begin
   end loop;
 end $$;
 
--- (2) Materialized views — no RLS available → no client read at all (service_role only).
+-- (2) Materialized views + the internal apply-marker — no client access at all
+-- (MVs cannot carry RLS; the marker is internal cache infra). service_role only.
 do $$
 declare r record;
 begin
-  for r in select unnest(array['analytics_model_mix_daily','analytics_overview_current']) as mv
+  for r in select unnest(array[
+             'analytics_model_mix_daily','analytics_overview_current','analytics_applied_calls'
+           ]) as obj
   loop
-    execute format('revoke all on public.%I from authenticated, anon', r.mv);
+    execute format('revoke all on public.%I from authenticated, anon', r.obj);
   end loop;
+  -- defense-in-depth: RLS on the marker table (service_role bypasses; no policy → deny).
+  execute 'alter table public.analytics_applied_calls enable row level security';
 end $$;

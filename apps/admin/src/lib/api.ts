@@ -108,6 +108,58 @@ export interface RequestRow {
 	recorded_at: string
 }
 
+// ── Analytics (O2) — server-computed rollups over the FULL ledger + the savings baseline
+// the client can't derive from the capped /v1/requests read. Shapes mirror the gateway
+// routes/analytics.rs JSON. The Overview prefers these and falls back to client derivation.
+export interface AnalyticsOverview {
+	spend_today: { value: number; cap: number | null; unit: string; pct_of_cap: number | null }
+	calls_today: { value: number; delta_pct_vs_prev: number | null }
+	fallbacks_today: { value: number }
+	latency: { avg_ms: number | null; p95_ms: number | null }
+	blended_cost_per_call: {
+		value: number
+		unit: string
+		window_days: number
+		delta_pct: number | null
+	}
+	savings_14d: { value: number; unit: string; vs_baseline: string }
+}
+/** One plane's aggregate: cloud calls carry `cloud_equiv_usd == cost_usd`; local's is the counterfactual. */
+export interface PlaneStat {
+	calls: number
+	cost_usd: number
+	cloud_equiv_usd: number
+}
+export interface PlaneSplit {
+	local: PlaneStat
+	cloud: PlaneStat
+	/** Σ cloud-equivalent of local calls = avoided cloud spend. */
+	savings_usd: number
+	savings_pct: number
+	baseline: string
+	series: { day: string; local_calls: number; cloud_calls: number; savings_usd: number }[]
+}
+export interface ModelMixRow {
+	model: string
+	provider: string
+	execution_location: string
+	calls: number
+	share_pct: number
+	cost_usd: number
+	savings_usd: number
+}
+export interface CostTrendPoint {
+	day: string
+	blended_cost_per_call: number
+	cost_usd: number
+	calls: number
+	savings_usd: number
+}
+export interface CostTrend {
+	series: CostTrendPoint[]
+	delta_pct: number | null
+}
+
 /** One hop of the engine's routing decision — mirrors the server `Attempt` (trace.rs). */
 export interface RoutingAttempt {
 	sequence: number
@@ -349,8 +401,7 @@ export const api = {
 	audit: (limit = 100) => gwGet<{ events: AuditEvent[] }>(`/v1/audit?limit=${limit}`),
 	requests: (limit = 100) => gwGet<{ requests: RequestRow[] }>(`/v1/requests?limit=${limit}`),
 	// the per-call routing trace ("why this model") for one request — fetched on row select.
-	requestTrace: (id: string) =>
-		gwGet<{ trace: RoutingTrace | null }>(`/v1/requests/${id}/trace`),
+	requestTrace: (id: string) => gwGet<{ trace: RoutingTrace | null }>(`/v1/requests/${id}/trace`),
 	budgets: () => gwGet<{ nodes: BudgetNode[]; requests: BudgetRequest[] }>('/v1/budgets'),
 	connections: () => gwGet<{ providers: Provider[] }>('/v1/connections'),
 	apikeys: () => gwGet<{ keys: ApiKey[] }>('/v1/apikeys'),
@@ -358,6 +409,13 @@ export const api = {
 	models: () => gwGet<{ models: ModelRow[] }>('/v1/models'),
 	routing: () => gwGet<{ steps: RoutingStep[] }>('/v1/routing'),
 	governance: () => gwGet<{ features: Feature[] }>('/v1/governance'),
+	// O2 analytics — server-computed over the full ledger (+ savings baseline).
+	analyticsOverview: () => gwGet<AnalyticsOverview>('/v1/analytics/overview'),
+	planeSplit: (window = '30d') => gwGet<PlaneSplit>(`/v1/analytics/plane-split?window=${window}`),
+	modelMix: (window = '14d') =>
+		gwGet<{ models: ModelMixRow[] }>(`/v1/analytics/model-mix?window=${window}`),
+	costTrend: (window = '14d') =>
+		gwGet<CostTrend>(`/v1/analytics/cost-trend?window=${window}&bucket=day`),
 	// writes — /rpc/* only:
 	// Ask an admin to raise the cap on a budget node — records a PENDING budget_requests
 	// row (capability `budget.request`); it changes no cap itself (approve does). The

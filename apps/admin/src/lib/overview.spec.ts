@@ -8,11 +8,21 @@ import {
 	greeting,
 	heroInsight,
 	money,
+	planeFromServer,
 	setupSpine,
+	trendFromServer,
 	trendSummary,
 	type SetupStep
 } from './overview'
-import type { BudgetNode, ModelRow, Provider, RequestRow, RoutingStep } from './api'
+import type {
+	BudgetNode,
+	CostTrend,
+	ModelRow,
+	PlaneSplit,
+	Provider,
+	RequestRow,
+	RoutingStep
+} from './api'
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 const row = (over: Partial<RequestRow> = {}): RequestRow => ({
@@ -377,5 +387,74 @@ describe('header helpers', () => {
 	test('avgLatencySec means duration_ms → seconds, 0 when none', () => {
 		expect(avgLatencySec([row({ duration_ms: 1000 }), row({ duration_ms: 2000 })])).toBe(1.5)
 		expect(avgLatencySec([])).toBe(0)
+	})
+})
+
+// ── O2 server-rollup mappers (prefer these over client derivation) ────────────
+describe('planeFromServer', () => {
+	test('maps the plane-split rollup to ExecPlaneSplit shape + percentages', () => {
+		const ps: PlaneSplit = {
+			local: { calls: 3, cost_usd: 0, cloud_equiv_usd: 0.09 },
+			cloud: { calls: 1, cost_usd: 0.04, cloud_equiv_usd: 0.04 },
+			savings_usd: 0.09,
+			savings_pct: 69.2,
+			baseline: 'cheapest_cloud_in_chain',
+			series: []
+		}
+		const p = planeFromServer(ps)
+		expect(p.local).toBe(3)
+		expect(p.cloud).toBe(1)
+		expect(p.total).toBe(4)
+		expect(p.localPct).toBe(75) // 3/4
+		expect(p.cloudPct).toBe(25)
+		expect(p.localCost).toBe(0)
+		expect(p.cloudCost).toBe(0.04)
+		expect(p.unknown).toBe(0) // server coalesces null plane → cloud; no unknown bucket
+	})
+
+	test('empty rollup yields a zeroed split (no divide-by-zero)', () => {
+		const p = planeFromServer({
+			local: { calls: 0, cost_usd: 0, cloud_equiv_usd: 0 },
+			cloud: { calls: 0, cost_usd: 0, cloud_equiv_usd: 0 },
+			savings_usd: 0,
+			savings_pct: 0,
+			baseline: 'cheapest_cloud_in_chain',
+			series: []
+		})
+		expect(p.total).toBe(0)
+		expect(p.localPct).toBe(0)
+		expect(p.cloudPct).toBe(0)
+	})
+})
+
+describe('trendFromServer', () => {
+	test('maps the cost-trend series to TrendPoint[] (blended → costPerCall)', () => {
+		const ct: CostTrend = {
+			series: [
+				{
+					day: '2026-07-24',
+					blended_cost_per_call: 0.061,
+					cost_usd: 0.214,
+					calls: 3,
+					savings_usd: 0
+				},
+				{
+					day: '2026-07-25',
+					blended_cost_per_call: 0.04,
+					cost_usd: 0.08,
+					calls: 2,
+					savings_usd: 0.01
+				}
+			],
+			delta_pct: -34.4
+		}
+		const pts = trendFromServer(ct)
+		expect(pts).toHaveLength(2)
+		expect(pts[0]).toEqual({ day: '2026-07-24', cost: 0.214, calls: 3, costPerCall: 0.061 })
+		expect(pts[1].costPerCall).toBe(0.04)
+	})
+
+	test('empty series → empty points', () => {
+		expect(trendFromServer({ series: [], delta_pct: null })).toEqual([])
 	})
 })

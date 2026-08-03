@@ -12,13 +12,13 @@
 //! spaces, mcp, apikeys, models) follow the same shape and land through P5.
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Extension, Json,
 };
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use sqlx::Acquire; // savepoint-per-attempt in orgs_create (nested `tx.begin()` → SAVEPOINT)
 use uuid::Uuid;
 
@@ -927,8 +927,33 @@ pub struct SetFeature {
     pub state: String, // locked | default-on | default-off | user-overridable
 }
 
+/// Validate a feature-governance write (pure, DB-free) → `Err(reason)` maps to `400`.
+/// `state` must be one of the four governance states; `scope_id` must be present for
+/// space/role scopes and absent for the workspace scope (a mismatch is a client bug).
+pub(crate) fn validate_feature_write(
+    scope_type: &str,
+    scope_id: Option<Uuid>,
+    state: &str,
+) -> Result<(), &'static str> {
+    if !matches!(
+        state,
+        "locked" | "default-on" | "default-off" | "user-overridable"
+    ) {
+        return Err("bad_state");
+    }
+    match scope_type {
+        "workspace" if scope_id.is_some() => Err("scope_id_forbidden"),
+        "space" | "role" if scope_id.is_none() => Err("scope_id_required"),
+        "workspace" | "space" | "role" => Ok(()),
+        _ => Err("bad_scope_type"),
+    }
+}
+
 /// `POST /rpc/governance/set-feature` — capability `feature.manage`. Upserts the
-/// 4-state feature-governance policy for a feature × scope (RW6).
+/// 4-state feature-governance policy for a feature × scope (RW6). Bumps the tenant
+/// `config_version` (so subscribed devices re-resolve) and emits an actor-bound audit row.
+/// NB(v1): all scopes are gated on the tenant-wide `feature.manage`; a per-space authority
+/// gate (via `space_members.role`) is a deferred refinement — no `space.manage` cap exists.
 pub async fn governance_set_feature(
     Extension(claims): Extension<Claims>,
     State(state): State<SharedState>,
@@ -938,6 +963,34 @@ pub async fn governance_set_feature(
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    if let Err(reason) = validate_feature_write(&body.scope_type, body.scope_id, &body.state) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": reason }))).into_response();
+    }
+    // A workspace-scope LOCK is broadest-wins — no narrower (space/role) override may be
+    // written under it (it would be inert per the resolver, and silently accepting it is
+    // misleading). Fail CLOSED: a read error blocks the write rather than allowing it.
+    if body.scope_type != "workspace" {
+        match sqlx::query_scalar::<_, bool>(
+            "select exists(select 1 from public.feature_policies \
+               where tenant_id = $1 and feature_key = $2 \
+                 and scope_type = 'workspace' and state = 'locked')",
+        )
+        .bind(tenant)
+        .bind(&body.feature_key)
+        .fetch_one(&state.pool)
+        .await
+        {
+            Ok(true) => {
+                return (StatusCode::CONFLICT, Json(json!({ "error": "locked_by_workspace" })))
+                    .into_response()
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::error!("set-feature lock check: {e}");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+            }
+        }
+    }
     // Delete-then-insert (idempotent). `on conflict` is unreliable here because a
     // workspace-scope policy has scope_id NULL, and Postgres treats NULLs as DISTINCT in
     // the unique index — so ON CONFLICT never fires and rows accumulate. `is not distinct
@@ -986,6 +1039,98 @@ pub async fn governance_set_feature(
     .await;
     crate::routes::config::bump(&state.pool, tenant, "features").await;
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct ClearFeature {
+    pub feature_key: String,
+    pub scope_type: String,
+    pub scope_id: Option<Uuid>,
+}
+
+/// `POST /rpc/governance/clear-feature` — capability `feature.manage`. Removes one policy
+/// row so the feature reverts to the next-broader scope (or the catalog default) per the
+/// resolver. Bumps `config_version` + audits. Idempotent (clearing an absent row is OK).
+pub async fn governance_clear_feature(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<ClearFeature>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "feature.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if !matches!(body.scope_type.as_str(), "workspace" | "space" | "role") {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad_scope_type" })))
+            .into_response();
+    }
+    let deleted = sqlx::query(
+        "delete from public.feature_policies \
+          where tenant_id = $1 and feature_key = $2 and scope_type = $3 \
+            and scope_id is not distinct from $4",
+    )
+    .bind(tenant)
+    .bind(&body.feature_key)
+    .bind(&body.scope_type)
+    .bind(body.scope_id)
+    .execute(&state.pool)
+    .await;
+    let rows = match deleted {
+        Ok(r) => r.rows_affected(),
+        Err(e) => {
+            tracing::error!("clear-feature: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+        }
+    };
+    audit(
+        &state,
+        tenant,
+        actor,
+        "governance.feature.cleared",
+        "feature_policy",
+        None,
+    )
+    .await;
+    crate::routes::config::bump(&state.pool, tenant, "features").await;
+    (StatusCode::OK, Json(json!({ "ok": true, "cleared": rows }))).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct MatrixQuery {
+    pub space_id: Option<Uuid>,
+}
+
+/// `GET /rpc/governance/matrix?space_id=` — capability `feature.manage`. The RAW per-scope
+/// policy rows (the admin authoring view). Members never get raw rows — they use the
+/// resolver verdict (`/v1/governance`). An optional `space_id` narrows space-scope rows to
+/// that space; workspace + role rows are always included.
+pub async fn governance_matrix(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Query(q): Query<MatrixQuery>,
+) -> Response {
+    let (tenant, _actor) = match authorize(&state, &claims, "feature.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let rows: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.feature_key, t.scope_type), '[]'::json) from ( \
+           select feature_key, scope_type, scope_id, state, modified_at \
+             from public.feature_policies \
+            where tenant_id = $1 \
+              and ($2::uuid is null or scope_type <> 'space' or scope_id = $2)) t",
+    )
+    .bind(tenant)
+    .bind(q.space_id)
+    .fetch_one(&state.pool)
+    .await;
+    match rows {
+        Ok(policies) => (StatusCode::OK, Json(json!({ "policies": policies }))).into_response(),
+        Err(e) => {
+            tracing::error!("governance matrix: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -2058,6 +2203,85 @@ mod tests {
         PgPool::connect(&url)
             .await
             .expect("connect local Supabase (55322)")
+    }
+
+    /// O3-3: the pure feature-governance write validator (400 surface). Every valid
+    /// state/scope combination passes; each malformed one names its reason.
+    #[test]
+    fn validate_feature_write_rules() {
+        use super::validate_feature_write;
+        // valid: workspace has no scope_id; space/role require one.
+        assert!(validate_feature_write("workspace", None, "locked").is_ok());
+        assert!(validate_feature_write("space", Some(Uuid::new_v4()), "default-on").is_ok());
+        assert!(validate_feature_write("role", Some(Uuid::new_v4()), "user-overridable").is_ok());
+        // bad state → 4-state enum only.
+        assert_eq!(validate_feature_write("workspace", None, "on"), Err("bad_state"));
+        // scope_id ↔ scope_type mismatches.
+        assert_eq!(
+            validate_feature_write("workspace", Some(Uuid::new_v4()), "locked"),
+            Err("scope_id_forbidden")
+        );
+        assert_eq!(validate_feature_write("space", None, "locked"), Err("scope_id_required"));
+        assert_eq!(validate_feature_write("role", None, "locked"), Err("scope_id_required"));
+        // unknown scope.
+        assert_eq!(validate_feature_write("tenant", None, "locked"), Err("bad_scope_type"));
+    }
+
+    /// O3-3 SQL invariants against the live schema: (1) feature_policies rejects an
+    /// out-of-enum state + honours the (feature,scope_type,scope_id) uniqueness via the
+    /// delete-then-insert grain; (2) the workspace-lock existence query the set-feature 409
+    /// relies on flips true once a workspace `locked` row exists; (3) clearing a row removes
+    /// exactly it. Rolled back — live data untouched.
+    #[tokio::test]
+    #[ignore = "requires local Supabase (55322)"]
+    async fn governance_feature_policy_invariants() {
+        let pool = pool().await;
+        let t = Uuid::new_v4();
+        sqlx::query("insert into core.tenants (id,name,slug,modified_by) values ($1,'gov-test',$2,'test')")
+            .bind(t)
+            .bind(format!("gov-test-{t}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let feat = "grounded-only";
+
+        // (1) the state CHECK rejects a non-4-state value.
+        let bad = sqlx::query(
+            "insert into public.feature_policies (tenant_id, feature_key, scope_type, scope_id, state, modified_by) \
+             values ($1,$2,'workspace',null,'on','test')",
+        )
+        .bind(t).bind(feat).execute(&pool).await;
+        assert!(bad.is_err(), "state CHECK must reject 'on'");
+
+        // no workspace lock yet → the set-feature 409 query is false.
+        let locked = |p: PgPool, t: Uuid| async move {
+            sqlx::query_scalar::<_, bool>(
+                "select exists(select 1 from public.feature_policies \
+                   where tenant_id=$1 and feature_key='grounded-only' \
+                     and scope_type='workspace' and state='locked')",
+            )
+            .bind(t).fetch_one(&p).await.unwrap()
+        };
+        assert!(!locked(pool.clone(), t).await, "no lock yet");
+
+        // (2) write a workspace lock → the existence query flips true (the 409 guard fires).
+        sqlx::query(
+            "insert into public.feature_policies (tenant_id, feature_key, scope_type, scope_id, state, modified_by) \
+             values ($1,$2,'workspace',null,'locked','test')",
+        )
+        .bind(t).bind(feat).execute(&pool).await.unwrap();
+        assert!(locked(pool.clone(), t).await, "workspace lock now blocks narrower writes");
+
+        // (3) clear the workspace row (the clear-feature grain) → gone.
+        let del = sqlx::query(
+            "delete from public.feature_policies \
+              where tenant_id=$1 and feature_key=$2 and scope_type='workspace' and scope_id is not distinct from null",
+        )
+        .bind(t).bind(feat).execute(&pool).await.unwrap();
+        assert_eq!(del.rows_affected(), 1, "clear removes exactly the workspace row");
+        assert!(!locked(pool.clone(), t).await, "lock cleared");
+
+        sqlx::query("delete from core.tenants where id=$1").bind(t).execute(&pool).await.unwrap();
     }
 
     /// The two SQL contracts `rbac_create_role` relies on: (1) the no-shadowing key-check flags a

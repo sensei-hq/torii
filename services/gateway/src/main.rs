@@ -367,6 +367,11 @@ async fn main() -> anyhow::Result<()> {
             post(routes::rpc::governance_set_feature),
         )
         .route(
+            "/governance/clear-feature",
+            post(routes::rpc::governance_clear_feature),
+        )
+        .route("/governance/matrix", get(routes::rpc::governance_matrix))
+        .route(
             "/routing/set-step-active",
             post(routes::rpc::routing_set_step),
         )

@@ -17,9 +17,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build
 
 # Copy the workspace. Only torii-gateway is compiled (`-p`); the Tauri desktop member is
-# dropped from the manifest below, so its sources aren't needed in the image.
+# dropped from the manifest below, so its sources aren't needed in the image. `crates/` IS
+# needed — the gateway depends on `crates/tools` (X1 MCP runtime), a path member Cargo must
+# read + build; omitting it fails the workspace load ("failed to read crates/tools/Cargo.toml").
 COPY Cargo.toml Cargo.lock ./
 COPY services ./services
+COPY crates ./crates
 
 # Prep the workspace manifest for a cloud-only gateway build:
 #  1. Strip the dev-in-place [patch] (points sensei-* at the sibling repo ../gateway, absent

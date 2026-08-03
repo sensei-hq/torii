@@ -175,4 +175,86 @@ begin;
     raise notice 'A2 quality fan-out (grounding/judge) ✓';
   end $$;
 rollback;
-\echo 'ANALYTICS A1+A2 TEST PASSED'
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- A3 — cloud-equivalent savings baseline (cheapest cloud step, actual tokens).
+-- Fixtures reuse an existing router + capability (FKs) and add fresh models +
+-- chains so pricing is deterministic. All in one rolled-back transaction.
+-- ─────────────────────────────────────────────────────────────────────────
+\echo '== O2 analytics: A3 cloud-equivalent savings baseline =='
+begin;
+  -- fixture models (config.models: name+version required; id defaulted → set explicit)
+  insert into config.models (id, name, version) values
+    ('a3300000-0000-0000-0000-000000000001','sav-cloud-cheap','1'),
+    ('a3300000-0000-0000-0000-000000000002','sav-cloud-dear','1'),
+    ('a3300000-0000-0000-0000-000000000003','sav-cloud-unpriced','1'),
+    ('a3300000-0000-0000-0000-000000000004','sav-local-only','1');
+  -- endpoints price the cloud counterfactual (reuse router b3fb5f18…, capability cc536ed2…)
+  insert into config.model_endpoints
+    (id, model_id, router_id, capability_id, endpoint_url, cost_per_input_token, cost_per_output_token, is_active) values
+    ('a3310000-0000-0000-0000-000000000001','a3300000-0000-0000-0000-000000000001','b3fb5f18-cfe9-4793-a1f5-8ae7ef524377','cc536ed2-41b5-424a-af84-bd7152027380','http://t',0.00001,0.00003,true),
+    ('a3310000-0000-0000-0000-000000000002','a3300000-0000-0000-0000-000000000002','b3fb5f18-cfe9-4793-a1f5-8ae7ef524377','cc536ed2-41b5-424a-af84-bd7152027380','http://t',0.00002,0.00006,true);
+  -- NB: model sav-cloud-unpriced (…003) intentionally has NO endpoint → its cloud
+  -- step is unpriced (no ModelPricing), which the baseline must surface, not guess.
+  -- four chains (tenant 0 owns them → effective_chain_models first branch)
+  insert into public.fallback_chains (id, tenant_id, name, capability_id, is_active, modified_by) values
+    ('a3320000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000000','sav-cloud','cc536ed2-41b5-424a-af84-bd7152027380',true,'test'),
+    ('a3320000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000000','sav-local','cc536ed2-41b5-424a-af84-bd7152027380',true,'test'),
+    ('a3320000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000000','sav-unpriced','cc536ed2-41b5-424a-af84-bd7152027380',true,'test'),
+    ('a3320000-0000-0000-0000-000000000004','00000000-0000-0000-0000-000000000000','sav-two','cc536ed2-41b5-424a-af84-bd7152027380',true,'test');
+  insert into public.fallback_chain_models
+    (id, tenant_id, fallback_chain_id, router_id, model_id, sequence_order, plane, is_active, modified_by) values
+    -- sav-cloud: one cheap cloud step
+    ('a3330000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000000','a3320000-0000-0000-0000-000000000001','b3fb5f18-cfe9-4793-a1f5-8ae7ef524377','a3300000-0000-0000-0000-000000000001',1,'cloud',true,'test'),
+    -- sav-local: only a LOCAL step (no cloud counterfactual)
+    ('a3330000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000000','a3320000-0000-0000-0000-000000000002','b3fb5f18-cfe9-4793-a1f5-8ae7ef524377','a3300000-0000-0000-0000-000000000004',1,'local',true,'test'),
+    -- sav-unpriced: a cloud step whose endpoint has NULL pricing
+    ('a3330000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000000','a3320000-0000-0000-0000-000000000003','b3fb5f18-cfe9-4793-a1f5-8ae7ef524377','a3300000-0000-0000-0000-000000000003',1,'cloud',true,'test'),
+    -- sav-two: cheap + dear cloud steps → cheapest must win
+    ('a3330000-0000-0000-0000-000000000004','00000000-0000-0000-0000-000000000000','a3320000-0000-0000-0000-000000000004','b3fb5f18-cfe9-4793-a1f5-8ae7ef524377','a3300000-0000-0000-0000-000000000001',1,'cloud',true,'test'),
+    ('a3330000-0000-0000-0000-000000000005','00000000-0000-0000-0000-000000000000','a3320000-0000-0000-0000-000000000004','b3fb5f18-cfe9-4793-a1f5-8ae7ef524377','a3300000-0000-0000-0000-000000000002',2,'cloud',true,'test');
+
+  -- four LOCAL calls (cost 0, in=512 out=128), one per chain, distinct budget nodes.
+  insert into public.inference_calls
+    (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence,
+     recorded_at,input_tokens,output_tokens,execution_location,chain_id,budget_node_id) values
+    ('00000000-0000-0000-0000-000000000000','a33c0000-0000-0000-0000-000000000001','text_chat','ollama','local-x',0,90,'success',0,'2026-07-26T09:00:00Z',512,128,'local','sav-cloud',   'b0de0000-0000-0000-0000-0000000000a1'),
+    ('00000000-0000-0000-0000-000000000000','a33c0000-0000-0000-0000-000000000002','text_chat','ollama','local-x',0,90,'success',0,'2026-07-26T09:00:00Z',512,128,'local','sav-local',   'b0de0000-0000-0000-0000-0000000000a2'),
+    ('00000000-0000-0000-0000-000000000000','a33c0000-0000-0000-0000-000000000003','text_chat','ollama','local-x',0,90,'success',0,'2026-07-26T09:00:00Z',512,128,'local','sav-unpriced','b0de0000-0000-0000-0000-0000000000a3'),
+    ('00000000-0000-0000-0000-000000000000','a33c0000-0000-0000-0000-000000000004','text_chat','ollama','local-x',0,90,'success',0,'2026-07-26T09:00:00Z',512,128,'local','sav-two',     'b0de0000-0000-0000-0000-0000000000a4');
+
+  do $$
+  declare c1 numeric; s1 numeric; s4 numeric; lo2 bigint; up3 bigint;
+  begin
+    -- case 1: priced cloud step → 512·0.00001 + 128·0.00003 = 0.00896
+    select cloud_equiv_usd, savings_usd into c1, s1 from public.analytics_usage_daily
+      where budget_node_id='b0de0000-0000-0000-0000-0000000000a1' and execution_location='local';
+    if coalesce(c1,-1) <> 0.00896 or coalesce(s1,-1) <> 0.00896 then
+      raise exception 'FAIL A3 priced: cloud_equiv=% savings=% (want 0.00896)', c1, s1; end if;
+
+    -- case 2: local-only chain → no counterfactual, counted separately
+    select local_only_calls into lo2 from public.analytics_usage_daily
+      where budget_node_id='b0de0000-0000-0000-0000-0000000000a2' and execution_location='local';
+    if coalesce(lo2,-1) <> 1
+       or coalesce((select savings_usd from public.analytics_usage_daily
+                     where budget_node_id='b0de0000-0000-0000-0000-0000000000a2'),-1) <> 0 then
+      raise exception 'FAIL A3 local-only: local_only_calls=% (want 1, savings 0)', lo2; end if;
+
+    -- case 3: unpriced counterfactual → excluded, surfaced, never guessed
+    select savings_unpriced_calls into up3 from public.analytics_usage_daily
+      where budget_node_id='b0de0000-0000-0000-0000-0000000000a3' and execution_location='local';
+    if coalesce(up3,-1) <> 1
+       or coalesce((select savings_usd from public.analytics_usage_daily
+                     where budget_node_id='b0de0000-0000-0000-0000-0000000000a3'),-1) <> 0 then
+      raise exception 'FAIL A3 unpriced: savings_unpriced_calls=% (want 1, savings 0)', up3; end if;
+
+    -- case 4: cheapest-of-two wins → 0.00896 (< the dear step's 0.01792)
+    select savings_usd into s4 from public.analytics_usage_daily
+      where budget_node_id='b0de0000-0000-0000-0000-0000000000a4' and execution_location='local';
+    if coalesce(s4,-1) <> 0.00896 or s4 >= 0.01792 then
+      raise exception 'FAIL A3 conservative floor: savings=% (want cheapest 0.00896)', s4; end if;
+
+    raise notice 'A3 savings baseline (priced/local-only/unpriced/conservative-floor) ✓';
+  end $$;
+rollback;
+\echo 'ANALYTICS A1+A2+A3 TEST PASSED'

@@ -297,9 +297,10 @@ Each is a real fork that changes the schema. Plain question → my recommendatio
 
 ---
 
-### 9. Next: access-layer pass (Pass 2)
+### 9. Access-layer pass (Pass 2) — ✅ DONE → **`docs/design/db-access-layer.md`**
 
-Per the tables→APIs→UI sequence, the follow-on pass produces (built on this schema):
-- **Blast-radius traceability map** — per table: the API endpoints (gateway routes) + UI pages that read/write it, so a restructure shows its impact and fixes flow through (operationalizes the verify-blast-radius rule as a maintained artifact, not an ad-hoc grep).
-- **Joined view catalog** — read-views per access pattern (connector names: `files_in_space`, `budget_tree_for_tenant`) so APIs GET from a view and the UI's Component→State mapping matches the view shape 1:1; restructuring underlying tables can preserve the view contract → smaller API/UI blast radius.
-- **Rokkit schema-form bindings** — the table schema + enum/lookup types drive Rokkit schema+layout-controlled entry forms (enum values become field options) for the write side.
+The follow-on pass is complete and lives in its companion doc. It contains:
+- **§A Blast-radius traceability** — per target table: the API endpoints + UI pages that read/write it (with file:line), grouped by schema, hottest-first. The maintained artifact that makes a restructure's impact legible before applying. Top-5 cross-app surfaces: `metering.inference_calls`, `governance.nodes`+`core.org_units`, `catalog.models*`, `content.spaces`, `governance.requests`.
+- **§B Joined read-view catalog** — 25 views (connector-named: `budget_tree_for_tenant`, `requests_ledger_for_tenant`, `files_in_space`, `connections_for_tenant`, …) whose shape is 1:1 with each screen's state getter, so a table restructure is shielded behind the view contract (blast radius shrinks to the view SQL).
+- **§C Rokkit schema-form bindings** — each entry form → target table → enum-driven static Selects + lookup-driven async Selects (secrets bound as id-refs only).
+- **§D Build/restructure order** — 9 phases, **views-first** (the shield goes in before the table moves under it), least-disruptive-first: Phase 0 enums/lookups/FORCE-RLS → Phases 1-2 mechanical moves + vault secret-custody → Phases 3-4 catalog string→uuid + governance shape-changes → **Phase 5 org/budget split** + **Phase 6 ledger overhaul** (the two widest surfaces, done last with the most shielding) → Phases 7-8 content + greenfield surfaces. This §D **is the build plan** for the next step.

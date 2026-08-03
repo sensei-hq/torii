@@ -4,7 +4,14 @@
 // ceiling + cascade). The two reads degrade INDEPENDENTLY (the Home/Compare precedent):
 // `audit.read` and `budget.read` are distinct capabilities, so a budget denial (or a tenant
 // with no budget tree seeded) must never blank the ledger, and vice-versa.
-import { api, type BudgetNode, type BudgetRequest, type RequestRow, type RoutingTrace } from './api'
+import {
+	api,
+	type BudgetNode,
+	type BudgetRequest,
+	type PlaneSplit,
+	type RequestRow,
+	type RoutingTrace
+} from './api'
 import { cascadePath, leafNodes, matchesRequest } from './activity'
 import { IS_E2E } from './e2e'
 
@@ -109,6 +116,9 @@ class ActivityStore {
 	#requests = $state<RequestRow[]>([])
 	#nodes = $state<BudgetNode[]>([])
 	#pending = $state<BudgetRequest[]>([])
+	// O2 plane-split rollup (server, member-scoped) — null until loaded or on failure; the
+	// spend chip + savings prefer it and fall back to the capped-ledger derivation.
+	#plane = $state<PlaneSplit | null>(null)
 	loading = $state(true)
 	loaded = $state(false)
 	/** ledger read failure (needs `audit.read`) — blanks only the table, not the budget card. */
@@ -156,7 +166,14 @@ class ActivityStore {
 	}
 
 	get spend(): number {
-		return this.#requests.reduce((s, r) => s + Number(r.cost_usd || 0), 0)
+		// Prefer the server rollup (full ledger, member-scoped) over the capped page.
+		return this.#plane
+			? this.#plane.local.cost_usd + this.#plane.cloud.cost_usd
+			: this.#requests.reduce((s, r) => s + Number(r.cost_usd || 0), 0)
+	}
+	/** Avoided cloud spend from running local (cheapest-cloud baseline) — 0 until the rollup loads. */
+	get savings(): number {
+		return this.#plane?.savings_usd ?? 0
 	}
 	get localCount(): number {
 		return this.#requests.filter((r) => r.execution_location === 'local').length
@@ -218,6 +235,16 @@ class ActivityStore {
 		}
 	}
 
+	/** The plane-split rollup loads independently — a denial/absence just omits the savings
+	 *  chip and the spend chip falls back to the capped-ledger sum (never blanks the screen). */
+	async loadPlane(): Promise<void> {
+		try {
+			this.#plane = await api.planeSplit('30d')
+		} catch {
+			this.#plane = null
+		}
+	}
+
 	/** Budgets load independently of the ledger so one capability denial can't blank the other. */
 	async loadBudgets(): Promise<void> {
 		try {
@@ -248,7 +275,7 @@ class ActivityStore {
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : String(e)
 		}
-		await this.loadBudgets()
+		await Promise.all([this.loadBudgets(), this.loadPlane()])
 		this.loading = false
 		this.loaded = true
 	}

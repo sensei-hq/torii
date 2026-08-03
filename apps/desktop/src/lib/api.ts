@@ -159,11 +159,30 @@ export interface AvailableModel {
 	provider: string
 }
 
+// O2 analytics (member-scoped): the plane-split rollup over the FULL ledger + the
+// cloud-equivalent savings baseline the client can't derive from the capped /v1/requests
+// read. Scope authz (A7) confines a non-admin member to their own subtree automatically.
+export interface PlaneStat {
+	calls: number
+	cost_usd: number
+	cloud_equiv_usd: number
+}
+export interface PlaneSplit {
+	local: PlaneStat
+	cloud: PlaneStat
+	/** Σ cloud-equivalent of local calls = avoided cloud spend. */
+	savings_usd: number
+	savings_pct: number
+	baseline: string
+	series: { day: string; local_calls: number; cloud_calls: number; savings_usd: number }[]
+}
+
 export const api = {
 	requests: (limit = 50) => gwGet<{ requests: RequestRow[] }>(`/v1/requests?limit=${limit}`),
+	// O2 · local-vs-cloud split + savings for the caller's scope (A7 confines a member).
+	planeSplit: (window = '30d') => gwGet<PlaneSplit>(`/v1/analytics/plane-split?window=${window}`),
 	// the per-call routing trace ("why this model") for one request — lazy, on row expand.
-	requestTrace: (id: string) =>
-		gwGet<{ trace: RoutingTrace | null }>(`/v1/requests/${id}/trace`),
+	requestTrace: (id: string) => gwGet<{ trace: RoutingTrace | null }>(`/v1/requests/${id}/trace`),
 	// the member's budget ceiling + cascade tree and their own pending increase requests.
 	budgets: () => gwGet<{ nodes: BudgetNode[]; requests: BudgetRequest[] }>('/v1/budgets'),
 	whoami: () => gwGet<WhoAmI>('/v1/whoami'),

@@ -80,6 +80,12 @@
 				<Card pad>
 					<div class="text-[11px] font-semibold uppercase tracking-wider text-ink-mute">Spend</div>
 					<div class="font-heading text-2xl font-light text-ink">{fmtCost(activity.spend)}</div>
+					{#if activity.savings > 0}
+						<!-- O2: cloud-equivalent of the local calls (cheapest-cloud baseline). -->
+						<div class="mt-0.5 text-[11px] font-medium text-success">
+							{fmtCost(activity.savings)} saved vs cloud
+						</div>
+					{/if}
 				</Card>
 			</div>
 
@@ -347,7 +353,8 @@
 																<span class="text-ink">{a.adapter} → {a.model}</span>
 																<span class="font-mono text-ink-mute">{a.duration_ms}ms</span>
 																{#if a.error}
-																	<span class="truncate text-danger" title={a.error}>{a.error}</span>
+																	<span class="truncate text-danger" title={a.error}>{a.error}</span
+																	>
 																{/if}
 															</li>
 														{/each}

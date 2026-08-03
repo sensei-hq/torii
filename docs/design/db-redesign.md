@@ -1,15 +1,15 @@
 ---
 title: Torii/Seiki Database Redesign — Blueprint
-status: design (pre-build) — needs review + the open decisions below before any schema change
+status: design — BUILD-READY. All 8 open decisions (§8) resolved; all adversarial-review corrections (§7) folded into §0–§6. Pass 2 (access layer, §9) next, then build.
 created: 2026-08-03
 method: ultracode workflow (5 domain maps → synthesis → 2 adversarial critics), all facts verified against the live dev DB (55322) + database/ddl/
 supersedes: the incremental trailing-ALTER fold (subsumed here)
 ---
 
-> **How to read this.** §0–§6 are the target design. **§7 (Required corrections)** folds in the
-> adversarial review — apply those before building (two are CRITICAL security fixes to the design as
-> drafted). **§8 (Open decisions)** needs Jerry. **§9** is the access-layer pass (traceability map +
-> joined views + Rokkit forms) that follows. Doc-before-code: nothing here is applied yet.
+> **How to read this.** §0–§6 are the target design (with all §7 corrections + §8 decisions already
+> folded in). **§7** is the ledger of adversarial-review fixes (all applied). **§8** records the 8
+> resolved decisions. **§9** is the next pass — the access layer (table→API→UI traceability map +
+> joined views + Rokkit forms). Doc-before-code: nothing here is applied to a DB yet.
 
 ## Torii/Seiki Target Database Design — Normalized, Schema-Organized, RLS-Secure Blueprint
 
@@ -78,7 +78,9 @@ history, agents) — read each `#### <sub-domain>` as "→ lives in `<parent sch
 #### vault (secret custody — RLS enabled, **zero client policies**, all privileges revoked from anon/authenticated; service_role only)
 - **tenant_keys**(pk(tenant_id), encrypted_dek bytea, dek_version).
 - **tenant_key_archive**(pk(tenant_id,dek_version), encrypted_dek).
-- **router_credentials** (MOVED out of public): pk(tenant_id,id), router_id FK→catalog.routers, `credential_type vault.credential_type`, `refresh_status vault.refresh_status`, encrypted_api_key/encrypted_oauth bytea, oauth_client_id, token_url, expires_at, scopes, XOR CHECK(type→column). Never appears in any authenticated SELECT.
+- **router_credentials** (MOVED out of public): pk(tenant_id,id), router_id FK→catalog.routers, `credential_type vault.credential_type`, `refresh_status vault.refresh_status`, `custody vault.credential_custody {gateway,device}` (§7-LOW; only `gateway` valid v1), encrypted_api_key/encrypted_oauth bytea, oauth_client_id, token_url, expires_at, scopes, XOR CHECK(type→column). Never appears in any authenticated SELECT.
+- **dataset_secrets** (NEW, §7-#1): pk(tenant_id,column_id→content.dataset_columns), encrypted_value bytea, dek_ref — the §3c ciphertext, deny-all (never client-readable).
+- **redaction_map** (NEW, §7-#9): pk(tenant_id,id), placeholder, encrypted_original bytea, dek_ref — the reversible redaction mapping (only if the Redactions tab must reveal originals), deny-all.
 
 #### catalog (global reference + tenant overrides)
 - **providers**(pk(id), name uniq, is_active, is_open_source).
@@ -108,7 +110,8 @@ history, agents) — read each `#### <sub-domain>` as "→ lives in `<parent sch
 - **inference_calls** (the single minimal request/response log + cost ledger): pk(tenant_id,id), conversation_id→**content**, model_id/router_id/capability_id/endpoint_id **FK→catalog** (replace free-text), org_unit_id **FK→core.org_units** (the cap-bearing unit; replaces the org/dept/team/user_node_id snapshot columns — attribution walks the org tree), hold_id FK→governance.holds, input_tokens/output_tokens, **`cost_estimated` + `cost_actual` `numeric(14,6)` (both SNAPSHOTTED at call time** against the then-current `model_endpoints` price — never recomputed later), `status metering.call_status`, `execution_location execution_location`, recorded_at. Minimal by design: no prompt/response bodies (those stay in `content.messages` under content RLS).
 - **execution_traces**(pk(tenant_id,id), inference_call_id FK, trace jsonb) — kept as raw sidecar.
 - **routing_attempts** (NEW, normalizes the trace for Compare/Requests UI): pk(tenant_id,id), inference_call_id FK, attempt_no, router_id, model_id, `plane execution_location`, latency_ms, outcome, cost_usd.
-- **quality_signals**(pk(tenant_id,id), `subject_type metering.signal_subject {call,message,conversation}` + subject_id (replaces the fragile `source LIKE 'c5.%'` escape hatch), `signal_class metering.signal_class`, signal_key, value_num/text/json, schema_version, actor_id uuid→profiles). Cost/latency NOT re-stored (read from inference_calls).
+- **quality_signals** (machine-written: implicit/system): pk(tenant_id,id), `subject_type metering.signal_subject {call,message,conversation}` + per-target nullable FKs (call_id/message_id/conversation_id) + CHECK exactly-one-set (§7-#6 — replaces the polymorphic subject_id + fragile `source LIKE 'c5.%'`), `signal_class metering.signal_class {implicit,system}`, signal_key, value_num/text/json, schema_version. **service_role-write.** Cost/latency NOT re-stored (read from inference_calls).
+- **feedback** (NEW, §7-#4 — user-written explicit signals, split OUT of quality_signals): pk(tenant_id,id), subject FKs (as above), actor_id uuid→profiles, kind (thumb_up/down/rating/edit/accept), value. **owner-INSERT policy** (`with check profile_id = auth.uid()`) so the interaction-intelligence loop can actually write — the over-merged blanket service_role-write posture couldn't. Rollups union both.
 - **LEGACY `gateway_tasks`/`gateway_task_logs`/`sessions`/`session_logs` are retired** (migrated into inference_calls/routing_attempts and content.conversations) — kills the double-ledger.
 
 #### analytics (justified denormalization; rebuildable from metering)  — → lives in `metering`
@@ -119,19 +122,20 @@ history, agents) — read each `#### <sub-domain>` as "→ lives in `<parent sch
 #### chat  — → lives in `content`
 - **projects** (NEW, reserves the workspace-grouping above conversations): pk(tenant_id,id), space_id FK, owner_id uuid→profiles.
 - **conversations**(pk(tenant_id,id), project_id FK, space_id FK, owner_id uuid→profiles).
-- **messages**(pk(tenant_id,id), conversation_id FK, `role content.message_role`, model_id **FK→catalog.models**, `execution_location execution_location`, cost_usd `numeric(14,6)`) — cost/model become **read-through joins to metering** where possible; retain only display copies.
-- **message_citations**(pk(tenant_id,id), message_id FK, document_id/chunk_id **FK→knowledge** (enforce)).
+- **messages**(pk(tenant_id,id), conversation_id FK, `role content.message_role`, inference_call_id **FK→metering.inference_calls**, body text) — **NO cost/model copies** (§7-#7/Q4): model + cost read through from the linked ledger row via a view.
+- **message_citations**(pk(tenant_id,id), message_id FK, document_id/chunk_id **FK→content** (enforce)).
 
 #### knowledge (RAG / doc center)  — → lives in `content`
-- **documents**(pk(tenant_id,id), space_id/collection_id FK, `scope content.document_scope`, `classification core.classification_level`, `status content.document_status`, current_version_id, parse_quality, source_format, tags[]). **Legacy file cols (storage_path/file_size/content_type/content_hash) DROPPED** → live on versions only.
+- **documents**(pk(tenant_id,id), space_id/collection_id FK, `scope content.document_scope`, `classification core.classification_level`, **`lifecycle content.document_lifecycle {pending,processing,completed,failed,archived}`** (stable — §7-#5) + **`stage varchar` nullable** (transient pipeline step: parsing/chunking/embedding/…, free-form so pipeline changes never churn the enum), current_version_id, parse_quality, source_format, tags[]). **Legacy file cols (storage_path/file_size/content_type/content_hash) DROPPED** → live on versions only.
 - **document_versions**(pk(tenant_id,id), UNIQUE(tenant_id,document_id,version_no), content_hash, parser, parser_version, storage_path, file_size, content_type, superseded_at) — trailing-ALTER cols folded inline.
 - **document_assets**(pk(tenant_id,id), document_id FK, version_id **FK** (enforce), `kind content.asset_kind`, bbox, page_ref, caption).
 - **document_embeddings**(pk(tenant_id,id), UNIQUE(...chunk_sequence), version_id FK, parent_chunk_id **self-FK** (enforce), contextual_prefix, section_path, page_ref, `element_type content.element_type`, redaction_count, embedding vector(1024), tsv tsvector, superseded_at) — all 9 trailing-ALTER cols folded inline. Holds **only redacted text** (DLP invariant).
 - **collections** (was document_collections): self-FK parent_id, space_id FK.
-- **space_rag_profiles** (NEW — the single largest missing admin surface): pk(tenant_id,space_id), parser_profile, embedding_model, extract_tables/images/formulas, chunk_strategy, chunk_size, overlap, `retrieval_mode content.retrieval_mode`, hybrid_weight, rerank+rerank_model, advanced_modes[] (raptor/graphrag/colbert/sqlrag/agentic), default_classification, retention_days, force_masking, allowed_tiers[], storage_quota_gb. **Not buried in generic settings.**
+- **space_rag_profiles** (NEW — the single largest missing admin surface): pk(tenant_id,space_id), parser_profile, embedding_model, extract_tables/images/formulas, chunk_strategy, chunk_size, overlap, `retrieval_mode content.retrieval_mode`, hybrid_weight, rerank+rerank_model, advanced_modes[] (raptor/graphrag/colbert/sqlrag/agentic), default_classification, retention_days, force_masking, allowed_unit_levels[], storage_quota_gb. **Not buried in generic settings.** Advanced-mode STORES are reserved (§7-#10): `content.graph_edges` + `content.summary_nodes` stub tables (v2) so `advanced_modes[]` maps to a real store, not a dangling toggle.
 - **structured_datasets**(pk(tenant_id,id), space_id/document_id **FK** (enforce), storage_ref, row_count).
-- **dataset_columns**(pk(tenant_id,id), dataset_id FK, `sensitivity core.classification_level`, data_type, description [LLM-facing schema metadata], encrypted_value bytea + dek_ref (realize §3c custody, not just a flag), compute_policy jsonb {aggregate_only, k_anon_threshold, allowed_roles}).
-- **redactions** (NEW, W5): pk(tenant_id,id), document_id/message ref, type, original→placeholder, false_positive, at — the DLP audit trail + safe-list feedback.
+- **dataset_columns**(pk(tenant_id,id), dataset_id FK, `sensitivity core.classification_level`, data_type, description [LLM-facing schema metadata **only** — never a value], compute_policy jsonb {aggregate_only, k_anon_threshold, allowed_roles}). **§7-#1 (CRITICAL): NO ciphertext here** — the encrypted sensitive values live in **`vault.dataset_secrets`**(pk(tenant_id,column_id), encrypted_value bytea, dek_ref) under the deny-all vault posture; `dataset_columns` itself carries only schema metadata + policy and stays client-SELECTable safely (no secret, no dek_ref).
+- **compute_jobs** (NEW, §7-#8 — the §3c "compute-without-exposing" runtime home): pk(tenant_id,id), dataset_id FK, requester uuid→profiles, query, `status metering.call_status`, result_json (aggregate/k-anon output only). **query_grants**(pk(tenant_id,id), column_id FK, role_id FK, operation) — per-column × role × op grant. Every compute runs in the service_role boundary and emits a `metering.quality_signals` + `audit.audit_events` row, so the "model sees structure not values" guarantee is auditable by construction.
+- **redactions** (NEW, W5): pk(tenant_id,id), document_id/message ref, type, placeholder, span_start/span_end, false_positive, at — the DLP audit trail. **§7-#9: stores NO raw original** (only type + placeholder + offsets); any reversible original→placeholder mapping lives in **`vault.redaction_map`** (service_role, per-tenant DEK), referenced by id — honors the one-way-placeholder DLP posture.
 - **document_comments** / **document_shares** (NEW, v2 design-now): comments/suggestions with `status`, per-person doc ACL (`doc_share_role`, visibility).
 
 #### workspace  — → lives in `content`
@@ -208,6 +212,8 @@ history, agents) — read each `#### <sub-domain>` as "→ lives in `<parent sch
 - **Owner-self DML:** `content.*` (owner_id=auth.uid()), `governance.user_preferences`, `governance.requests` (own PENDING insert), `content.documents` (owner-write + classification/space-membership-aware read + `guard_document_classification` trigger), `content.templates` (scope-aware).
 - **Classification/membership-aware read** (documents pattern) applied consistently to `content.spaces` (retire tenant-only read), `content.*` derivatives (inherit parent-doc read), `content` (space + owner).
 - **MVs:** never granted to authenticated; gateway-mediated (service_role + in-query tenant filter).
+- **Deny-all / service_role-only (§7-#1,#2):** `vault.*` (incl. `dataset_secrets`, `redaction_map`) AND the **`history.past_*` twins** — each carries `tenant_id` + `ENABLE`/`FORCE` RLS with the source table's tenant predicate, zero client grants (the SCD-2 trail is not a client read surface).
+- **Owner-INSERT exception in metering (§7-#4):** `metering.feedback` allows `authenticated` INSERT `with check profile_id = auth.uid()`; the rest of `metering` stays service_role-write.
 - **Global reference (`catalog` platform tables):** RLS-off acceptable ONLY as SELECT-only, zero write grants; documented invariant that no tenant row may be added.
 - **Structural hardening:** FORCE RLS on all tenant tables; `has_capability()` fixed to `effective_role_permissions`; single SELECT policy on `device.devices` (own OR device.manage — no permissive OR); Realtime channels RLS-scoped to tenant + row-ownership.
 
@@ -222,8 +228,9 @@ history, agents) — read each `#### <sub-domain>` as "→ lives in `<parent sch
 - **Actor identity** normalized to `uuid` FK→core.profiles across all `modified_by/created_by/assigned_by/user_id/actor_id` (28+ varchar columns + 6 text `user_id`), with a SYSTEM sentinel.
 - **Money** standardized to `numeric(14,6)` (fixes budget_requests (12,2) + unqualified cost_usd).
 - **Org structure** split out of `budget_nodes` into `core.org_units`/`unit_members`; budget nodes reference the unit.
-- **Justified denormalization only:** analytics rollups/MVs, `governance.holds.path_node_ids`, `metering.inference_calls` node-path snapshot (all FK-enforced/reconcilable), `mcp_server_tools.tenant_id`.
-- **Add all missing FKs** (composite tenant-scoped) called out across the maps; add tenant FKs on the two FK-less tenant tables.
+- **Justified denormalization only:** analytics rollups/MVs, `governance.holds.path_node_ids`, and `mcp_server_tools.tenant_id`.
+- **Add all missing FKs — and every intra-tenant FK is COMPOSITE (§7-#3):** `foreign key (tenant_id, <child>) references <schema>.<parent>(tenant_id, id)` (as `budget_nodes` already does for its self-FK). A single-column FK to a composite-PK table is banned — it needs a redundant `UNIQUE(id)` that *discards* the tenant-consistency guarantee (a child could point at a parent in another tenant). Only cross-tenant/global refs (`catalog.*`, `core.profiles`, `vault`) stay single-column.
+- **No polymorphic FKs (§7-#6):** every "type + generic id" pair (feature_policies.scope, settings.scope, quality_signals/feedback.subject, redactions.subject) becomes **per-target nullable FK columns + a CHECK that exactly one is set** (the `api_keys` XOR pattern). Truly can't-FK cases are explicitly documented as app-enforced, not counted as "FK-closed".
 
 ---
 
@@ -242,32 +249,27 @@ history, agents) — read each `#### <sub-domain>` as "→ lives in `<parent sch
 This blueprint covers every current screen (18 Seiki + 10 Torii) and the proposed-future scope (spaces/KB, document workspace/versions/lineage/redactions/comments/shares, prompt templates, governance policy editors, alerts, IdP/SCIM, agents/workflows, billing/seats, interaction-intelligence, §3c gated compute, device fleet/local models), with a schema-level security boundary replacing the per-table one.
 ---
 
-### 7. Required corrections from adversarial review (apply BEFORE build)
+### 7. Adversarial-review corrections — ALL APPLIED to §0–§6
 
-Two independent critics reviewed the §0–§6 design against the maps + live DB. The design is **SOLID** on coverage; these are the fixes it needs.
+Two independent critics reviewed the design against the maps + live DB (verdict: **SOLID** on coverage). Every finding below is now **folded into the design above** — this section is the ledger of what changed and where.
 
-**🔴 CRITICAL — must fix (security):**
+**🔴 CRITICAL (security) — applied:**
+1. **§3c ciphertext no longer client-readable.** `content.dataset_columns` keeps only schema-metadata + `compute_policy`; the encrypted values moved to **`vault.dataset_secrets`** (deny-all). No `dek_ref`/ciphertext ever reaches `authenticated`. *(§2 vault + content)*
+2. **`history.past_*` twins secured.** Every twin carries `tenant_id` + `ENABLE`/`FORCE` RLS with the source's tenant predicate; the whole `audit` schema (which holds history) is deny-all/service_role. *(§2 history, §4)*
 
-1. **`content.dataset_columns.encrypted_value` must NOT be client-SELECTable.** As drafted the table sits under the tenant-wide `authenticated SELECT` policy, so the §3c ciphertext + `dek_ref` would be readable by *any* tenant member — breaking "compute without exposing" and the no-key-exfiltration premise. **Fix:** move the ciphertext to `vault.*` (deny-all) keyed by `(tenant_id, column_id)`, **or** keep it in `content` with `REVOKE SELECT (encrypted_value, dek_ref) FROM authenticated` **and** a sensitivity/space-aware row policy (not tenant-wide). Decrypt+compute only in the service_role boundary; never return ciphertext/`dek_ref` to `authenticated`.
+**🟠 HIGH — applied:**
+3. **All intra-tenant FKs are composite** `(tenant_id, <child>) → (tenant_id, id)`; single-col FK to a composite PK is banned. *(§5)*
+4. **User feedback split out of the ledger:** machine signals stay `metering.quality_signals` (service_role-write); explicit user feedback → **`metering.feedback`** with an owner-INSERT policy so the interaction loop can write. *(§2 metering)*
 
-2. **`audit.past_*` twins need `tenant_id` + RLS.** The existing history shape has no `tenant_id` and no policy; generalized to `past_budget_nodes`/`past_role_permissions`/etc. it would hold another tenant's budgets + RBAC grants with **zero declared security posture** → cross-tenant leak if ever exposed. **Fix:** add `tenant_id` to every `past_<tenant-table>` (backfilled from the source key), `ENABLE`+`FORCE` RLS with the source's tenant predicate, default the whole `audit` schema to **deny-all / service_role-only**, and declare its posture explicitly in §4.
+**🟡 MEDIUM — applied:**
+5. **`document_status` split** into a stable `document_lifecycle` enum + a free-form `stage` column (transient pipeline steps never churn the enum). *(§2 documents)*
+6. **No polymorphic FKs** — per-target nullable FK columns + exactly-one CHECK (scope/subject everywhere). *(§5)*
+7. **No second cost store** — `content.messages` drops cost/model copies, reads through the ledger. *(§2 messages, Q4)*
+8. **§3c compute runtime homed** — `content.compute_jobs` + `content.query_grants`, each compute emits a quality-signal + audit row. *(§2 content)*
+9. **Redactions store no raw original** — only placeholder + offsets; reversible mapping → **`vault.redaction_map`**. *(§2 content + vault)*
+10. **Advanced RAG modes** get reserved stub stores (`content.graph_edges`, `content.summary_nodes`, v2). *(§2 space_rag_profiles)*
 
-**🟠 HIGH:**
-
-3. **Composite FKs, not single-column.** §5 mandates `pk(tenant_id,id)` but lists intra-tenant FKs single-column (`holds.budget_node_id`, `inference_calls.hold_id`, `messages.conversation_id`, `siem_cursors.channel_id`, …). A single-col FK to a composite-PK table is impossible without a redundant `UNIQUE(id)` that *discards the tenant-consistency guarantee*. **Fix:** every intra-tenant FK is composite — `foreign key (tenant_id, budget_node_id) references governance.nodes(tenant_id, id)`. Only cross-tenant/global refs (`catalog.*`, `core.profiles`, `vault`) stay single-column.
-
-4. **`metering.quality_signals` is over-merged.** `signal_class='explicit'` = user feedback (thumbs) written by a real user; under blanket service_role-write-only the interaction-intelligence loop can't insert. **Fix:** split explicit user signals into an owner-INSERT table (`with check profile_id = auth.uid()`), **or** a per-row INSERT policy letting `authenticated` insert only `signal_class='explicit'` bound to their own `actor_id`; implicit/system stay service_role.
-
-**🟡 MEDIUM:**
-
-5. **`document_status` enum will churn** — its transient pipeline stages (parsing/chunking/embedding…) are exactly what gets renamed/removed, and Postgres can't DROP an enum value (only add). **Fix:** stable lifecycle enum `{pending, processing, completed, failed, archived}` + a separate nullable `stage` column (lookup or progress field) for the fine-grained step. Same caution for any status enum encoding a transient state machine.
-6. **Polymorphic `scope_id`/`subject_id`/`ref_id`** (feature_policies, settings, quality_signals, governance.nodes.ref_id) can't be FK-enforced — orphan-prone. **Fix:** per-target nullable FK columns + a CHECK that exactly one is set (the `api_keys` XOR pattern), or explicitly document as app-enforced (don't count them under "all FKs added").
-7. **`content.messages.cost_usd`/`model_id` are an unsanctioned second cost store** that will drift from `metering`. **Fix:** read-through join to metering (or a view), or add to the §0.4 sanctioned-denorm list with a reconciliation trigger + immutable-from-clients.
-8. **§3c compute runtime has no home** — column encryption exists but "Ask-the-data" queries/grants/audit don't. **Fix:** reserve `content.compute_jobs` (dataset, requester, query, aggregate/k-anon result, status) + `query_grants` (column × role × op); every compute emits a `metering.quality_signal` + `audit.audit_events` row.
-9. **`content.redactions` must not store the raw original** in a non-vault schema (contradicts the one-way-placeholder DLP posture). **Fix:** store only type + placeholder + span offsets in `content`; any reversible original→placeholder mapping goes in `vault` (service_role, per-tenant DEK).
-10. **`space_rag_profiles.advanced_modes[]`** is a toggle with no backing store. **Fix:** reserve stub tables (`content.graph_edges`, `content.summary_nodes`, multi-vector plan) or explicitly scope them v2 with a note.
-
-**🟢 LOW:** add `vault.router_credentials.custody {gateway|device}` (toggle home, only `gateway` valid v1); confirm device-session binding folds into `devices` or add `device.device_sessions`, + `last_active_at` for seat idle-reclaim; reserve `core.membership_requests` (onboarding M2); denormalize `tenant_id` onto `device.mcp_server_tools` so isolation doesn't depend on every policy remembering the parent join.
+**🟢 LOW — applied:** `vault.router_credentials.custody {gateway|device}`; denormalized `tenant_id` on `mcp_server_tools`. **Deferred (documented):** `device.device_sessions` (confirm folds into `devices`) + `last_active_at` for seat idle-reclaim; `core.membership_requests` (onboarding M2) — reserved as future seams.
 
 ---
 

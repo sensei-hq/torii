@@ -104,25 +104,28 @@ begin;
   do $$
   declare
     t          uuid := '00000000-0000-0000-0000-000000000000';
-    owner_role uuid := (select id from core.roles where tenant_id = t and key = 'owner');
-    admin_role uuid := (select id from core.roles where tenant_id = t and key = 'admin');
+    owner_role uuid := (select role_id from core.effective_roles where tenant_id = t and key = 'owner');
+    admin_role uuid := (select role_id from core.effective_roles where tenant_id = t and key = 'admin');
     escalating int;
   begin
     -- Capabilities `owner` grants that `admin` does not → the subset check denies them.
+    -- Read via core.effective_* views: default roles/perms are shared rows (tenant_id
+    -- NULL) exposed per-tenant through the views (project-rbac-shared-defaults) — the
+    -- base tables carry no concrete-tenant rows, so resolution MUST go through them.
     select count(*) into escalating
-      from core.role_permissions o
+      from core.effective_role_permissions o
      where o.role_id = owner_role and o.tenant_id = t
        and not exists (
-         select 1 from core.role_permissions a
+         select 1 from core.effective_role_permissions a
           where a.role_id = admin_role and a.tenant_id = t
             and a.capability = o.capability);
     if escalating = 0 then
       raise exception 'FAIL escalation-subset: owner adds no capability beyond admin — guard would wrongly ALLOW admin→owner';
     end if;
     -- The canonical escalation cap must be owner-only (admin cannot self-grant it).
-    if not exists (select 1 from core.role_permissions
+    if not exists (select 1 from core.effective_role_permissions
                      where role_id = owner_role and tenant_id = t and capability = 'tenant.manage')
-       or exists (select 1 from core.role_permissions
+       or exists (select 1 from core.effective_role_permissions
                     where role_id = admin_role and tenant_id = t and capability = 'tenant.manage') then
       raise exception 'FAIL escalation-subset: tenant.manage is not owner-only as expected';
     end if;

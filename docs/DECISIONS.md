@@ -1,4 +1,4 @@
-# Strategos — Authoritative v1 Decision Record
+# Torii — Authoritative v1 Decision Record
 
 > **Status:** RATIFIED 2026-07-23 (Jerry). This document is the **single source of truth** for v1
 > scope, architecture, security, and governance. Where any other doc (README "Open decisions",
@@ -28,7 +28,7 @@ The built F1 schema currently has critical holes (any `authenticated` user can `
 - **W1 — Write path (gateway-mediated).** Privileged tables — roles, budgets, routing chains, governance/classification, `space_members`, catalog overrides — become **`service_role`-write-only**. Web clients get `SELECT` + writes **only** on clearly self-owned benign rows (own draft docs, own preferences). Every privileged mutation goes through the central gateway (or a thin authz API) that enforces the permission matrix server-side. No direct PostgREST writes to privileged tables.
 - **W2 — Budget enforcement (hard reserve).** The gateway does a pre-call **reserve → commit** against a `service_role`-only ledger. Nodes flagged `hard` cannot be exceeded even under concurrency; `soft` nodes allow bounded overshoot + alert. Client-facing metering is read-only. The org→dept→team→user cascade ("every ancestor must have headroom") + `spent_amount` rollup are enforced in the gateway/DB, not prose. **Budgets bind to identities/nodes in the hierarchy — never to credentials or keys.** At execution the gateway resolves the authenticated caller (person or service account) → their budget node(s) → runs the cascade; which provider credential (BYOK key or OAuth account) fulfils the call is irrelevant to metering.
 - **W3 — JWT verification (RS256/JWKS).** C1 verifies Supabase JWTs with an asymmetric **verify-only** public key from the JWKS endpoint — not a shared HS256 secret. Confirm/enable asymmetric signing on the Supabase project.
-- **W4 — Key custody (F3 before real keys).** The DEK/KEK envelope vault (F3) **must** land before C1 handles any real BYOK key — no deployed phase holds plaintext provider keys. Production KEK lives in a cloud **KMS/HSM**; `STRATEGOS_KEK` env var is **local-dev only**. F3 gets a real phase plan, sequenced before C1 goes live.
+- **W4 — Key custody (F3 before real keys).** The DEK/KEK envelope vault (F3) **must** land before C1 handles any real BYOK key — no deployed phase holds plaintext provider keys. Production KEK lives in a cloud **KMS/HSM**; `TORII_KEK` env var is **local-dev only**. F3 gets a real phase plan, sequenced before C1 goes live.
 - **W5 — Secret/PII leak prevention (redaction/DLP).** Accidental secrets/keys/tokens/passwords/PII in documents or chat must **never leak during (agentic) interactions**. Two layers: **(1) redact-at-rest** — during C5 ingestion, detect + redact secrets/PII in the normalized markdown **and before embedding**, so the vector store/index never holds raw secrets (**one-way placeholders only for v1** — no reversible mapping store; reversible un-redaction for authorized roles is post-v1); **(2) redact-in-flight** — scan + redact prompts, retrieved context, agent messages, and **MCP tool inputs/outputs** before they egress to any model or tool (cloud especially). Detectors: high-recall secret scanners (API-key/token patterns + entropy) + PII classifiers — use vetted libraries, not hand-rolled regex. Enforced consumer-side (C4 wrapper) at three points: C5 ingestion, C1/C4 inference, X1 tool egress. Every redaction is a quality/audit signal (§3b).
 - **Apply-without-asking:** `audit_events` INSERT binds `actor_id = auth.uid()` (or is `service_role`-only, gateway-emitted); `config.feature_states` gains `tenant_id` + RLS and **revokes anon writes**; per-request **device-status check** on the C1 proxy hot path (a revoked device with a live JWT cannot keep spending); Supabase Realtime channels are RLS-scoped; offline usage/audit buffers are signed + idempotent (anti-replay/anti-under-report).
 - **At-rest key custody is already correct** (`router_keys`/`tenant_keys` RLS deny-all + `service_role`-only + AES-256-GCM envelope, C1 sole decryptor) — keep it.
@@ -36,11 +36,11 @@ The built F1 schema currently has critical holes (any `authenticated` user can `
 ## 3. Architecture
 
 - **Gateway crate:** pin **`v0.4.6`** (latest; six `sensei-*` crates: `kernel`, `gateway`, `cloud-providers`, `local-engine`, `local-providers`, `kokoro`). There is **no** `gateway-embedded` and **no** `InferenceAdapter` (deleted → capability-segregated traits `ChatModel`/`EmbedModel`/…). Fix the monorepo `Cargo.toml` `[patch]` and every C/D doc (C1 `v0.2.18`, D2 `gateway-embedded`+`InferenceAdapter`, C5 `fastembed`, clients-buildout `v0.2.23`) to the real names + version.
-- **Crate enhancements (owned in this project — not a separate session).** Each is tracked as a **gateway-repo issue (create → implement → close)** and released via the lockstep tag bump (`develop → make bump → main → develop`, see [[feedback_gateway_release_flow]]); each is **sequenced before its dependent Strategos phase**. Known enhancements: (a) per-step `plane` + execution-location on `ChainEntry`/`Attempt`/trace (D3/C2 unified split-plane trace); (b) **OAuth/bearer provider credential** support in `sensei-cloud-providers` if the adapter is key-only today (for Anthropic-style OAuth accounts). **Rerank** = a separate C5 service for v1 (crate `TextRerank` is a reserved `Unsupported` variant — a `RerankModel` trait is a later optional issue). **C4 governance** = a consumer-side wrapper around `execute`/`execute_stream` (the engine has no in-request hook) — correct the "inline guardrails" wording.
+- **Crate enhancements (owned in this project — not a separate session).** Each is tracked as a **gateway-repo issue (create → implement → close)** and released via the lockstep tag bump (`develop → make bump → main → develop`, see [[feedback_gateway_release_flow]]); each is **sequenced before its dependent Torii phase**. Known enhancements: (a) per-step `plane` + execution-location on `ChainEntry`/`Attempt`/trace (D3/C2 unified split-plane trace); (b) **OAuth/bearer provider credential** support in `sensei-cloud-providers` if the adapter is key-only today (for Anthropic-style OAuth accounts). **Rerank** = a separate C5 service for v1 (crate `TextRerank` is a reserved `Unsupported` variant — a `RerankModel` trait is a later optional issue). **C4 governance** = a consumer-side wrapper around `execute`/`execute_stream` (the engine has no in-request hook) — correct the "inline guardrails" wording.
 - **Capabilities are chain-managed (the universal mechanism).** Every capability — chat/reasoning, **embedding**, (later) rerank — resolves through a **fallback chain** bound per capability (and per space/role). The models bound into a chain determine what it does: a chain with a reasoning model does reasoning; an **embedding chain** with embedding models does embeddings. The same fallback / circuit-breaker / **per-step plane (local|cloud)** machinery applies to embedding chains exactly as to chat chains. Adapters (embedded llama.cpp, ORT, cloud providers, HTTP Ollama) are just **registered into the registry**; the chain selects them per capability. **Capability is an attribute of the MODEL, not the provider** — one adapter/provider serves many models, each with its own capabilities (chat/reasoning, embed, rerank, vision, tool-use) tracked in `model_capabilities`; a chain step's behavior derives from its **bound model's** capability. So the *same* embedded/Ollama/cloud provider can supply a reasoning model to a chat chain and an embedding model to an embedding chain. **No capability is hardwired to a provider or adapter** — models/endpoints/chains are operator-managed config (see [[project-gateway-no-hardcoded-ops]]).
 - **Local inference/embeddings — desktop = EMBEDDED (in-process, no daemon).** These adapters are what **local chain steps** bind to. `sensei-local-providers` runs models **in-process** via `EmbeddedLlamaAdapter` (llama.cpp; implements **chat and embed**; runs GGUF, reusing Ollama- or HF-hub-pulled model bytes — "the way the ollama router does") with `OrtAdapter` (ONNX) as an embed option; the model registry handles pull (Managed → Ollama → HF). **This is the desktop local plane — no external Ollama daemon required.** Separately, `sensei-cloud-providers::OllamaAdapter` is **Ollama over HTTP** to a running server (a router/cloud option, *not* the desktop-embedded path). **v1 desktop local = embedded in-process**; pick a **1024-dim** embedding model (a GGUF embed model for `EmbeddedLlamaAdapter`, or ONNX for `OrtAdapter`) to match `document_embeddings vector(1024)`. `fastembed` is disabled — don't use it. (GH-3 resolved — no blocking crate enhancement.)
 - **Provider credential vault (F3):** stores two credential **types** per router — **API key** (BYOK static secret) **and OAuth account** (e.g. Anthropic OAuth: access + refresh token, expiry, scopes, token endpoint). Both encrypted at rest (DEK/KEK envelope), `service_role`-only, never exposed to clients. OAuth accounts are **auto-refreshed before expiry** by a background refresher (F3/central); the Connections screen supports connect-via-OAuth alongside paste-a-key. Storage generalizes `router_keys` → **`router_credentials`** (`type = api_key | oauth`). **Credentials carry no budget** (§2 W2). **OAuth provider scope (v1): Anthropic only** — build + test the OAuth connect/refresh flow for Anthropic; all other providers use BYOK API keys in v1 (generalize later). **AMENDED 2026-07-27 (OAuth acquisition method):** Anthropic offers **no self-serve third-party OAuth client_id** — the community "subscription" PKCE flow reuses the **public Claude Code client_id** on **unofficial** endpoints, and Anthropic's ToS restricts subscription tokens to **official clients**, so harvesting them into a multi-tenant SaaS risks customer **account bans** and breakage. **v1 connect = paste a bearer token** (`claude setup-token` → `CLAUDE_CODE_OAUTH_TOKEN`, Anthropic's sanctioned non-official-client token; long-lived → no refresh worker). **PKCE is still supported but config-driven** (client_id + authorize/token URLs operator-supplied, never hardcoded — [[project-gateway-no-hardcoded-ops]]) and **off by default**; it lights up only with a legitimate client_id (an official Anthropic app, or self-host at the operator's own ToS risk) — **not** enabled for customer traffic. Plan: [[f3-oauth-credential-vault-plan]].
-- **Identity/sign-in (F2):** **magic link (passwordless email) is the primary v1 sign-in** — simplest, Supabase-native (confirmed 2026-07-23); OAuth (Google/GitHub) optional. The region + IdP shown in the mockups are **examples / operator-config, not baked constants**. **SAML SSO + SCIM are fast-follow (v1.x)** — onboarding designs a stubbed SSO step. JWT verification is RS256/JWKS (§2 W3).
+- **Identity/sign-in (F2):** **magic link (passwordless email) is the primary v1 sign-in** — simplest, Supabase-native (confirmed 2026-07-23) — and the **registration / new-account shape**; **email+password is a supported secondary** (set/reset password + password sign-in) — **AMENDED 2026-07-31, see §10.2**; OAuth (Google/GitHub) optional. The region + IdP shown in the mockups are **examples / operator-config, not baked constants**. **SAML SSO + SCIM are fast-follow (v1.x)** — onboarding designs a stubbed SSO step. JWT verification is RS256/JWKS (§2 W3).
 - **Document ACL (v1):** space membership + fixed 4-level classification **only**. **Retire** the dead `access_groups` / `group_levels` / `document_access` recursive-ACL tables + `user_accessible_documents` view (currently unenforced — dormant security surface).
 - **One authoritative ledger:** consolidate on the crate-native **`inference_calls`** (`service_role`-write); add org→dept→team→user attribution columns + a rollup path; **retire** `gateway_tasks` cost duplication. This is both the budget source of truth and the O1/O2 analytics source.
 - **Build model:** **author ALL missing module specs + phase plans up front** (12 unplanned modules: F3, C2, C3, C4, C5, D4, W1, W3, W5, O2, O3, X1; and Phases 3/3.5/4/5), to build-ready depth (observable AC, no TBDs). Then run the build **autonomously with a human checkpoint after each phase**. Secrets/approvals (Supabase signing config, `SUPABASE_JWT_*`, paid-provider-call authorization) are front-loaded.
@@ -134,12 +134,12 @@ Author the **full v1 surface**: **new screens** — Tools & MCP, API-keys/servic
 | Tauri bundle id | `dev.strategos.console` | **`dev.torii.app`** |
 | Desktop brand string | "Strategos" | **"Torii"** |
 | Web-portal brand string | "Strategos Admin" | **"Seiki"** |
-| Central Supabase project | `strategos` | **`seiki`** *(deferred — destructive local reset)* |
-| Env prefix | `STRATEGOS_*` | `TORII_*` (engine) *(deferred with DB)* |
+| Central Supabase project | `strategos` | **`torii`** *(umbrella = torii; local rebrand 2026-07-31)* |
+| Env prefix | `STRATEGOS_*` | `TORII_*` (engine) *(done 2026-07-31 — legacy fallbacks removed)* |
 
 **Confirmed calls (Jerry, 2026-07-25):** the *central* gateway daemon is **torii** (torii is the whole engine, not merely the local piece); the shared npm scope is **`@torii/*`**; the two apps split by brand (`@seiki/admin`, `@torii/desktop`), with the shared kit under torii and consumed by both.
 
-**Sweep order (safe tiers, commit each):** T1 npm scope + package names + imports → T2 crate rename → T3 Tauri id + brand strings + env. **Deferred:** the Supabase `project_id` rename (resets the local DB — do at a coordinated `dbd reset`) and the ~164 doc files (context-dependent: Strategos→Torii for engine/app/gateway docs, →Seiki for web-SaaS/admin/billing docs). The separate-Supabase-instances decision stands (see the rebrand memory).
+**Sweep order (safe tiers, commit each):** T1 npm scope + package names + imports → T2 crate rename → T3 Tauri id + brand strings + env. **Done 2026-07-31 (umbrella = torii, no strategos in code/config/docs):** the env-prefix removal (`STRATEGOS_*` fallbacks dropped) and the doc-prose sweep (Strategos→Torii for engine/gateway/desktop docs, →Seiki for admin/web-SaaS docs); the Supabase `project_id` rebrand is executed at a coordinated `dbd reset`. **Kept:** the mockups' `StrategosUI`/`StrategosAPI` functional identifiers (design reference + a byte-identical `uploads/Strategos-2` backup) and this section's rename-mapping (documents the old→new). The separate-Supabase-instances decision stands (see the rebrand memory).
 
 ## 9. Auth + deployment architecture (RATIFIED 2026-07-25)
 
@@ -171,3 +171,48 @@ Docs: `docs/ops/supabase-configuration.md`, `docs/ops/deployment.md`. Config:
 `apps/admin/wrangler.jsonc`, `services/gateway/{Dockerfile,fly.toml}`. **Prod build:** the
 `sensei-gateway` git dep is pinned to `tag = "v0.4.6"`; the Dockerfile strips the dev
 `[patch]` (local sibling repo) so it builds from the tag.
+
+## 10. Amendments — 2026-07-29 (screen-audit reconciliation)
+
+Ruled by Jerry after the build-vs-mock screen audit (`specs/{seiki,torii}-screens/README.md`). The
+audit confirmed **most "open questions" were already settled** here + in `plans/roadmap.md` — the
+STUB/PARTIAL/MISSING screen states are **unbuilt later phases (P7–P13), not undecided scope**. Five
+genuinely-open / deviation items resolved:
+
+1. **Billing / monetization = v1.x fast-follow (NOT v1).** The budget-hierarchy tree (hard
+   reserve→commit + increase-requests) is v1 and built. The **commercial** layer — invoices,
+   seats-as-licenses, pricing tiers, payment provider (Stripe et al.) — is **deferred to launch /
+   v1.x**, gated on the W5/P14 pricing decision. The Budgets & billing screen shows the budget tree
+   only + an honest "plans & invoices at launch" note. No billing schema / payment integration in v1.
+2. **Auth = magic-link primary + email/password secondary. AMENDED 2026-07-31.** The original
+   ratification treated email+password as a *rejected* "P1a shortcut"; that is **overturned** — the
+   review (`docs/code-review.md` H2) flagged the shipped desktop email+password as a shipped-vs-agreed
+   discrepancy, and the resolution is to **amend the decision, not rip out the code**. The v1 auth
+   model for **both Seiki (admin) and Torii (desktop)**:
+   - **Magic link (passwordless email) is PRIMARY** — the default sign-in *and* the **registration /
+     new-account shape**. This is the front-and-centre path.
+   - **Email + password is a SUPPORTED secondary** — a user may **set / reset a password** (Supabase
+     reset-password email) and **sign in with email + password**. It is a first-class, blessed option,
+     not a shortcut. Rationale: password login is a legitimate convenience for returning users and
+     reset is a table-stakes recovery path; passwordless-only over-constrained the product.
+   - **GitHub / Google OAuth** via the `torii://` deep link (§9) stays **optional**.
+   **Remaining reconcile delta:** Seiki already implements this (magic-link primary + reveal-password +
+   reset). **Torii desktop is password-ONLY today (no magic-link)** — add magic-link as primary + the
+   register shape + a reset-password path (Torii WS-5 auth-polish). Not a v1-ship blocker on its own.
+3. **API keys / service accounts = the Organization screen** (confirms §1.2; overrides the mockup's
+   separate `view-apikeys.jsx`). The build placed "API identities" inside Connections — **move it to
+   Organization** (identity + roles + keys in one home); Connections stays pure outbound provider
+   credentials.
+4. **Tools & MCP "Enforced server-side" label = honesty fix now.** Tool-calling + enforcement is
+   X1/**P11 (unbuilt)**; `chat.rs` invokes no tools → **no live bypass** (the audit's "security gap"
+   framing is downgraded). The allow-list resolver is pre-built + tested (default-deny,
+   `tests/tools.sql`). Action: reword the admin label to *"allow-list saved · enforced at tool-call
+   time (ships with the Tools runtime)"*; keep the config screen; **P11 must wire the existing
+   resolver into the tool-call path** (roadmap note).
+5. **Next build focus = C5 RAG + document center (P7).** Confirmed next major phase per the roadmap —
+   the flagship data-intelligence surface and the shared unblock for Torii Library/Ask/Playground
+   retrieval (P9) and Seiki Spaces & KB (P8). Precede it with the small reconcile batch (items 3+4 +
+   the billing note + a Torii-auth ticket).
+
+*(Doc note: `BUILD-PROGRESS.md` is stale — it lists the W1 admin portal as "next" though it is
+substantially built with real endpoints; reconcile when convenient.)*

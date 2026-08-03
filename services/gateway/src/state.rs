@@ -44,25 +44,33 @@ pub struct AppState {
     /// F3 per-tenant BYOK credential cache. `None` vault ⇒ BYOK disabled (no KEK) —
     /// `get` returns an empty map and the engine uses the platform/env keys.
     pub tenant_keys: TenantKeyCache,
+    /// C5 RAG · config-driven query/document embedder (the single mock↔prod seam). The same
+    /// `Arc<dyn Embedder>` backs both the ingest pipeline and the retriever.
+    pub embedder: Arc<dyn crate::rag::embed::Embedder>,
+    /// C5 RAG · object storage for document originals + derived artifacts (signed upload/download).
+    pub object_store: Arc<dyn crate::rag::storage::ObjectStore>,
+    /// C5 RAG · ingestion orchestrator (parse → redact-at-rest → chunk → embed → index), spawned
+    /// per `POST /v1/documents/:id/ingest`.
+    pub ingestor: Arc<crate::rag::ingest::Ingestor>,
+    /// C5 RAG · hybrid retrieval engine (dense pgvector + BM25 fused by RRF, isolation in-query).
+    pub retriever: Arc<dyn crate::rag::retrieve::RetrievalEngine>,
 }
 
 pub type SharedState = Arc<AppState>;
 
-/// Build the F3 BYOK cache, choosing the KEK source by deployment (`TORII_ENV`, `STRATEGOS_ENV`
-/// fallback, default `dev` — the same var the rest of the gateway reads):
+/// Build the F3 BYOK cache, choosing the KEK source by deployment (`TORII_ENV`, default `dev` —
+/// the same var the rest of the gateway reads):
 ///
 /// - **prod** — the KEK is read from **Supabase Vault** ([`SupabaseVaultKekProvider`], torii#17)
 ///   under the secret named by `TORII_KEK_VAULT_SECRET` (default `torii_kek`); it never sits raw
 ///   in the process env. A raw env `TORII_KEK` is refused in prod (the crate's gap #1).
-/// - **dev / anything else** — a base64 env KEK (`TORII_KEK`, legacy `STRATEGOS_KEK` fallback).
+/// - **dev / anything else** — a base64 env KEK (`TORII_KEK`).
 ///
 /// Any failure (missing/invalid KEK, unreadable vault secret) disables BYOK without failing
 /// startup: the cache is built with no vault so platform/env keys still serve — a bad BYOK setup
 /// never denies inference.
 pub async fn build_tenant_key_cache(pool: PgPool) -> TenantKeyCache {
-    let env = std::env::var("TORII_ENV")
-        .or_else(|_| std::env::var("STRATEGOS_ENV"))
-        .unwrap_or_else(|_| "dev".to_string());
+    let env = std::env::var("TORII_ENV").unwrap_or_else(|_| "dev".to_string());
     let kek = resolve_kek(&pool, &env).await;
     TenantKeyCache::new(kek.map(|k| Vault::new(k, PostgresVaultStore::new(pool))))
 }
@@ -83,9 +91,7 @@ async fn resolve_kek(pool: &PgPool, env: &str) -> Option<GatewayKek> {
             }
         }
     } else {
-        match EnvKekProvider::from_env("TORII_KEK", Profile::Dev)
-            .or_else(|_| EnvKekProvider::from_env("STRATEGOS_KEK", Profile::Dev))
-        {
+        match EnvKekProvider::from_env("TORII_KEK", Profile::Dev) {
             Ok(p) => {
                 tracing::info!("F3 vault: enabled (dev env KEK)");
                 Some(GatewayKek::Env(p))

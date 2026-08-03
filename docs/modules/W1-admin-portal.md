@@ -2,7 +2,7 @@
 
 > Reconciled to [`../DECISIONS.md`](../DECISIONS.md) 2026-07-23.
 
-**Plane:** Web · **Status:** Planned · **Depends on:** W4, F2, F3, C1–C5, O3, X1 · **Domain:** `admin.strategos.sensei-hq.com`
+**Plane:** Web · **Status:** Planned · **Depends on:** W4, F2, F3, C1–C5, O3, X1 · **Domain:** `seiki.sensei-hq.com`
 
 ## Purpose
 

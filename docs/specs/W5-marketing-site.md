@@ -1,7 +1,7 @@
 # W5 · Marketing site — Spec
 
 **Module:** [W5](../modules/W5-marketing-site.md) · **Status:** Planned (own later phase) · **Depends on:** W4 (light — token vocabulary only) · **Enables:** top-of-funnel conversion into F2 sign-up / sales pipeline
-**Date:** 2026-07-23 · **Plane:** Web (public) · **Tech:** SvelteKit (prerendered/SSR) → Cloudflare Pages · **Domain:** `strategos.sensei-hq.com`
+**Date:** 2026-07-23 · **Plane:** Web (public) · **Tech:** SvelteKit (prerendered/SSR) → Cloudflare Pages · **Domain:** `torii.sensei-hq.com`
 
 > Reconciled to [`../DECISIONS.md`](../DECISIONS.md) (RATIFIED 2026-07-23). This is the **public marketing app** built from the mockups under `docs/mockups/components/*.jsx` — a **separate codebase** from the product apps (`app/*.jsx` admin/desktop consoles). Per DECISIONS §6, `components/*` is the W5 marketing app and is explicitly **out of** the canonical product-UI set. This module carries **zero tenant data and zero F1 database access**; the three product calls it depends on (content model, pricing model, funnel model) are flagged in §8/§10 as **pre-build product decisions** and gate the phase.
 
@@ -145,7 +145,7 @@ Additional settled points:
 
 ## 9. Acceptance criteria (observable)
 
-1. `strategos.sensei-hq.com/` serves prerendered HTML (view-source shows hero copy + section content without JS execution) and passes a Lighthouse SEO+perf check (LCP within target on a cold cache).
+1. `torii.sensei-hq.com/` serves prerendered HTML (view-source shows hero copy + section content without JS execution) and passes a Lighthouse SEO+perf check (LCP within target on a cold cache).
 2. All ratified sections render: hero, stat band, Playground/Governance/Observability/Enterprise showcases, pricing, closing CTA, footer — matching the `components/*.jsx` composition and using W4 brand tokens in both light and dark skins.
 3. Nav/CTA links resolve to the **env-configured** `PUBLIC_APP_URL`/`PUBLIC_ADMIN_URL`/`PUBLIC_SIGNUP_URL` (verifiable by changing an env var and re-deploying — no hardcoded product URLs in the bundle).
 4. `/contact` submission with a valid Turnstile token returns `202` and delivers a lead to the configured sink; a submission with a missing/invalid token returns `400` and is **not** delivered.
@@ -162,8 +162,8 @@ Additional settled points:
 1. **Pricing tier definition (copy, not architecture).** The concrete tier names, feature-splits, and price points for `/pricing` require product/marketing input — there is **no pricing page in the current mockups** (mockup-review §43 flags it as `TODO`); this spec defines the surface and CTA routing (D2) but not the editorial tier content. *This is the one genuine content gap blocking the pricing page.*
 2. **Sales sink target.** Which CRM/inbox `/api/lead` delivers to (plain transactional email vs a specific CRM webhook) — an ops/GTM choice; the contract (§4.3) is sink-agnostic.
 3. **Analytics/consent vendor.** Cloudflare Web Analytics (cookieless, no banner) vs a cookie-based tool (needs a consent banner) — minor; defaults to cookieless.
-4. **Domain/subdomain final form.** Seed uses `strategos.sensei-hq.com`; confirm apex vs `www` and the `app.`/`admin.` product subdomains for the env links.
+4. **Domain/subdomain final form.** Seed uses `torii.sensei-hq.com`; confirm apex vs `www` and the `app.`/`admin.` product subdomains for the env links.
 
 ## Mockup grounding
 
-Built from `docs/mockups/components/*.jsx` (canonical W5 marketing app per DECISIONS §6): `app.jsx` (page composition), `chrome.jsx` (Nav / Hero "Every model. One governed doorway." / StatBand / Footer), `enterprise.jsx` (security features, single-/multi-tenant deployment modes, whitelabel, CTA), `governance.jsx`, `observability.jsx`, `pg-*.jsx` (Playground showcase), `data.jsx`, `icons.jsx`/`logo-marks.jsx`, plus `Strategos.html` and `assets/site*.css`. **Gap:** the mockups have **no pricing page** — it is a new surface this spec introduces (§4.1, §9, §10 Q1). Do **not** invent product screens beyond this ratified marketing surface.
+Built from `docs/mockups/components/*.jsx` (canonical W5 marketing app per DECISIONS §6): `app.jsx` (page composition), `chrome.jsx` (Nav / Hero "Every model. One governed doorway." / StatBand / Footer), `enterprise.jsx` (security features, single-/multi-tenant deployment modes, whitelabel, CTA), `governance.jsx`, `observability.jsx`, `pg-*.jsx` (Playground showcase), `data.jsx`, `icons.jsx`/`logo-marks.jsx`, plus `Torii.html` and `assets/site*.css`. **Gap:** the mockups have **no pricing page** — it is a new surface this spec introduces (§4.1, §9, §10 Q1). Do **not** invent product screens beyond this ratified marketing surface.

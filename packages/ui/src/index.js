@@ -13,6 +13,7 @@ export { registerShellCommands } from './lib/commands.js'
 // Zen-Sumi component kit (ported from mockups/atoms.jsx onto Rokkit named tokens)
 export { default as Card } from './lib/Card.svelte'
 export { default as CardHead } from './lib/CardHead.svelte'
+export { default as AlertsCard } from './lib/AlertsCard.svelte'
 export { default as PageHeader } from './lib/PageHeader.svelte'
 export { default as Meter } from './lib/Meter.svelte'
 export { default as Glyph } from './lib/Glyph.svelte'

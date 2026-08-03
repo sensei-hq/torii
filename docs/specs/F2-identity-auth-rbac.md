@@ -204,7 +204,7 @@ pub enum AuthError { InvalidToken, Expired, TokenStale, DeviceRevoked, Forbidden
 
 ### 4.6 HTTP endpoints (C1 domain RPCs for the F2 domain — gateway-mediated writes)
 
-Per the RESOLVED default (DECISIONS §5a), all privileged RBAC/identity **mutations** go through **per-domain C1 control-plane RPCs `/rpc/<domain>/<action>`** that check capabilities server-side (no generic blob, no direct PostgREST write to privileged tables). **Reads** use PostgREST / `GET /v1/...` under RLS. Base host `https://api.strategos…`.
+Per the RESOLVED default (DECISIONS §5a), all privileged RBAC/identity **mutations** go through **per-domain C1 control-plane RPCs `/rpc/<domain>/<action>`** that check capabilities server-side (no generic blob, no direct PostgREST write to privileged tables). **Reads** use PostgREST / `GET /v1/...` under RLS. Base host `https://api.torii…`.
 
 | Method + path | Capability | Body / effect |
 |---------------|-----------|---------------|

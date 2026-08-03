@@ -27,7 +27,7 @@ milestone: Phase-0
 
 **Prerequisites (verify before Task 1):**
 
-- The sibling repos exist: `~/Developer/strategos/gateway` (the shared `sensei-*` engine repo — checked out at tag `v0.4.6`; **sibling of `monorepo/`**, hence the `../gateway` `[patch]` path in Task 1), `~/Developer/kavach`, and the Rokkit repo (the source of `@rokkit/*`).
+- The sibling repos exist: `~/Developer/gateway` (the shared `sensei-*` engine repo — checked out at tag `v0.4.6`; **sibling of `monorepo/`**, hence the `../gateway` `[patch]` path in Task 1), `~/Developer/kavach`, and the Rokkit repo (the source of `@rokkit/*`).
 - `bun`, Rust stable + `cargo`, and the Tauri 2 system deps are installed.
 - A Supabase project / local stack is reachable. `PUBLIC_SUPABASE_URL` + `PUBLIC_SUPABASE_ANON_KEY` are known (see `.env.local` at the Torii repo root). **Schema note:** Phase 0's default data path is the **mock** adapter; the Supabase adapter is a stub read (Task 4 Step 8). The `models` table it reads — and every privileged table — is reshaped by **F1-rework (P3)** per `DECISIONS.md §5` (role/permission matrix, `router_credentials`, `similarity_search`→`vector(1024)`, consolidated `inference_calls`). Do **not** harden or depend on the current insecure F1 schema in P0; the real data layer lands after P3.
 

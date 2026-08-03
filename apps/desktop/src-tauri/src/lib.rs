@@ -15,6 +15,12 @@ pub fn run() {
       commands::infer::infer,
       commands::infer::list_models,
       commands::infer::gateway_status,
+      commands::models::list_local_models,
+      commands::models::available_models,
+      commands::models::device_info,
+      commands::models::set_default_model,
+      commands::models::remove_model,
+      commands::models::pull_model,
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

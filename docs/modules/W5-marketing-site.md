@@ -2,7 +2,7 @@
 
 > Reconciled to [`../DECISIONS.md`](../DECISIONS.md) 2026-07-23.
 
-**Plane:** Web · **Status:** Planned · **Depends on:** W4 (light) · **Domain:** `strategos.sensei-hq.com`
+**Plane:** Web · **Status:** Planned · **Depends on:** W4 (light) · **Domain:** `torii.sensei-hq.com`
 
 ## Purpose
 
@@ -20,7 +20,7 @@ The marketing site.
 
 ## Reuse / source
 
-`docs/mockups/components/*.jsx` (the W5 marketing app — canonical per §6); `docs/mockups/Strategos.html` (hero/site), `docs/mockups/assets/site*.css`, screenshots (`hero.png`, `site-cta.png`).
+`docs/mockups/components/*.jsx` (the W5 marketing app — canonical per §6); `docs/mockups/Torii.html` (hero/site), `docs/mockups/assets/site*.css`, screenshots (`hero.png`, `site-cta.png`).
 
 ## Open questions
 

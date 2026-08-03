@@ -161,7 +161,7 @@ sequenceDiagram
 | **Crate: `InferenceRequest.credentials` + dispatch honoring it** | ⛔ to file (GH) | **critical path** — wrapper cutover blocks on the released tag |
 | `crypto::seal_credential` (write crypto) | ✅ exists, tested | — |
 | Operator tenant DEK | ✅ seeded | platform-fallback keys; other tenants lazy-provision |
-| `TORII_KEK`/`STRATEGOS_KEK` (dev KEK) | ✅ present | vault fails closed without it |
+| `TORII_KEK`/`TORII_KEK` (dev KEK) | ✅ present | vault fails closed without it |
 | Prod KMS/HSM KEK | ⛔ deferred (ops) | dev env-KEK only; not a blocker |
 | GH-2 — OAuth/bearer adapter (crate) | ⛔ | only for the OAuth credential type (excluded) |
 

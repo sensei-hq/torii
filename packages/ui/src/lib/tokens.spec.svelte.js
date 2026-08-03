@@ -13,4 +13,11 @@ describe('Zen-Sumi tokens', () => {
 		const [ramp, step] = stop.split('.')
 		expect(sumiPalette[ramp][step]).toBe('0.880 0.015 85')
 	})
+
+	it('--paper-edge (dark) resolves to the mockup DARK border value (subtle, not bright)', () => {
+		// mockup zs.css [data-theme=dark] --paper-edge = oklch(0.300 …); the app was 0.420 (too bright)
+		const stop = config.overrides['paper-edge'].dark // 'sumi.400'
+		const [ramp, step] = stop.split('.')
+		expect(sumiPalette[ramp][step]).toBe('0.300 0.010 50')
+	})
 })

@@ -24,7 +24,8 @@ begin
   where t.relrowsecurity = false
      or (
        -- deny-all, service_role-only tables: RLS on + 0 policies is the correct posture
-       t.tablename not in ('router_credentials', 'tenant_keys', 'siem_cursors')
+       t.tablename not in ('router_credentials', 'tenant_keys', 'tenant_key_archive', 'siem_cursors',
+                           'analytics_applied_calls')  -- O2: internal apply-marker, service_role-only
        and not exists (
          select 1 from pg_policies p
          where p.schemaname = t.schemaname and p.tablename = t.tablename

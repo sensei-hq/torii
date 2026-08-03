@@ -69,7 +69,7 @@ X1 is the **DDL author** (via F1 rework RW3) of the registry + allow-list tables
 
 ### 3.4 Seed
 
-The orphan `database/import/dev/staging/mcp_servers.jsonl` (currently two `stdio` demo servers — `strategos`, `filesystem`) is **wired into `loader.sql`** as platform-scoped `config.mcp_servers` rows (RW3 / RW11).
+The orphan `database/import/dev/staging/mcp_servers.jsonl` (currently two `stdio` demo servers — `torii`, `filesystem`) is **wired into `loader.sql`** as platform-scoped `config.mcp_servers` rows (RW3 / RW11).
 
 ### 3.5 RLS posture (per DECISIONS §2 W1)
 

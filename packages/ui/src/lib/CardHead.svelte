@@ -5,13 +5,13 @@
 	let { title = '', icon = '', meta = '', left, right } = $props()
 </script>
 
-<div class="flex items-center justify-between border-b border-paper-edge px-4 py-2.5">
+<div class="flex items-center justify-between border-b border-paper-edge px-6 py-4">
 	{#if left}
 		{@render left()}
 	{:else}
 		<span class="flex items-center gap-2">
 			{#if icon}<span class="{icon} h-3.5 w-3.5 text-ink-soft"></span>{/if}
-			<span class="text-xs font-semibold uppercase tracking-wider text-ink-mute">{title}</span>
+			<span class="text-xs font-medium uppercase tracking-widest text-ink-mute">{title}</span>
 		</span>
 	{/if}
 	{#if right}

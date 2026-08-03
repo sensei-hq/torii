@@ -5,17 +5,17 @@
 (function () {
   const { Chrome, Rail, WorkspaceSwitcher, MobileTabs } = window.StrategosShell;
   const { Icon } = window.StrategosIcons;
-  const { Switch, useWorkspace, PageHeader, ProviderDot } = window.StrategosUI;
-  const { MODELS } = window.StrategosData;
+  const { CardHead, ViewPad, Card, Switch, useWorkspace, PageHeader, ProviderDot } = window.StrategosUI;
+  const { MODELS } = window.StrategosAPI;
   const { StrategosWorkspace } = window;
   const { useState, useEffect } = React;
 
   const PREFS_KEY = 'zs-prefs';
-  const PREF_DEFAULTS = { model: 'auto', tier: 'balanced', cites: 'compact', retention: false, autotune: false, digest: true, autosave: true, locale: 'en-GB' };
+  const { PREF_DEFAULTS, NAV } = window.StrategosAPI.content.app;
 
   function Segmented({ value, options, onChange }) {
     return (
-      <div style={{ display: 'inline-flex', border: '1px solid var(--paper-edge)', borderRadius: 'var(--radius)', overflow: 'hidden', background: 'var(--paper)' }}>
+      <div className="inline-flex border rounded overflow-hidden bg-paper">
         {options.map((o, i) => {
           const on = value === o.v;
           return (
@@ -42,24 +42,24 @@
     };
 
     const Row = ({ ic, t, d, locked, children }) => (
-      <div className="flex items-center gap-4" style={{ padding: 'var(--space-4) var(--space-5)', borderTop: '1px solid var(--paper-edge)' }}>
-        <span className="glyph" style={{ width: 34, height: 34 }}><Icon name={ic} size={17} tone={locked ? 'mute' : 'soft'} /></span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="flex items-center gap-2"><span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--ink)' }}>{t}</span>{locked && <span className="dtag" title="Set by your administrator"><Icon name="lock" size={11} tone="mute" /> admin</span>}</div>
-          <div className="zs-body-sm" style={{ marginTop: 1 }}>{d}</div>
+      <div className="flex items-center gap-4 py-4 px-6 border-t">
+        <span className="glyph w-[34px] h-[34px]"><Icon name={ic} size={17} tone={locked ? 'mute' : 'soft'} /></span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2"><span className="text-sm font-semibold text-ink">{t}</span>{locked && <span className="dtag" title="Set by your administrator"><Icon name="lock" size={11} tone="mute" /> admin</span>}</div>
+          <div className="zs-body-sm mt-px">{d}</div>
         </div>
         {children}
       </div>
     );
-    const Head = ({ label }) => <div className="card-hd"><span className="zs-eyebrow">{label}</span></div>;
+    const Head = ({ label }) => <CardHead><span className="zs-eyebrow">{label}</span></CardHead>;
     const selStyle = { border: '1px solid var(--paper-edge)', borderRadius: 'var(--radius)', background: 'var(--paper)', font: '500 12px var(--font-mono)', color: 'var(--ink)', padding: '6px 9px', cursor: 'pointer' };
 
     return (
-      <div className="view-pad rise">
+      <ViewPad className="rise">
         <PageHeader eyebrow="Settings" title="Your preferences" subMax={600}
           sub="How Torii behaves for you. Workspace-wide policies are set by an administrator — those show a lock and can’t be changed here." />
 
-        <div className="card" style={{ overflow: 'hidden' }}>
+        <Card className="overflow-hidden">
           <Head label="Appearance" />
           <Row ic="moon" t="Theme" d="Light, dark, or follow your OS.">
             <Segmented value={themePref} onChange={applyTheme} options={[{ v: 'light', l: 'Light' }, { v: 'dark', l: 'Dark' }, { v: 'system', l: 'System' }]} />
@@ -69,9 +69,9 @@
               {[['en-GB', 'English (UK)'], ['en-US', 'English (US)'], ['fr-FR', 'Français'], ['de-DE', 'Deutsch'], ['es-ES', 'Español']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
           </Row>
-        </div>
+        </Card>
 
-        <div className="card" style={{ overflow: 'hidden', marginTop: 'var(--space-5)' }}>
+        <Card className="overflow-hidden mt-6">
           <Head label="Answering" />
           <Row ic="models" t="Default model" d="Your preferred model — within the tiers your admin allows.">
             <select value={p.model} onChange={(e) => set('model', e.target.value)} style={selStyle}>
@@ -94,9 +94,9 @@
           <Row ic="shield" t="PII & tenant masking" d="Mask tenant names and PII on every call." locked>
             <Switch on={true} onClick={() => {}} label="Masking (locked)" />
           </Row>
-        </div>
+        </Card>
 
-        <div className="card" style={{ overflow: 'hidden', marginTop: 'var(--space-5)' }}>
+        <Card className="overflow-hidden mt-6">
           <Head label="Notifications & drafts" />
           <Row ic="bell" t="Weekly digest" d="A Monday summary of activity in your spaces.">
             <Switch on={p.digest} onClick={() => set('digest', !p.digest)} label="Weekly digest" />
@@ -104,38 +104,21 @@
           <Row ic="create" t="Autosave drafts" d="Keep generated docs as drafts in the active space.">
             <Switch on={p.autosave} onClick={() => set('autosave', !p.autosave)} label="Autosave drafts" />
           </Row>
-        </div>
+        </Card>
 
-        <div className="card" style={{ overflow: 'hidden', marginTop: 'var(--space-5)' }}>
+        <Card className="overflow-hidden mt-6">
           <Head label="On this device" />
           <Row ic="models" t="Local models" d="Manage on-device model downloads, storage and defaults.">
             <span className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-mute)' }}>see Local models →</span>
           </Row>
-        </div>
+        </Card>
 
-        <div className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-faint)', marginTop: 'var(--space-5)' }}>Torii · workspace · signed in as mara.okafor@northwind.co · locked preferences are governed by your admin</div>
-      </div>
+        <div className="mono" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink-faint)', marginTop: '24px' }}>Torii · workspace · signed in as mara.okafor@northwind.co · locked preferences are governed by your admin</div>
+      </ViewPad>
     );
   }
 
   /* ── member navigation ────────────────────────────────────── */
-  const NAV = [
-    { label: 'Workspace', items: [
-      { id: 'workspace', label: 'Home', icon: 'home' },
-      { id: 'ask', label: 'Ask', icon: 'ask' },
-      { id: 'library', label: 'Library', icon: 'library' },
-    ]},
-    { label: 'Tools', items: [
-      { id: 'playground', label: 'Playground', icon: 'playground' },
-      { id: 'compare', label: 'Compare', icon: 'scale' },
-      { id: 'workflows', label: 'Workflows', icon: 'refresh' },
-      { id: 'local', label: 'Local models', icon: 'models' },
-    ]},
-    { label: 'You', items: [
-      { id: 'activity', label: 'Activity', icon: 'history' },
-      { id: 'settings', label: 'Settings', icon: 'settings' },
-    ]},
-  ];
 
   const CFG = {
     title: 'Torii  ·  workspace', def: 'workspace', nav: NAV, role: 'Member',
@@ -188,11 +171,11 @@
     if (!authed) return React.createElement(window.SignInView, { onSignIn: signIn, mode: 'member' });
 
     return (
-      <div className="win has-mtabs">
+      <div className="win">
         <Chrome user={CFG.user} role={CFG.role} onSignOut={() => setAuthed(false)} theme={theme} onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))} title={title} onMenu={() => setRailOpen((v) => !v)} />
         <div className="win-body">
           <Rail section={section} setSection={nav} workspace={ws} onOpenSwitcher={() => setSwitcherOpen(true)} groups={CFG.nav} footer={CFG.footer} brand="Torii" open={railOpen} onClose={() => setRailOpen(false)} />
-          <main className="view" key={section + wsId} style={fullBleed ? { overflow: 'hidden' } : undefined}>{renderView(section, nav, CFG.user, { theme, setTheme })}</main>
+          <main className="view lt-sm:pb-15" key={section + wsId} style={fullBleed ? { overflow: 'hidden' } : undefined}>{renderView(section, nav, CFG.user, { theme, setTheme })}</main>
         </div>
         <MobileTabs section={section} onPick={nav} onMore={() => setRailOpen(true)}
           items={[

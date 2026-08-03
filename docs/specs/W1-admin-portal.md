@@ -3,7 +3,7 @@
 **Module:** [W1](../modules/W1-admin-portal.md) · **Plane:** Web (client) · **Status:** Planned — build-ready
 **Depends on:** [W4](../modules/W4-design-system.md) (Rokkit token map + dark skin — blocks build, mockup-review #42), [F2](F2-identity-auth-rbac.md) (JWT/JWKS + RBAC matrix + capabilities + device lifecycle), [F3](F3-key-vault.md) (Connections contract), [C1](C1-gateway-service.md) (all privileged writes via `/rpc/*` + reads), [C2](C2-routing-resilience.md) (chain editor + binding + simulator), [C3](C3-budgets-metering.md) (budget tree + alerts + requests), [C4](C4-governance-runtime.md) (governance/DLP policy editor + why-this-model trace), [C5](C5-rag-document-intelligence.md) (Spaces & KB config), O3 (Feature management + Device fleet backends), X1 (Tools & MCP registry)
 **Enables:** the entire admin surface — the only place a tenant admin configures what the gateway enforces
-**Date:** 2026-07-23 · **Framework:** SvelteKit + Rokkit (W4) → Cloudflare Pages · **Domain:** `admin.strategos.sensei-hq.com`
+**Date:** 2026-07-23 · **Framework:** SvelteKit + Rokkit (W4) → Cloudflare Pages · **Domain:** `seiki.sensei-hq.com`
 **Authority:** conforms to [`../DECISIONS.md`](../DECISIONS.md) (§2 W1–W5, §3, §4, §6) and the Wave-1 core specs. Where this spec and any other doc disagree, `DECISIONS.md` wins; the mockups under `docs/mockups/app/*.jsx` remain the authoritative **UI** ground truth (reconciled through [`../design/mockup-review.md`](../design/mockup-review.md)).
 
 ---
@@ -73,7 +73,7 @@ W1 **owns no tables** and authors **no DDL**. It reads (PostgREST/RLS `SELECT`, 
 
 W1 is a browser SPA/SSR app. Its "contracts" are (a) the **route/screen map**, (b) the **data-access layer** that binds each screen to the already-specced server endpoints (C1/C2/C4/F2/F3/C3/C5), and (c) the shell/UX invariants. It introduces **no new server endpoints**.
 
-### 4.1 Route map (SvelteKit routes under `admin.strategos…`)
+### 4.1 Route map (SvelteKit routes under `admin.torii…`)
 
 Mirrors the mockup `NAV` groups, extended with the ratified new screens. `[cap]` = the capability that gates the screen's edit affordances (view is broader, RLS-scoped).
 
@@ -179,7 +179,7 @@ W1 is **not a trust boundary** — it is a convenience layer over server-enforce
 - **Secrets are masked-only.** `router_credentials` ciphertext/tokens are **never** fetched (F3 RLS deny-all); Connections shows the masked projection only. `api_keys` secrets appear **exactly once** in the `apikeys.create` response (reveal-once) and are never re-fetchable; W1 must not persist the revealed secret anywhere (no localStorage, no query cache) — it is copied to clipboard by explicit user action and dropped from memory on modal close.
 - **Redaction / no raw leak (§2 W5).** Where W1 renders governance traces or the "what was redacted" panel, it displays **types + counts + confidence** only — never raw matched secret/PII text or span offsets (C4 `GuardResult` already omits them from the wire shape). The redaction indicator's "safe reveal" is itself capability-gated and, in v1, reveals only the placeholder taxonomy (one-way; no reversible store).
 - **Auth session.** W1 holds a Supabase **browser session** (RS256 JWT); it attaches the bearer to every C1 call. Session/refresh is handled by supabase-js; a `token_stale` 401 (claims changed, F2 §4.1.1) triggers a silent refresh then retry. Sign-in supports email + Google/GitHub (SAML shown stubbed) — mockup-review #46/#47.
-- **CSP / origin.** The app is served from `admin.strategos…` (Cloudflare Pages); C1 is at `api.…` — CORS is restricted to the admin + console origins; no third-party script may read the session.
+- **CSP / origin.** The app is served from `admin.torii…` (Cloudflare Pages); C1 is at `api.…` — CORS is restricted to the admin + console origins; no third-party script may read the session.
 - **Negative-test alignment.** W1's own tests assert that a control hidden for a capability-less caller, when its RPC is invoked directly (bypassing the UI), returns 403 from C1 — i.e. the UI gate is never the only gate. This piggybacks on the F1 RW12 / C1 §5 adversarial harness.
 
 ---

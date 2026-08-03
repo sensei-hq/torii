@@ -4,8 +4,8 @@ set search_path to public, core, extensions;
 -- inference_calls row + its quality_signals and maintains the two rollup buckets:
 --   • USAGE (analytics_usage_daily) — incremented once per call. Idempotent on
 --     inference_call_id via analytics_applied_calls: only the FIRST apply increments,
---     so a replayed/retriggered apply cannot double-count. Savings columns
---     (cloud_equiv_usd/savings_usd) are layered in by A3.
+--     so a replayed/retriggered apply cannot double-count. Savings columns are
+--     accrued here via analytics_cloud_equiv (cheapest cloud step, §8 baseline).
 --   • QUALITY (analytics_quality_daily) — ABSOLUTE recompute of this call's
 --     (day,node,model) bucket from quality_signals. Runs on every apply because C6
 --     writes signals AFTER the ledger row (so the quality path is driven by the
@@ -22,9 +22,16 @@ security definer
 set search_path = public, core, extensions
 as $$
 declare
-  v_call  public.inference_calls%rowtype;
-  v_first boolean;
-  v_day   date;
+  v_call        public.inference_calls%rowtype;
+  v_first       boolean;
+  v_day         date;
+  v_ce          numeric;   -- baseline cloud_equiv from analytics_cloud_equiv
+  v_lo          boolean;   -- local-only (no cloud counterfactual)
+  v_up          boolean;   -- unpriced counterfactual
+  v_cloud_equiv numeric := 0;
+  v_savings     numeric := 0;
+  v_local_only  int     := 0;
+  v_unpriced    int     := 0;
 begin
   select * into v_call from public.inference_calls
    where tenant_id = p_tenant and id = p_call_id;
@@ -32,6 +39,25 @@ begin
     return;  -- no such call, or unattributed (P5 fail-closes to an org root) → skip
   end if;
   v_day := v_call.recorded_at::date;
+
+  -- Savings baseline (§8): cloud calls' counterfactual = their actual cost (savings 0);
+  -- local calls get the cheapest-cloud-step baseline, with local-only/unpriced surfaced.
+  if coalesce(v_call.execution_location, 'cloud') = 'local' then
+    select cloud_equiv_usd, is_local_only, is_unpriced into v_ce, v_lo, v_up
+      from public.analytics_cloud_equiv(
+             v_call.tenant_id, v_call.chain_id,
+             coalesce(v_call.input_tokens, 0), coalesce(v_call.output_tokens, 0));
+    if v_lo then
+      v_local_only := 1;                              -- excluded from savings, counted
+    elsif v_up then
+      v_unpriced := 1;                                -- excluded from savings, counted
+    else
+      v_cloud_equiv := coalesce(v_ce, 0);
+      v_savings     := greatest(v_cloud_equiv - coalesce(v_call.cost_usd, 0), 0);
+    end if;
+  else
+    v_cloud_equiv := coalesce(v_call.cost_usd, 0);    -- cloud: counterfactual = actual
+  end if;
 
   -- Idempotency: mark the call; USAGE increments only on the first application.
   insert into public.analytics_applied_calls(tenant_id, inference_call_id)
@@ -42,23 +68,28 @@ begin
   if v_first then
     insert into public.analytics_usage_daily
       (tenant_id, day, budget_node_id, served_model, provider, capability, execution_location,
-       calls, input_tokens, output_tokens, cost_usd, fallback_calls, latency_ms_sum, latency_ms_count)
+       calls, input_tokens, output_tokens, cost_usd, cloud_equiv_usd, savings_usd,
+       fallback_calls, latency_ms_sum, latency_ms_count, local_only_calls, savings_unpriced_calls)
     values
       (v_call.tenant_id, v_day, v_call.budget_node_id, v_call.model, v_call.adapter,
        v_call.capability, coalesce(v_call.execution_location, 'cloud'),
        1, coalesce(v_call.input_tokens, 0), coalesce(v_call.output_tokens, 0),
-       coalesce(v_call.cost_usd, 0),
+       coalesce(v_call.cost_usd, 0), v_cloud_equiv, v_savings,
        case when v_call.fallback_sequence > 0 then 1 else 0 end,
-       coalesce(v_call.duration_ms, 0), 1)
+       coalesce(v_call.duration_ms, 0), 1, v_local_only, v_unpriced)
     on conflict (tenant_id, day, budget_node_id, served_model, provider, capability, execution_location)
     do update set
-       calls            = analytics_usage_daily.calls + 1,
-       input_tokens     = analytics_usage_daily.input_tokens  + coalesce(v_call.input_tokens, 0),
-       output_tokens    = analytics_usage_daily.output_tokens + coalesce(v_call.output_tokens, 0),
-       cost_usd         = analytics_usage_daily.cost_usd       + coalesce(v_call.cost_usd, 0),
-       fallback_calls   = analytics_usage_daily.fallback_calls + case when v_call.fallback_sequence > 0 then 1 else 0 end,
-       latency_ms_sum   = analytics_usage_daily.latency_ms_sum + coalesce(v_call.duration_ms, 0),
-       latency_ms_count = analytics_usage_daily.latency_ms_count + 1;
+       calls                  = analytics_usage_daily.calls + 1,
+       input_tokens           = analytics_usage_daily.input_tokens  + coalesce(v_call.input_tokens, 0),
+       output_tokens          = analytics_usage_daily.output_tokens + coalesce(v_call.output_tokens, 0),
+       cost_usd               = analytics_usage_daily.cost_usd        + coalesce(v_call.cost_usd, 0),
+       cloud_equiv_usd        = analytics_usage_daily.cloud_equiv_usd + v_cloud_equiv,
+       savings_usd            = analytics_usage_daily.savings_usd     + v_savings,
+       fallback_calls         = analytics_usage_daily.fallback_calls  + case when v_call.fallback_sequence > 0 then 1 else 0 end,
+       latency_ms_sum         = analytics_usage_daily.latency_ms_sum  + coalesce(v_call.duration_ms, 0),
+       latency_ms_count       = analytics_usage_daily.latency_ms_count + 1,
+       local_only_calls       = analytics_usage_daily.local_only_calls + v_local_only,
+       savings_unpriced_calls = analytics_usage_daily.savings_unpriced_calls + v_unpriced;
   end if;
 
   -- QUALITY: absolute recompute of the call's (day,node,model) bucket from signals.
@@ -114,4 +145,5 @@ grant  execute on function public.analytics_rollup_apply(uuid, uuid) to service_
 comment on function public.analytics_rollup_apply is
 'O2 §6 flow-1: incremental fan-out for one call — usage bucket incremented once
 (idempotent via analytics_applied_calls), quality bucket absolute-recomputed from
-quality_signals. Savings via A3. SECURITY DEFINER, service_role only.';
+quality_signals, savings accrued via analytics_cloud_equiv (cheapest cloud step).
+SECURITY DEFINER, service_role only.';

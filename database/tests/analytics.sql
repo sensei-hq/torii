@@ -120,4 +120,59 @@ begin;
     raise notice 'A1.d daily rollup + idempotency hold ✓';
   end $$;
 rollback;
-\echo 'ANALYTICS A1 SCHEMA + ROLLUP TEST PASSED'
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- A2 — incremental fan-out on insert (triggers → analytics_rollup_apply).
+-- ─────────────────────────────────────────────────────────────────────────
+\echo '== O2 analytics: A2 incremental fan-out + triggers =='
+begin;
+  -- (1) inference_calls AFTER INSERT → analytics_rollup_apply → usage bucket appears
+  --     with no application code path; replay is idempotent (no double-count).
+  insert into public.inference_calls
+    (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence,
+     recorded_at,input_tokens,output_tokens,execution_location,budget_node_id) values
+    ('00000000-0000-0000-0000-000000000000','a22a0000-0000-0000-0000-0000000000c1',
+     'text_chat','anthropic','sonnet-4.6',0.0041,200,'success',0,
+     '2026-07-25T09:00:00Z',120,60,'cloud','b0de0000-0000-0000-0000-000000000002');
+  do $$
+  begin
+    if coalesce((select calls from public.analytics_usage_daily
+          where served_model='sonnet-4.6' and execution_location='cloud'
+            and budget_node_id='b0de0000-0000-0000-0000-000000000002'), -1) <> 1
+       or coalesce((select cost_usd from public.analytics_usage_daily
+             where served_model='sonnet-4.6' and execution_location='cloud'), -1) <> 0.0041
+       or coalesce((select latency_ms_sum from public.analytics_usage_daily
+             where served_model='sonnet-4.6' and execution_location='cloud'), -1) <> 200 then
+      raise exception 'FAIL A2: AFTER INSERT did not fan out the usage bucket'; end if;
+    -- replayed apply must NOT double-count (idempotent on inference_call_id)
+    perform public.analytics_rollup_apply(
+      '00000000-0000-0000-0000-000000000000'::uuid,'a22a0000-0000-0000-0000-0000000000c1'::uuid);
+    if coalesce((select calls from public.analytics_usage_daily
+          where served_model='sonnet-4.6' and execution_location='cloud'), -1) <> 1
+       or coalesce((select cost_usd from public.analytics_usage_daily
+             where served_model='sonnet-4.6' and execution_location='cloud'), -1) <> 0.0041 then
+      raise exception 'FAIL A2: analytics_rollup_apply double-counted (not idempotent)'; end if;
+    raise notice 'A2 usage fan-out + idempotency ✓';
+  end $$;
+
+  -- (2) quality_signals AFTER INSERT → recompute the call's quality bucket. Signals
+  --     land AFTER the ledger row, so the quality path is driven by the signal insert,
+  --     not the call insert; recompute is absolute → weighted averages are exact.
+  insert into public.quality_signals
+    (tenant_id,id,inference_call_id,signal_key,signal_class,value_num,source) values
+    ('00000000-0000-0000-0000-000000000000',gen_random_uuid(),
+     'a22a0000-0000-0000-0000-0000000000c1','grounding','implicit',0.86,'test'),
+    ('00000000-0000-0000-0000-000000000000',gen_random_uuid(),
+     'a22a0000-0000-0000-0000-0000000000c1','judge_score','implicit',0.91,'test');
+  do $$
+  begin
+    if coalesce((select round(grounding_avg,2) from public.analytics_quality_daily
+          where served_model='sonnet-4.6'
+            and budget_node_id='b0de0000-0000-0000-0000-000000000002'), -1) <> 0.86
+       or coalesce((select round(judge_score_avg,2) from public.analytics_quality_daily
+             where served_model='sonnet-4.6'), -1) <> 0.91 then
+      raise exception 'FAIL A2: quality_signals fan-out did not populate weighted averages'; end if;
+    raise notice 'A2 quality fan-out (grounding/judge) ✓';
+  end $$;
+rollback;
+\echo 'ANALYTICS A1+A2 TEST PASSED'

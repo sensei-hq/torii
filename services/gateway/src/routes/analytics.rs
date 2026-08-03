@@ -592,6 +592,74 @@ fn to_csv(rows: &Value) -> String {
     out
 }
 
+// ── metric descriptor (A6) ────────────────────────────────────────────────────
+/// O2 §4.2: the published, versioned metric descriptor. W1/W2/O3 clients render metric
+/// labels + units FROM this, hardcoding no keys; adding a metric bumps `schema_version`
+/// additively. Embedded so it ships with the binary.
+const METRICS_DESCRIPTOR: &str = include_str!("../analytics-metrics.v1.json");
+
+#[derive(Deserialize)]
+pub struct MetricsQ {
+    pub key: Option<String>,
+}
+
+/// `GET /v1/analytics/metrics[?key=…]` — the whole descriptor, or one metric. An unknown
+/// key is `422` (§4.1 error surface) so a client can't render against a metric O2 doesn't
+/// publish. Static schema (not tenant data), but mounted behind auth like the rest.
+pub async fn get_metrics(Query(q): Query<MetricsQ>) -> Response {
+    let doc: Value = serde_json::from_str(METRICS_DESCRIPTOR).expect("descriptor is valid JSON");
+    match q.key {
+        None => (StatusCode::OK, Json(doc)).into_response(),
+        Some(k) => {
+            let found = doc
+                .get("metrics")
+                .and_then(Value::as_array)
+                .and_then(|a| a.iter().find(|m| m.get("key").and_then(Value::as_str) == Some(&k)))
+                .cloned();
+            match found {
+                Some(m) => (StatusCode::OK, Json(m)).into_response(),
+                None => (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({ "error": "unknown_metric", "key": k })),
+                )
+                    .into_response(),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod descriptor {
+    //! Contract test (A6): the descriptor is well-formed and every metric declares a valid
+    //! unit + source — so a client rendering purely from it never hits an undefined key.
+    use super::METRICS_DESCRIPTOR;
+    use serde_json::Value;
+    use std::collections::HashSet;
+
+    #[test]
+    fn descriptor_is_well_formed_and_units_are_valid() {
+        let doc: Value = serde_json::from_str(METRICS_DESCRIPTOR).expect("valid JSON");
+        assert!(doc["schema_version"].as_i64().is_some(), "schema_version present");
+        let units: HashSet<&str> = ["usd", "ms", "percent", "ratio", "count"].into_iter().collect();
+        let sources: HashSet<&str> = ["ledger", "quality-signal", "derived"].into_iter().collect();
+        let metrics = doc["metrics"].as_array().expect("metrics array");
+        assert!(!metrics.is_empty(), "at least one metric");
+        let mut seen = HashSet::new();
+        for m in metrics {
+            let key = m["key"].as_str().expect("metric has a key");
+            assert!(seen.insert(key), "duplicate metric key: {key}");
+            let unit = m["unit"].as_str().unwrap_or("");
+            let source = m["source"].as_str().unwrap_or("");
+            assert!(units.contains(unit), "{key}: bad unit {unit:?}");
+            assert!(sources.contains(source), "{key}: bad source {source:?}");
+        }
+        // The load-bearing keys the endpoints emit must be published.
+        for required in ["cost_usd", "savings_usd", "cloud_equiv_usd", "share_pct", "calls"] {
+            assert!(seen.contains(required), "descriptor missing required key: {required}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod gate {
     //! P12 acceptance gate — hits local Supabase (55322). Ignored by default:
@@ -617,6 +685,29 @@ mod gate {
 
     fn approx(v: &Value, want: f64) -> bool {
         v.as_f64().map(|x| (x - want).abs() < 1e-9).unwrap_or(false)
+    }
+
+    /// Recursively scan a JSON doc for any object key that names prompt/response content or
+    /// a credential — the no-secret-surface invariant (A8). Returns the first offending key.
+    fn find_secret_key(v: &Value) -> Option<String> {
+        const FORBIDDEN: [&str; 8] =
+            ["content", "prompt", "response", "secret", "message", "body", "api_key", "token_text"];
+        match v {
+            Value::Object(m) => {
+                for (k, val) in m {
+                    let lk = k.to_lowercase();
+                    if FORBIDDEN.iter().any(|f| lk.contains(f)) {
+                        return Some(k.clone());
+                    }
+                    if let Some(hit) = find_secret_key(val) {
+                        return Some(hit);
+                    }
+                }
+                None
+            }
+            Value::Array(a) => a.iter().find_map(find_secret_key),
+            _ => None,
+        }
     }
 
     #[tokio::test]
@@ -709,6 +800,14 @@ mod gate {
         assert_eq!(ps["cloud"]["calls"].as_i64(), Some(2));
         assert!(approx(&ps["savings_usd"], 0.00896), "savings = Σ cloud_equiv(local) = {}", ps["savings_usd"]);
         assert_eq!(ps["baseline"], "cheapest_cloud_in_chain");
+
+        // A8 no-secret-surface: the ledger-reading endpoints return only metadata — no key
+        // anywhere in the response may name prompt/response content or a credential.
+        for (name, doc) in [("spend", &spend), ("plane-split", &ps)] {
+            if let Some(bad) = find_secret_key(doc) {
+                panic!("{name} response exposes a content/secret key: {bad}");
+            }
+        }
 
         // cleanup — free the config FKs first, then cascade the tenant.
         for q in [

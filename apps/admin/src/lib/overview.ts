@@ -2,7 +2,15 @@
 // the component so they're unit-testable (type-only imports → no $env at runtime). Every
 // figure is computed from the real gateway reads (/v1/requests, /v1/budgets,
 // /v1/connections, /v1/models, /v1/routing) — no mock data.
-import type { BudgetNode, ModelRow, Provider, RequestRow, RoutingStep } from './api'
+import type {
+	BudgetNode,
+	CostTrend,
+	ModelRow,
+	PlaneSplit,
+	Provider,
+	RequestRow,
+	RoutingStep
+} from './api'
 
 /** `$X.YY` money, resilient to non-finite inputs. */
 export function money(n: number): string {
@@ -58,6 +66,39 @@ export interface ExecPlaneSplit {
 
 const isLocal = (r: RequestRow) => r.execution_location === 'local'
 const isCloud = (r: RequestRow) => r.execution_location != null && r.execution_location !== 'local'
+
+/**
+ * Map the O2 `/v1/analytics/plane-split` rollup (server-computed over the FULL ledger) to
+ * the same `ExecPlaneSplit` shape the client derives from the capped request read — so the
+ * component prefers this when available and falls back to `execPlaneSplit` seamlessly. The
+ * server coalesces null planes to 'cloud', so there is no `unknown` bucket.
+ */
+export function planeFromServer(ps: PlaneSplit): ExecPlaneSplit {
+	const local = ps.local.calls
+	const cloud = ps.cloud.calls
+	const total = local + cloud
+	const pct = (n: number) => (total ? Math.round((n / total) * 100) : 0)
+	return {
+		local,
+		cloud,
+		unknown: 0,
+		total,
+		localPct: pct(local),
+		cloudPct: pct(cloud),
+		localCost: ps.local.cost_usd,
+		cloudCost: ps.cloud.cost_usd
+	}
+}
+
+/** Map the O2 `/v1/analytics/cost-trend` series to the client `TrendPoint[]` (sparkline input). */
+export function trendFromServer(ct: CostTrend): TrendPoint[] {
+	return ct.series.map((p) => ({
+		day: p.day,
+		cost: p.cost_usd,
+		calls: p.calls,
+		costPerCall: p.blended_cost_per_call
+	}))
+}
 
 export function execPlaneSplit(requests: RequestRow[]): ExecPlaneSplit {
 	const total = requests.length

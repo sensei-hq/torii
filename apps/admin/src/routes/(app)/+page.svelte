@@ -7,7 +7,9 @@
 	import { alertsState } from '$lib/alerts-state.svelte'
 	import {
 		execPlaneSplit,
+		planeFromServer,
 		costTrend,
+		trendFromServer,
 		trendSummary,
 		setupSpine,
 		heroInsight,
@@ -30,6 +32,16 @@
 	let models = $state([])
 	/** @type {import('$lib/api').RoutingStep[]} */
 	let steps = $state([])
+	// O2 analytics — server-computed over the full ledger (+ savings). Null until loaded or
+	// on failure; each derived figure below prefers these and falls back to client derivation.
+	/** @type {import('$lib/api').AnalyticsOverview | null} */
+	let ov = $state(null)
+	/** @type {import('$lib/api').PlaneSplit | null} */
+	let planeSrv = $state(null)
+	/** @type {import('$lib/api').ModelMixRow[] | null} */
+	let mixSrv = $state(null)
+	/** @type {import('$lib/api').CostTrend | null} */
+	let trendSrv = $state(null)
 	let loading = $state(true)
 	/** labels of dashboard reads that failed — drives a subtle "partial data" note (M4). */
 	let loadFailures = $state([])
@@ -50,14 +62,31 @@
 				return fallback
 			}
 		}
-		const [r, b, a, c, m, rt, id] = await Promise.all([
+		const [r, b, a, c, m, rt, id, an, pl, mx, ct] = await Promise.all([
 			settle('requests', api.requests(200), { requests: [] }),
 			settle('budgets', api.budgets(), { nodes: [], requests: [] }),
 			settle('audit', api.audit(8), { events: [] }),
 			settle('connections', api.connections(), { providers: [] }),
 			settle('models', api.models(), { models: [] }),
 			settle('routing', api.routing(), { steps: [] }),
-			settle('identity', api.identity(), { email: '' })
+			settle('identity', api.identity(), { email: '' }),
+			// O2 analytics reads — server-computed; degrade to null → client-derived fallback.
+			settle(
+				'analytics',
+				api.analyticsOverview(),
+				/** @type {import('$lib/api').AnalyticsOverview | null} */ (null)
+			),
+			settle(
+				'plane-split',
+				api.planeSplit('30d'),
+				/** @type {import('$lib/api').PlaneSplit | null} */ (null)
+			),
+			settle('model-mix', api.modelMix('14d'), { models: [] }),
+			settle(
+				'cost-trend',
+				api.costTrend('14d'),
+				/** @type {import('$lib/api').CostTrend | null} */ (null)
+			)
 		])
 		requests = r.requests
 		nodes = b.nodes
@@ -66,6 +95,10 @@
 		models = m.models
 		steps = rt.steps
 		email = id.email ?? ''
+		ov = an
+		planeSrv = pl
+		mixSrv = mx.models
+		trendSrv = ct
 		// Alerts derive from the reads above (ui-state-pattern Load→State seam), no new backend.
 		alertsState.load({ nodes, requests, providers })
 		loading = false
@@ -74,13 +107,28 @@
 	// header, matching the mock: date eyebrow + time-of-day greeting with the real name.
 	const name = $derived(displayName(email))
 	const title = $derived(name ? `${greeting()}, ${name}.` : `${greeting()}.`)
-	const avgLatency = $derived(avgLatencySec(requests))
-	// "today" = spend recorded on the current UTC calendar day (mock tile: "Spend · today").
+	// Latency: prefer the server rollup's mean (ms → s); else derive from the capped read.
+	const avgLatency = $derived(
+		ov
+			? ov.latency.avg_ms != null
+				? Math.round((ov.latency.avg_ms / 1000) * 10) / 10
+				: 0
+			: avgLatencySec(requests)
+	)
+	// "today" = the current UTC calendar day. Prefer the server rollup (full ledger); the
+	// client fallback filters the capped request read.
 	const todayKey = new Date().toISOString().slice(0, 10)
 	const spendToday = $derived(
-		requests
-			.filter((r) => (r.recorded_at ?? '').slice(0, 10) === todayKey)
-			.reduce((s, r) => s + Number(r.cost_usd || 0), 0)
+		ov
+			? ov.spend_today.value
+			: requests
+					.filter((r) => (r.recorded_at ?? '').slice(0, 10) === todayKey)
+					.reduce((s, r) => s + Number(r.cost_usd || 0), 0)
+	)
+	const callsToday = $derived(
+		ov
+			? ov.calls_today.value
+			: requests.filter((r) => (r.recorded_at ?? '').slice(0, 10) === todayKey).length
 	)
 
 	// ── headline aggregates — all computed from the real ledger, no mock data ──
@@ -98,9 +146,20 @@
 	)
 
 	// ── new depth: exec-plane split, cost trend, setup spine, hero insight ──
-	const plane = $derived(execPlaneSplit(requests))
-	const trend = $derived(costTrend(requests, 14))
+	// Plane split + savings: the server rollup carries the cloud-equivalent baseline the
+	// client cannot compute; fall back to the request-derived split (no savings) if absent.
+	const plane = $derived(planeSrv ? planeFromServer(planeSrv) : execPlaneSplit(requests))
+	const savings = $derived(planeSrv?.savings_usd ?? ov?.savings_14d.value ?? 0)
+	const savingsBaseline = $derived(planeSrv?.baseline ?? '')
+	const trend = $derived(
+		trendSrv && trendSrv.series.length ? trendFromServer(trendSrv) : costTrend(requests, 14)
+	)
 	const tsum = $derived(trendSummary(trend))
+	// Blended cost/call headline + delta: prefer the server rollup's figures over the window.
+	const blended = $derived(ov ? ov.blended_cost_per_call.value : tsum.latest)
+	const blendedDelta = $derived(
+		ov ? ov.blended_cost_per_call.delta_pct : tsum.hasData ? tsum.deltaPct : null
+	)
 	const setup = $derived(setupSpine(providers, models, steps))
 	const hero = $derived(heroInsight({ requests, plane, spend, orgRoot, budgetPct, setup }))
 	const heroTone = $derived(
@@ -128,18 +187,21 @@
 		}))
 	})
 
-	// top models by call volume, computed from the request ledger.
-	const topModels = $derived(
-		Object.entries(
-			requests.reduce((/** @type {Record<string, number>} */ acc, r) => {
-				acc[r.model] = (acc[r.model] ?? 0) + 1
-				return acc
-			}, {})
-		)
+	// Top models by call volume: prefer the server model-mix rollup (full ledger), aggregating
+	// its per-plane rows by model; else count over the capped request read.
+	const topModels = $derived.by(() => {
+		/** @type {Record<string, number>} */
+		const acc = {}
+		if (mixSrv && mixSrv.length) {
+			for (const m of mixSrv) acc[m.model] = (acc[m.model] ?? 0) + m.calls
+		} else {
+			for (const r of requests) acc[r.model] = (acc[r.model] ?? 0) + 1
+		}
+		return Object.entries(acc)
 			.map(([model, calls]) => ({ model, calls }))
 			.sort((a, b) => b.calls - a.calls)
 			.slice(0, 5)
-	)
+	})
 
 	/** @param {string} iso */
 	const fmtTime = (iso) =>
@@ -221,20 +283,24 @@
 				<Stat
 					label="Spend · today"
 					value={money(spendToday)}
-					hint={`${money(spend)} all-time · ${tokens.toLocaleString()} tokens`}
+					hint={ov && ov.spend_today.cap != null
+						? `${ov.spend_today.pct_of_cap ?? 0}% of ${money(ov.spend_today.cap)} cap`
+						: `${tokens.toLocaleString()} tokens recent`}
 				/>
-				<Stat label="Calls served" value={requests.length} hint="inference calls recorded" />
+				<Stat label="Calls · today" value={callsToday} hint="inference calls today" />
 				<Stat
 					label="Avg latency"
 					value={avgLatency || '—'}
 					unit={avgLatency ? 's' : ''}
-					hint="mean over recorded calls"
+					hint={ov && ov.latency.p95_ms != null
+						? `p95 ${(ov.latency.p95_ms / 1000).toFixed(1)}s`
+						: 'mean over recorded calls'}
 				/>
 				<Stat
-					label="On-device"
-					value={`${plane.localPct}%`}
+					label="Saved · vs cloud"
+					value={money(savings)}
 					tone="accent"
-					hint="ran on the local plane"
+					hint={savings > 0 ? 'avoided cloud spend (cheapest-cloud baseline)' : 'run local to save'}
 				/>
 			</div>
 
@@ -274,6 +340,16 @@
 								<span class="font-mono text-xs text-ink-faint">{plane.unknown} unrecorded</span>
 							{/if}
 						</div>
+						{#if savings > 0}
+							<!-- O2 savings: cloud-equivalent of the local calls (cheapest-cloud baseline). -->
+							<p class="mt-3 flex items-center gap-1.5 text-sm text-success">
+								<span class="i-solar-tag-price-bold-duotone h-3.5 w-3.5"></span>
+								<b class="font-semibold">{money(savings)}</b> saved vs {savingsBaseline ===
+								'cheapest_cloud_in_chain'
+									? 'the cheapest cloud model'
+									: 'cloud'}
+							</p>
+						{/if}
 					{:else}
 						<p class="text-sm text-ink-mute">
 							No requests yet — the plane split appears as calls flow.
@@ -338,9 +414,9 @@
 				<Card flush>
 					<CardHead title="Blended cost / call · 14d">
 						{#snippet right()}
-							{#if tsum.hasData && tsum.deltaPct !== 0}
-								<Chip tone={tsum.deltaPct < 0 ? 'success' : 'warning'}
-									>{tsum.deltaPct > 0 ? '+' : ''}{tsum.deltaPct}%</Chip
+							{#if blendedDelta != null && blendedDelta !== 0}
+								<Chip tone={blendedDelta < 0 ? 'success' : 'warning'}
+									>{blendedDelta > 0 ? '+' : ''}{blendedDelta}%</Chip
 								>
 							{:else}
 								<span class="font-mono text-xs text-ink-mute">no trend yet</span>
@@ -350,7 +426,11 @@
 					<div class="p-4">
 						<div class="mb-3 flex items-baseline gap-1">
 							<span class="font-heading text-3xl font-light leading-none text-ink"
-								>{tsum.hasData ? '$' + tsum.latest.toFixed(3) : '—'}</span
+								>{blended > 0
+									? '$' + blended.toFixed(3)
+									: tsum.hasData
+										? '$' + tsum.latest.toFixed(3)
+										: '—'}</span
 							>
 							<span class="text-sm text-ink-mute">per call</span>
 						</div>

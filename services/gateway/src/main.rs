@@ -23,6 +23,7 @@ use gateway::adapters::AdapterRegistry;
 use gateway::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerManager};
 use gateway::Gateway;
 
+mod analytics; // O2: analytics query builders (group_by → denormalized column; window/bucket)
 mod apikeys; // H2: API-key generation + argon2 hash/verify (identity-bound)
 mod auth;
 mod budgets; // C3: budget-node resolution + hard reserve→commit on the inference hot path
@@ -281,6 +282,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/routing", get(routes::ledger::get_routing))
         .route("/governance", get(routes::ledger::get_governance))
         .route("/settings", get(routes::ledger::get_settings))
+        // O2 · analytics read model (P12): tenant-scoped dashboards over the one ledger.
+        .route("/analytics/overview", get(routes::analytics::get_overview))
+        .route("/analytics/cost-trend", get(routes::analytics::get_cost_trend))
+        .route("/analytics/model-mix", get(routes::analytics::get_model_mix))
+        .route("/analytics/plane-split", get(routes::analytics::get_plane_split))
+        .route("/analytics/spend", get(routes::analytics::get_spend))
+        .route("/analytics/quality", get(routes::analytics::get_quality))
+        .route("/analytics/export", get(routes::analytics::get_export))
         // D4: versioned, credential-free config snapshot the desktop pulls to hot-reload.
         .route("/config/snapshot", get(routes::config::get_snapshot))
         // C5 · RAG document surface + hybrid retrieval (docs/plans/C5-rag-backend-build-plan.md).

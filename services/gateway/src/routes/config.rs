@@ -30,6 +30,53 @@ pub(crate) async fn bump(pool: &sqlx::PgPool, tenant: Uuid, component: &str) {
     }
 }
 
+/// The resolved 4-state governance for a feature (O3-2). `governed` = a policy or the mandatory
+/// floor decided it (vs the catalog default); `source` names the deciding scope.
+pub(crate) struct FeatureState {
+    pub enabled: bool,
+    pub governed: bool,
+    #[allow(dead_code)]
+    pub source: String,
+}
+
+/// Resolve the effective governance of a feature for a caller via `config.resolve_feature_state`
+/// (the single source of truth for the precedence). Fail-safe: a resolver error is treated as
+/// ungoverned so the caller falls back to its own default rather than crashing the request.
+pub(crate) async fn resolve_feature(
+    pool: &sqlx::PgPool,
+    tenant: Uuid,
+    role_ids: &[Uuid],
+    feature: &str,
+    space: Option<Uuid>,
+) -> FeatureState {
+    let v: Result<Value, _> = sqlx::query_scalar("select config.resolve_feature_state($1, $2, $3, $4)")
+        .bind(tenant)
+        .bind(role_ids)
+        .bind(feature)
+        .bind(space)
+        .fetch_one(pool)
+        .await;
+    match v {
+        Ok(j) => FeatureState {
+            enabled: j.get("enabled").and_then(|b| b.as_bool()).unwrap_or(false),
+            governed: j.get("governed").and_then(|b| b.as_bool()).unwrap_or(false),
+            source: j
+                .get("source")
+                .and_then(|s| s.as_str())
+                .unwrap_or("default")
+                .to_string(),
+        },
+        Err(e) => {
+            tracing::warn!("resolve_feature({feature}) failed (treated as ungoverned): {e}");
+            FeatureState {
+                enabled: false,
+                governed: false,
+                source: "error".into(),
+            }
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct SnapshotQuery {
     /// the caller's last-known `config_version`; equal ⇒ `304`, else a full snapshot.
@@ -225,6 +272,72 @@ mod tests {
         for bad in ["encrypted", "credential", "secret", "bearer", "password", "api_key"] {
             assert!(!text.contains(bad), "snapshot leaked '{bad}'");
         }
+
+        sqlx::query("delete from core.tenants where id=$1")
+            .bind(tenant)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    /// O3-2 precedence via the Rust helper: a `locked` workspace policy beats a narrower
+    /// `default-on`; a `role` policy beats `workspace`; no policy is ungoverned.
+    #[tokio::test]
+    #[ignore = "requires local Supabase (55322)"]
+    async fn resolve_feature_state_precedence() {
+        let pool = pool().await;
+        let tenant = Uuid::new_v4();
+        let space = Uuid::new_v4();
+        let role = Uuid::new_v4();
+        sqlx::query("insert into core.tenants (id, name, slug, modified_by) values ($1,'fs',$2,'fs')")
+            .bind(tenant)
+            .bind(format!("fs-{tenant}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let policy = |scope: &'static str, sid: Option<Uuid>, state: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(
+                    "insert into public.feature_policies (tenant_id, feature_key, scope_type, scope_id, state) \
+                     values ($1, 'demo-feat', $2, $3, $4)",
+                )
+                .bind(tenant)
+                .bind(scope)
+                .bind(sid)
+                .bind(state)
+                .execute(&pool)
+                .await
+                .unwrap();
+            }
+        };
+        let clear = || {
+            let pool = pool.clone();
+            async move {
+                sqlx::query("delete from public.feature_policies where tenant_id=$1")
+                    .bind(tenant)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+        };
+
+        // locked@workspace beats space=default-on → OFF, governed, source locked@workspace.
+        policy("workspace", None, "locked").await;
+        policy("space", Some(space), "default-on").await;
+        let fs = resolve_feature(&pool, tenant, &[role], "demo-feat", Some(space)).await;
+        assert!(!fs.enabled && fs.governed && fs.source == "locked@workspace");
+
+        // role (default-on) beats workspace (default-off) → ON, source role.
+        clear().await;
+        policy("role", Some(role), "default-on").await;
+        policy("workspace", None, "default-off").await;
+        let fs = resolve_feature(&pool, tenant, &[role], "demo-feat", Some(space)).await;
+        assert!(fs.enabled && fs.governed && fs.source == "role");
+
+        // no policy for an unknown feature → ungoverned default-off (the caller decides).
+        let fs = resolve_feature(&pool, tenant, &[role], "no-such-feature", None).await;
+        assert!(!fs.enabled && !fs.governed);
 
         sqlx::query("delete from core.tenants where id=$1")
             .bind(tenant)

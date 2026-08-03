@@ -832,14 +832,27 @@ async fn post_chat_with_tools(
         "no tenant/roles resolved for tool use".to_string(),
     ))?;
 
-    // Default-deny: a resolver error offers NO tools (never widen the surface on failure).
-    let allowed = AllowListResolver::new(&state.pool)
-        .resolve(&rctx, req.space_id)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!("chat/tools: allow-list resolve failed, offering no tools: {e}");
-            Default::default()
-        });
+    // O3-2 governance: a policy can disable the whole tools feature (a locked/off kill-switch)
+    // regardless of grants. Ungoverned (no policy) → the allow-list is the gate.
+    let tools_gov =
+        crate::routes::config::resolve_feature(&state.pool, tenant, &claims.role_ids, "tools", req.space_id)
+            .await;
+    let allowed = if tools_gov.governed && !tools_gov.enabled {
+        tracing::info!(
+            "chat/tools: tools feature disabled by governance ({}) — offering no tools",
+            tools_gov.source
+        );
+        Default::default()
+    } else {
+        // Default-deny: a resolver error offers NO tools (never widen the surface on failure).
+        AllowListResolver::new(&state.pool)
+            .resolve(&rctx, req.space_id)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("chat/tools: allow-list resolve failed, offering no tools: {e}");
+                Default::default()
+            })
+    };
 
     let mask = masking_enabled(state, Some(tenant)).await;
     let allow_fallback = auto_fallback_enabled(state, Some(tenant)).await;

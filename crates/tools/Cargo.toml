@@ -1,0 +1,31 @@
+[package]
+name = "tools"
+version = "0.1.0"
+edition = "2021"
+description = "Torii MCP tool runtime — default-deny (role×space) allow-list enforcement, SSRF-filtered egress, sandboxed stdio, fail-closed W5 tool-egress redaction. Consumed by C1 + desktop; enforcement is never in the engine."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+async-trait = "0.1"
+tracing = "0.1"
+url = "2"
+# The DB-backed AllowListResolver is central-plane only; the desktop compiles the invoker
+# + egress + stdio WITHOUT sqlx (no Postgres on the device) — `db` feature.
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "json"], optional = true }
+# The http/sse MCP transports (central plane) — `net` feature. rustls (no OpenSSL) for Fly.
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false, optional = true }
+
+[features]
+default = ["db", "net"]
+db = ["dep:sqlx"]
+net = ["dep:reqwest"]
+
+[dev-dependencies]
+# `full` + axum + regex power the T10 acceptance harness: spawn a real HTTP MCP demo server and
+# drive the real HttpClient + ToolInvoker against it (the three-pillar gate, live).
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["json"] }
+regex = "1"

@@ -47,11 +47,11 @@ P4 builds **on the P2a skeleton `services/gateway`** (Axum + `sensei-gateway` + 
 
 1. **P3 (F1 security + scope rework) is green** — `dbd reset && apply && import` passes and `tests/authz.sql` denies every adversarial mutation. P4's dbd work **extends** P3's `.ddl`/policy/seed files; it does not re-create the tables (RW2/RW4/RW8/RW10/RW13/RW14).
 2. **GH-2 (OAuth/bearer provider-credential in `sensei-cloud-providers`) is filed → implemented → closed → released** via the lockstep tag bump, and the monorepo is repinned to that `v0.4.6+` tag. Until then, only the BYOK `api_key` path can make a real call (the crate does static `bearer_auth(key)` today). **Blocking for F3-3/F3-4.**
-3. **KMS/KEK provisioned (human).** The production **KEK lives in a cloud KMS/HSM**; the managed provider (AWS KMS / GCP KMS / Vault Transit) + key reference/ARN are provided so `KmsKekProvider` can be wired. `STRATEGOS_KEK` is **local-dev only** and `EnvKekProvider` **fails closed under a prod profile**.
+3. **KMS/KEK provisioned (human).** The production **KEK lives in a cloud KMS/HSM**; the managed provider (AWS KMS / GCP KMS / Vault Transit) + key reference/ARN are provided so `KmsKekProvider` can be wired. `TORII_KEK` is **local-dev only** and `EnvKekProvider` **fails closed under a prod profile**.
 4. **Anthropic OAuth client (human).** `client_id` / `client_secret`, the registered `redirect` URI, `scopes`, and `token_url` for the Anthropic OAuth app. **v1 OAuth scope = Anthropic only**; all other providers use BYOK keys. Needed for F3-3/F3-4.
 5. **RS256/JWKS confirmed (from P2a, reconfirm).** Asymmetric signing is enabled on the Supabase project; the JWKS endpoint serves the verify-only public key; `SUPABASE_JWT_*` / the JWKS URL are in C1's env. P4 upgrades the P2a middleware from the HS256 skeleton to full RS256/JWKS.
 6. **No real paid inference call is required in this phase** — the acceptance gate exercises the *credential* path (encrypt-at-rest, OAuth refresh) and the *authz* path (capability denial), not a paid completion. The OAuth-connect exercise does perform a **real Anthropic OAuth token exchange** (needs prereq 4), not a paid LLM call.
-7. **Deploy = local dev** (`cargo run`, `127.0.0.1:8787`) with a local `STRATEGOS_KEK` for dev; the `KmsKekProvider` path is exercised against the provisioned KMS in a staging profile.
+7. **Deploy = local dev** (`cargo run`, `127.0.0.1:8787`) with a local `TORII_KEK` for dev; the `KmsKekProvider` path is exercised against the provisioned KMS in a staging profile.
 
 ---
 
@@ -181,7 +181,7 @@ Two groups — **F2-*** (identity/auth/RBAC) and **F3-*** (credential vault) —
 - **Depends on:** P3 RW13 (`router_credentials`/`tenant_keys`/`tenant_key_archive` DDL); human prereq 3 (KMS/KEK)
 - **Authority:** F3 §4.1, §5 (KEK custody); DECISIONS §2 W4
 - **Acceptance criteria:**
-  - `KekProvider` trait (`wrap_dek`/`unwrap_dek`/`active_kek`). **`KmsKekProvider`** (prod — DEK unwrap is a **KMS call**, raw KEK bytes never enter the app process; ARN/`kek_ref` from prereq 3). **`EnvKekProvider`** (`STRATEGOS_KEK`, **local-dev only**) **refuses to start under a prod profile (fail-closed)**.
+  - `KekProvider` trait (`wrap_dek`/`unwrap_dek`/`active_kek`). **`KmsKekProvider`** (prod — DEK unwrap is a **KMS call**, raw KEK bytes never enter the app process; ARN/`kek_ref` from prereq 3). **`EnvKekProvider`** (`TORII_KEK`, **local-dev only**) **refuses to start under a prod profile (fail-closed)**.
 - **Test scenarios:**
   - Given a **prod** profile with `EnvKekProvider`, When the process starts, Then it **fails closed**.
   - Given a fresh 32-byte DEK, When wrapped then unwrapped, Then it round-trips; `active_kek()` returns `(version, ref)`.
@@ -263,7 +263,7 @@ Two groups — **F2-*** (identity/auth/RBAC) and **F3-*** (credential vault) —
 - **Depends on:** F3-2, F3-4
 - **Authority:** DECISIONS §2 W4; F3 §9(14)
 - **Acceptance criteria:**
-  - C1's real-credential path is guarded so it **cannot decrypt/use** a provider credential unless the F3 vault (envelope + lockdown) is present; the **P2a env-key fallback is removed/guarded** — no plaintext-env-key path deploys under a prod profile; `STRATEGOS_KEK` under a prod profile fails closed (F3-1).
+  - C1's real-credential path is guarded so it **cannot decrypt/use** a provider credential unless the F3 vault (envelope + lockdown) is present; the **P2a env-key fallback is removed/guarded** — no plaintext-env-key path deploys under a prod profile; `TORII_KEK` under a prod profile fails closed (F3-1).
 - **Test scenarios:**
   - Given a prod profile without the vault present, When C1 attempts a real credential, Then it **refuses (fail-closed)** — no env-key fallback resolves.
 
@@ -344,7 +344,7 @@ graph TD
 | Human input | Needed by | Why / notes |
 |---|---|---|
 | **Supabase RS256/JWKS asymmetric signing + `SUPABASE_JWT_*` / JWKS URL** | F2-1 | Verify-only public key; **no** shared HS256 secret (DECISIONS §2 W3). Confirmed in P2a; reconfirm here. |
-| **KMS/KEK provisioned** (managed KMS choice + key ARN/ref) | F3-1 | Prod KEK in cloud KMS/HSM; pins the KMS SDK dependency; `STRATEGOS_KEK` is local-dev only (DECISIONS §2 W4). |
+| **KMS/KEK provisioned** (managed KMS choice + key ARN/ref) | F3-1 | Prod KEK in cloud KMS/HSM; pins the KMS SDK dependency; `TORII_KEK` is local-dev only (DECISIONS §2 W4). |
 | **Anthropic OAuth client** (`client_id`/`client_secret`, redirect URI, scopes, `token_url`) | F3-3 | v1 OAuth = **Anthropic only**; drives the connect + refresh flow; pairs with **GH-2** (DECISIONS §3). |
 | **GH-2 released** (crate issue, not strictly "human") | F3-3/F3-4 | `sensei-cloud-providers` must accept a first-class bearer/OAuth credential + surface a 401 signal before a real OAuth call. |
 

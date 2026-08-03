@@ -14,14 +14,28 @@ use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 use gateway::{
-    store::{CallStatus, GatewayStore, InferenceCall},
+    store::{CallStatus, GatewayStore, InferenceCall, StoredTrace},
     types::{
         capability::Capability,
-        request::{InferenceRequest, Message, MessageRole, Payload},
+        request::{
+            InferenceRequest, InferenceResponse, Message, MessageContent, MessageRole, Payload,
+            ToolDefinition,
+        },
+        trace::{ExecutionTrace, TraceStatus},
     },
 };
 
-use crate::{auth::Claims, state::SharedState, store::PgGatewayStore};
+use tools::{
+    run_tool_loop, AllowListResolver, InvokeCtx, ModelTurn, ToolDef, ToolInvocation, ToolInvoker,
+    ToolLoopConfig, ToolResultMessage, TurnOutput,
+};
+
+use crate::{
+    auth::Claims,
+    routes::mcp::{resolve_ctx, GatewayAudit, GatewayRedactor, GatewayTransport},
+    state::SharedState,
+    store::PgGatewayStore,
+};
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -44,6 +58,14 @@ pub struct ChatRequest {
     pub system: Option<String>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// X1 (P11): the space whose (role×space) tool allow-list applies. Optional — with no space
+    /// only role-wide grants resolve.
+    #[serde(default)]
+    pub space_id: Option<Uuid>,
+    /// X1: `"auto"` enables the MCP agentic tool loop (offering only allow-listed tools); any
+    /// other value / absent = no tools (the existing single-shot path, unchanged).
+    #[serde(default)]
+    pub tools: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -53,6 +75,10 @@ pub struct ChatResponse {
     pub cost_usd: f64,
     pub input_tokens: Option<u32>,
     pub output_tokens: Option<u32>,
+    /// X1: per-tool provenance for an agentic answer (`governance.tools[]`) — server/tool/
+    /// outcome/redaction type+count/plane/latency, never raw args/output. Empty for plain chat.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<tools::ToolProvenance>,
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +173,7 @@ fn build_inference_request(
 /// worst-case estimate BEFORE inference. **Fail-closed** — a token with no tenant,
 /// a caller with no resolvable node, or an over-cap `hard` node is denied (402).
 /// Returns `(tenant, node, hold)` for the commit/release at the end of the call.
-async fn reserve_budget(
+pub(crate) async fn reserve_budget(
     state: &SharedState,
     claims: &Claims,
     input_est: u32,
@@ -226,7 +252,7 @@ async fn reserve_budget(
 /// Chain-routed calls (no explicit model) are governed instead by per-step
 /// activation on the Routing screen, resolved inside the engine. Fail-closed on a
 /// DB error (honest 500, not a misleading "disabled").
-async fn ensure_model_enabled(
+pub(crate) async fn ensure_model_enabled(
     state: &SharedState,
     claims: &Claims,
     model: Option<&str>,
@@ -261,7 +287,7 @@ async fn ensure_model_enabled(
 /// The workspace's DLP masking posture (Settings → "PII & tenant masking"). Default ON
 /// (absent setting = masked); an admin can disable it as a capability-gated, audited
 /// workspace policy. Fail-safe: a DB read error keeps masking ON.
-async fn masking_enabled(state: &SharedState, tenant: Option<Uuid>) -> bool {
+pub(crate) async fn masking_enabled(state: &SharedState, tenant: Option<Uuid>) -> bool {
     let Some(tenant) = tenant else { return true };
     sqlx::query_scalar::<_, bool>(
         "select coalesce((select enabled from public.tenant_settings \
@@ -277,7 +303,7 @@ async fn masking_enabled(state: &SharedState, tenant: Option<Uuid>) -> bool {
 /// provider error without asking). Default ON (absent setting = enabled); an admin can
 /// disable it as a capability-gated, audited workspace policy, pinning inference to the
 /// primary model. Fail-safe: a DB read error keeps fallback ON (preserves availability).
-async fn auto_fallback_enabled(state: &SharedState, tenant: Option<Uuid>) -> bool {
+pub(crate) async fn auto_fallback_enabled(state: &SharedState, tenant: Option<Uuid>) -> bool {
     let Some(tenant) = tenant else { return true };
     sqlx::query_scalar::<_, bool>(
         "select coalesce((select enabled from public.tenant_settings \
@@ -293,7 +319,7 @@ async fn auto_fallback_enabled(state: &SharedState, tenant: Option<Uuid>) -> boo
 /// per-call `credentials` override (the engine prefers them over the platform/env key
 /// per router). **Fail-safe** — no tenant, an empty map, or a vault error leaves the
 /// request on platform keys; a bad BYOK setup never denies inference.
-async fn inject_tenant_credentials(
+pub(crate) async fn inject_tenant_credentials(
     state: &SharedState,
     tenant: Option<Uuid>,
     ireq: &mut InferenceRequest,
@@ -321,6 +347,42 @@ async fn inject_tenant_credentials(
     }
 }
 
+/// Snapshot the engine's routing decision as an `ExecutionTrace` for the ledger, linked to
+/// the ledger row `call_id`. The engine returns the ordered `attempts` chain on the response
+/// — each hop's adapter/model/status/duration plus the error that forced a fallback — which
+/// is exactly the "why this model" story Activity/Requests replay per call. The engine's
+/// internal candidate/skipped lists are not surfaced on the response, so those stay empty.
+pub(crate) fn build_trace(
+    call_id: Uuid,
+    capability: Capability,
+    resp: &InferenceResponse,
+    duration_ms: u64,
+    recorded_at: chrono::DateTime<Utc>,
+) -> StoredTrace {
+    let trace = ExecutionTrace {
+        request_id: call_id.to_string(),
+        capability,
+        status: if resp.success {
+            TraceStatus::Success
+        } else {
+            TraceStatus::Failed
+        },
+        duration_ms,
+        candidates: Vec::new(),
+        skipped: Vec::new(),
+        attempts: resp.attempts.clone(),
+        estimated_cost: resp.estimated_cost.clone(),
+        actual_cost: resp.actual_cost.clone(),
+        created_at: recorded_at,
+    };
+    StoredTrace {
+        id: Uuid::new_v4(),
+        inference_call_id: Some(call_id),
+        trace,
+        created_at: recorded_at,
+    }
+}
+
 /// A JSON error `Response` (used by the streaming handler, which can't `?`-return a tuple).
 fn error_response(code: StatusCode, msg: &str) -> Response {
     Response::builder()
@@ -344,6 +406,11 @@ pub async fn post_chat(
     State(state): State<SharedState>,
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, String)> {
+    // X1 (P11): opt-in MCP agentic tool loop. Gated on `tools == "auto"` so every existing caller
+    // (no `tools` field) takes the unchanged single-shot path below — no regression.
+    if req.tools.as_deref() == Some("auto") {
+        return post_chat_with_tools(&claims, &state, &req).await;
+    }
     let mask = masking_enabled(&state, claims.tenant_id).await;
     let allow_fallback = auto_fallback_enabled(&state, claims.tenant_id).await;
     let (mut ireq, redactions) = build_inference_request(&req, mask, allow_fallback);
@@ -414,6 +481,7 @@ pub async fn post_chat(
         cost_usd,
         input_tokens,
         output_tokens,
+        tools: Vec::new(),
     };
 
     // --- Persist (best-effort) — tenant is known (reserve_budget errored otherwise) ---
@@ -458,6 +526,13 @@ pub async fn post_chat(
         if let Err(e) = store.insert_inference_call(&call).await {
             tracing::warn!("chat: persist inference_call failed (best-effort): {}", e);
         } else {
+            // Per-call routing trace (the "why this model" attempt chain) → execution_traces,
+            // linked to this ledger row. Best-effort: a trace failure never affects the answer.
+            let stored_trace =
+                build_trace(call.id, call.capability.clone(), &resp, duration_ms, call.recorded_at);
+            if let Err(e) = store.insert_execution_trace(&stored_trace).await {
+                tracing::warn!("chat: persist execution_trace failed (best-effort): {}", e);
+            }
             // C6: one implicit quality-signal batch per call, keyed to the ledger row.
             let exec_loc = if call.adapter.contains("embedded")
                 || call.adapter.contains("ollama")
@@ -632,6 +707,13 @@ pub async fn post_chat_stream(
                 // Best-effort persist (mirror of post_chat) — tenant known via reserve.
                 {
                     let duration_ms = start.elapsed().as_millis() as u64;
+                    // Hoist the id/timestamp so the ledger row + its routing trace share them,
+                    // and snapshot the trace while `resp` is still fully intact (before its
+                    // `model` field is moved into the call below).
+                    let call_id = Uuid::new_v4();
+                    let recorded_at = Utc::now();
+                    let stored_trace =
+                        build_trace(call_id, Capability::TextChat, &resp, duration_ms, recorded_at);
                     let successful_attempt = resp.attempts.last();
                     let adapter = successful_attempt
                         .map(|a| a.adapter.clone())
@@ -639,7 +721,7 @@ pub async fn post_chat_stream(
                     let api_model_id = successful_attempt.map(|a| a.api_model_id.clone());
 
                     let call = InferenceCall {
-                        id: Uuid::new_v4(),
+                        id: call_id,
                         session_id: None,
                         project_id: None,
                         subject_id: Some(node), // C3: metered against the resolved budget node
@@ -656,7 +738,7 @@ pub async fn post_chat_stream(
                         status: CallStatus::Success,
                         error_type: None,
                         fallback_sequence: resp.attempts.len() as u8,
-                        recorded_at: Utc::now(),
+                        recorded_at,
                     };
 
                     let store = PgGatewayStore {
@@ -666,6 +748,13 @@ pub async fn post_chat_stream(
                     if let Err(e) = store.insert_inference_call(&call).await {
                         tracing::warn!("chat/stream: persist failed (best-effort): {}", e);
                     } else {
+                        // Per-call routing trace → execution_traces (best-effort), like post_chat.
+                        if let Err(e) = store.insert_execution_trace(&stored_trace).await {
+                            tracing::warn!(
+                                "chat/stream: persist execution_trace failed (best-effort): {}",
+                                e
+                            );
+                        }
                         // C6: one implicit quality-signal batch per call, keyed to the ledger row.
                         let exec_loc = if call.adapter.contains("embedded")
                             || call.adapter.contains("ollama")
@@ -720,6 +809,289 @@ pub async fn post_chat_stream(
         })
 }
 
+// ---------------------------------------------------------------------------
+// X1 (P11) · agentic MCP tool loop over /v1/chat
+// ---------------------------------------------------------------------------
+
+/// The tools-enabled path: resolve the caller's default-deny `(role×space)` allow-list, then run
+/// the bounded agentic loop (offering ONLY allowed tools; every tool call enforced + redacted by
+/// the runtime). Budget is metered per model turn (reserve→commit each turn). Returns the answer
+/// + `governance.tools[]` provenance. On any resolver error we offer NO tools (fail-safe) rather
+/// than opening the surface.
+async fn post_chat_with_tools(
+    claims: &Claims,
+    state: &SharedState,
+    req: &ChatRequest,
+) -> Result<Json<ChatResponse>, (StatusCode, String)> {
+    let tenant = claims.tenant_id.ok_or((
+        StatusCode::PAYMENT_REQUIRED,
+        "budgeted access required: token carries no tenant".to_string(),
+    ))?;
+    let rctx = resolve_ctx(claims).ok_or((
+        StatusCode::FORBIDDEN,
+        "no tenant/roles resolved for tool use".to_string(),
+    ))?;
+
+    // O3-2 governance: a policy can disable the whole tools feature (a locked/off kill-switch)
+    // regardless of grants. Ungoverned (no policy) → the allow-list is the gate.
+    let tools_gov =
+        crate::routes::config::resolve_feature(&state.pool, tenant, &claims.role_ids, "tools", req.space_id)
+            .await;
+    let allowed = if tools_gov.governed && !tools_gov.enabled {
+        tracing::info!(
+            "chat/tools: tools feature disabled by governance ({}) — offering no tools",
+            tools_gov.source
+        );
+        Default::default()
+    } else {
+        // Default-deny: a resolver error offers NO tools (never widen the surface on failure).
+        AllowListResolver::new(&state.pool)
+            .resolve(&rctx, req.space_id)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("chat/tools: allow-list resolve failed, offering no tools: {e}");
+                Default::default()
+            })
+    };
+
+    let mask = masking_enabled(state, Some(tenant)).await;
+    let allow_fallback = auto_fallback_enabled(state, Some(tenant)).await;
+
+    // Redact the base prompt in-flight (parity with the single-shot path).
+    let clean = |s: &str| -> String {
+        if mask {
+            crate::redact::Redactor.redact(s).0
+        } else {
+            s.to_string()
+        }
+    };
+    let base: Vec<Message> = req
+        .messages
+        .iter()
+        .map(|m| Message::text(map_role(&m.role), clean(&m.content)))
+        .collect();
+    let system = req.system.as_ref().map(|s| clean(s));
+
+    let turn = GatewayModelTurn {
+        state,
+        claims,
+        tenant,
+        mask,
+        allow_fallback,
+        max_tokens: req.max_tokens.unwrap_or(1024),
+        system,
+        messages: std::sync::Mutex::new(base),
+        total_cost: std::sync::Mutex::new(0.0),
+        last_model: std::sync::Mutex::new(None),
+    };
+    let transport = GatewayTransport {
+        pool: state.pool.clone(),
+    };
+    let redactor = GatewayRedactor { mask };
+    let audit = GatewayAudit {
+        pool: state.pool.clone(),
+    };
+    let invoker = ToolInvoker::new(&transport, &redactor, &audit);
+    let ictx = InvokeCtx {
+        tenant_id: tenant,
+        actor_id: rctx.actor_id,
+    };
+
+    let result = run_tool_loop(&ToolLoopConfig::default(), &ictx, &allowed, &invoker, &turn)
+        .await
+        .map_err(|e| {
+            tracing::error!("chat/tools: loop error: {e}");
+            (StatusCode::BAD_GATEWAY, "tool loop error".to_string())
+        })?;
+
+    let model = turn.last_model.lock().unwrap().clone();
+    let cost_usd = *turn.total_cost.lock().unwrap();
+    Ok(Json(ChatResponse {
+        content: result.answer,
+        model,
+        cost_usd,
+        input_tokens: None,
+        output_tokens: None,
+        tools: result.provenance,
+    }))
+}
+
+/// One metered model turn for the agentic loop. Owns the growing engine transcript (interior
+/// mutable) + the running cost/model, so the pure `crates/tools` driver stays engine-independent.
+struct GatewayModelTurn<'a> {
+    state: &'a SharedState,
+    claims: &'a Claims,
+    tenant: Uuid,
+    mask: bool,
+    allow_fallback: bool,
+    max_tokens: u32,
+    system: Option<String>,
+    /// user/assistant/tool messages accumulated across turns (NOT the system prompt).
+    messages: std::sync::Mutex<Vec<Message>>,
+    total_cost: std::sync::Mutex<f64>,
+    last_model: std::sync::Mutex<Option<String>>,
+}
+
+#[async_trait::async_trait]
+impl ModelTurn for GatewayModelTurn<'_> {
+    async fn turn(
+        &self,
+        tools_offered: &[ToolDef],
+        results: &[ToolResultMessage],
+    ) -> Result<TurnOutput, tools::ToolError> {
+        // Append the prior round's tool results, then snapshot the transcript (lock never held
+        // across an await).
+        let snapshot = {
+            let mut msgs = self.messages.lock().unwrap();
+            for r in results {
+                msgs.push(Message::tool_result(r.id.clone(), r.content.clone()));
+            }
+            msgs.clone()
+        };
+
+        // Offer ONLY the resolved allowed tools (default-deny at the offer point).
+        let tool_defs: Vec<ToolDefinition> = tools_offered
+            .iter()
+            .map(|t| ToolDefinition {
+                name: t.offered_name.clone(),
+                description: t.description.clone(),
+                input_schema: t.input_schema.clone(),
+            })
+            .collect();
+
+        let input_est = (snapshot
+            .iter()
+            .map(|m| m.content.as_text().chars().count())
+            .sum::<usize>()
+            / 4)
+        .min(u32::MAX as usize) as u32;
+
+        let mut ireq = InferenceRequest {
+            capability: Capability::TextChat,
+            model: None,
+            router: None,
+            chain: Some("chat".to_string()),
+            payload: Payload::Chat {
+                messages: snapshot,
+                system: self.system.clone(),
+                max_tokens: Some(self.max_tokens),
+                temperature: None,
+                tools: tool_defs,
+            },
+            budget: None,
+            auth: None,
+            panel: None,
+            consensus: None,
+            allow_fallback: self.allow_fallback,
+            credentials: Default::default(),
+        };
+        inject_tenant_credentials(self.state, Some(self.tenant), &mut ireq).await;
+
+        // Per-turn budget reserve (D6: one metered call per turn).
+        let (_t, node, hold) = reserve_budget(self.state, self.claims, input_est, self.max_tokens)
+            .await
+            .map_err(|(code, msg)| tools::ToolError::Transport(format!("budget {code}: {msg}")))?;
+
+        let start = Instant::now();
+        let exec = self.state.gateway.execute(&ireq).await;
+        let duration_ms = start.elapsed().as_millis() as u64;
+        let resp = match exec {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = crate::budgets::release(&self.state.pool, self.tenant, hold).await;
+                return Err(tools::ToolError::Transport(format!("engine: {e}")));
+            }
+        };
+
+        let cost = resp
+            .actual_cost
+            .as_ref()
+            .map(|c| c.total_cost)
+            .or_else(|| resp.estimated_cost.as_ref().map(|e| e.estimated))
+            .unwrap_or(0.0);
+        if let Err(e) = crate::budgets::commit(&self.state.pool, self.tenant, hold, cost).await {
+            tracing::warn!("chat/tools: budget commit failed: {e}");
+        }
+        *self.total_cost.lock().unwrap() += cost;
+        if let Some(m) = &resp.model {
+            *self.last_model.lock().unwrap() = Some(m.clone());
+        }
+
+        // Ledger row + trace per turn, so agentic turns show in Activity like any inference.
+        let store = PgGatewayStore {
+            pool: self.state.pool.clone(),
+            tenant_id: self.tenant,
+        };
+        let call = InferenceCall {
+            id: Uuid::new_v4(),
+            session_id: None,
+            project_id: None,
+            subject_id: Some(node),
+            tier: None,
+            capability: Capability::TextChat,
+            chain_id: Some("chat".to_string()),
+            adapter: resp
+                .attempts
+                .last()
+                .map(|a| a.adapter.clone())
+                .unwrap_or_else(|| "unknown".to_string()),
+            model: resp.model.clone().unwrap_or_default(),
+            api_model_id: resp.attempts.last().map(|a| a.api_model_id.clone()),
+            input_tokens: resp.usage.as_ref().map(|u| u.input_tokens),
+            output_tokens: resp.usage.as_ref().map(|u| u.output_tokens),
+            cost_usd: cost,
+            duration_ms,
+            status: if resp.success {
+                CallStatus::Success
+            } else {
+                CallStatus::Failed
+            },
+            error_type: None,
+            fallback_sequence: resp.attempts.len() as u8,
+            recorded_at: Utc::now(),
+        };
+        if store.insert_inference_call(&call).await.is_ok() {
+            let stored_trace =
+                build_trace(call.id, call.capability.clone(), &resp, duration_ms, call.recorded_at);
+            let _ = store.insert_execution_trace(&stored_trace).await;
+        }
+
+        // Tool calls → dispatch; otherwise the (redacted) final answer.
+        if resp.tool_calls.is_empty() {
+            let raw = resp.content.clone().unwrap_or_default();
+            let answer = if self.mask {
+                crate::redact::Redactor.redact(&raw).0
+            } else {
+                raw
+            };
+            Ok(TurnOutput::Answer(answer))
+        } else {
+            // Record the assistant's tool-call turn so the next turn's tool_results thread to it.
+            {
+                let mut msgs = self.messages.lock().unwrap();
+                msgs.push(Message {
+                    role: MessageRole::Assistant,
+                    content: MessageContent::Text {
+                        text: resp.content.clone().unwrap_or_default(),
+                    },
+                    tool_calls: resp.tool_calls.clone(),
+                    attachments: Vec::new(),
+                });
+            }
+            let calls = resp
+                .tool_calls
+                .iter()
+                .map(|tc| ToolInvocation {
+                    id: tc.id.clone(),
+                    offered_name: tc.name.clone(),
+                    arguments: tc.arguments.clone(),
+                })
+                .collect();
+            Ok(TurnOutput::ToolCalls(calls))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -734,7 +1106,85 @@ mod tests {
             chain: None,
             system: None,
             max_tokens: Some(16),
+            space_id: None,
+            tools: None,
         }
+    }
+
+    // A 2-attempt response (primary failed → local fallback answered) becomes a trace whose
+    // attempt chain preserves order + the fallback error, and whose status mirrors success —
+    // the per-call "why this model" data Activity/Requests replay.
+    #[test]
+    fn build_trace_captures_the_attempt_chain() {
+        use gateway::types::trace::{Attempt, AttemptStatus, TraceStatus};
+
+        fn attempt(
+            sequence: u8,
+            adapter: &str,
+            model: &str,
+            status: AttemptStatus,
+            error: Option<&str>,
+            fallback_triggered: bool,
+        ) -> Attempt {
+            Attempt {
+                sequence,
+                adapter: adapter.into(),
+                model: model.into(),
+                api_model_id: model.into(),
+                status,
+                duration_ms: 10,
+                tokens: None,
+                cost: None,
+                error: error.map(|e| e.to_string()),
+                fallback_triggered,
+            }
+        }
+
+        let resp = InferenceResponse {
+            success: true,
+            content: Some("hi".into()),
+            embeddings: None,
+            transcription: None,
+            audio: None,
+            images: None,
+            videos: None,
+            model: Some("gemma2:2b".into()),
+            usage: None,
+            tool_calls: Vec::new(),
+            estimated_cost: None,
+            actual_cost: None,
+            attempts: vec![
+                attempt(
+                    1,
+                    "anthropic",
+                    "claude-sonnet-4-5",
+                    AttemptStatus::Failed,
+                    Some("429 rate limited"),
+                    true,
+                ),
+                attempt(2, "ollama", "gemma2:2b", AttemptStatus::Success, None, false),
+            ],
+        };
+
+        let call_id = Uuid::new_v4();
+        let now = Utc::now();
+        let stored = build_trace(call_id, Capability::TextChat, &resp, 1_500, now);
+
+        assert_eq!(stored.inference_call_id, Some(call_id));
+        assert_eq!(stored.trace.request_id, call_id.to_string());
+        assert_eq!(stored.trace.duration_ms, 1_500);
+        assert!(matches!(stored.trace.status, TraceStatus::Success));
+        assert_eq!(stored.trace.attempts.len(), 2);
+        // the first hop is the failed primary, carrying the error that triggered the fallback.
+        assert_eq!(stored.trace.attempts[0].status, AttemptStatus::Failed);
+        assert!(stored.trace.attempts[0].fallback_triggered);
+        assert_eq!(
+            stored.trace.attempts[0].error.as_deref(),
+            Some("429 rate limited")
+        );
+        // the winning hop is the local fallback that actually answered.
+        assert_eq!(stored.trace.attempts[1].adapter, "ollama");
+        assert_eq!(stored.trace.attempts[1].status, AttemptStatus::Success);
     }
 
     // The masking toggle must actually gate C4 redaction: on → secrets stripped from

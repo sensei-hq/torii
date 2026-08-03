@@ -10,6 +10,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
 import { GATEWAY_URL, SUPABASE_ANON_KEY, SUPABASE_URL } from './env'
+import { setFeaturePayload, WORKSPACE_SCOPE, type FeatureScope } from './governance'
 import { meaningfulRole } from './identity'
 
 // A browser Supabase client purely to read the persisted session's access token —
@@ -102,7 +103,88 @@ export interface RequestRow {
 	cost_usd: number
 	duration_ms: number
 	status: string
+	/** which position in the fallback chain answered (1 = primary, >1 = fell back). */
+	fallback_sequence: number
 	recorded_at: string
+}
+
+// ── Analytics (O2) — server-computed rollups over the FULL ledger + the savings baseline
+// the client can't derive from the capped /v1/requests read. Shapes mirror the gateway
+// routes/analytics.rs JSON. The Overview prefers these and falls back to client derivation.
+export interface AnalyticsOverview {
+	spend_today: { value: number; cap: number | null; unit: string; pct_of_cap: number | null }
+	calls_today: { value: number; delta_pct_vs_prev: number | null }
+	fallbacks_today: { value: number }
+	latency: { avg_ms: number | null; p95_ms: number | null }
+	blended_cost_per_call: {
+		value: number
+		unit: string
+		window_days: number
+		delta_pct: number | null
+	}
+	savings_14d: { value: number; unit: string; vs_baseline: string }
+}
+/** One plane's aggregate: cloud calls carry `cloud_equiv_usd == cost_usd`; local's is the counterfactual. */
+export interface PlaneStat {
+	calls: number
+	cost_usd: number
+	cloud_equiv_usd: number
+}
+export interface PlaneSplit {
+	local: PlaneStat
+	cloud: PlaneStat
+	/** Σ cloud-equivalent of local calls = avoided cloud spend. */
+	savings_usd: number
+	savings_pct: number
+	baseline: string
+	series: { day: string; local_calls: number; cloud_calls: number; savings_usd: number }[]
+}
+export interface ModelMixRow {
+	model: string
+	provider: string
+	execution_location: string
+	calls: number
+	share_pct: number
+	cost_usd: number
+	savings_usd: number
+}
+export interface CostTrendPoint {
+	day: string
+	blended_cost_per_call: number
+	cost_usd: number
+	calls: number
+	savings_usd: number
+}
+export interface CostTrend {
+	series: CostTrendPoint[]
+	delta_pct: number | null
+}
+
+/** One hop of the engine's routing decision — mirrors the server `Attempt` (trace.rs). */
+export interface RoutingAttempt {
+	sequence: number
+	adapter: string
+	model: string
+	api_model_id: string
+	status: 'success' | 'failed'
+	duration_ms: number
+	/** present on a hop that failed and triggered a fallback — the "why it fell back". */
+	error?: string | null
+	fallback_triggered: boolean
+}
+
+/**
+ * The per-call routing trace behind a request — the "why this model" chain. Mirrors the
+ * server `ExecutionTrace` (trace.rs); `candidates`/`skipped` are empty from the chat path
+ * today, so only `attempts` is surfaced.
+ */
+export interface RoutingTrace {
+	request_id: string
+	capability: string
+	status: 'success' | 'failed'
+	duration_ms: number
+	attempts: RoutingAttempt[]
+	created_at: string
 }
 
 export interface BudgetNode {
@@ -115,6 +197,10 @@ export interface BudgetNode {
 	reserved_amount: number
 	enforcement: string
 	period: string
+	/** alert fraction 0..1 (0.8 = alert at 80%); null = no alert set. */
+	alert_threshold: number | null
+	/** drop to a free local model when the cap is exhausted. */
+	free_floor_enabled: boolean
 }
 
 export interface BudgetRequest {
@@ -314,6 +400,8 @@ export const api = {
 	whoami: () => gwGet<WhoAmI>('/v1/whoami'),
 	audit: (limit = 100) => gwGet<{ events: AuditEvent[] }>(`/v1/audit?limit=${limit}`),
 	requests: (limit = 100) => gwGet<{ requests: RequestRow[] }>(`/v1/requests?limit=${limit}`),
+	// the per-call routing trace ("why this model") for one request — fetched on row select.
+	requestTrace: (id: string) => gwGet<{ trace: RoutingTrace | null }>(`/v1/requests/${id}/trace`),
 	budgets: () => gwGet<{ nodes: BudgetNode[]; requests: BudgetRequest[] }>('/v1/budgets'),
 	connections: () => gwGet<{ providers: Provider[] }>('/v1/connections'),
 	apikeys: () => gwGet<{ keys: ApiKey[] }>('/v1/apikeys'),
@@ -321,10 +409,30 @@ export const api = {
 	models: () => gwGet<{ models: ModelRow[] }>('/v1/models'),
 	routing: () => gwGet<{ steps: RoutingStep[] }>('/v1/routing'),
 	governance: () => gwGet<{ features: Feature[] }>('/v1/governance'),
+	// O2 analytics — server-computed over the full ledger (+ savings baseline).
+	analyticsOverview: () => gwGet<AnalyticsOverview>('/v1/analytics/overview'),
+	planeSplit: (window = '30d') => gwGet<PlaneSplit>(`/v1/analytics/plane-split?window=${window}`),
+	modelMix: (window = '14d') =>
+		gwGet<{ models: ModelMixRow[] }>(`/v1/analytics/model-mix?window=${window}`),
+	costTrend: (window = '14d') =>
+		gwGet<CostTrend>(`/v1/analytics/cost-trend?window=${window}&bucket=day`),
 	// writes — /rpc/* only:
+	// Ask an admin to raise the cap on a budget node — records a PENDING budget_requests
+	// row (capability `budget.request`); it changes no cap itself (approve does). The
+	// gateway 404s if the node isn't in the caller's tenant. `requested_cap` is absolute.
+	requestBudgetIncrease: (node_id: string, requested_cap: number, reason?: string) =>
+		gwPost<{ id: string; status: string }>('/rpc/budgets/request', {
+			node_id,
+			requested_cap,
+			reason
+		}),
 	approveBudgetRequest: (id: string) => gwPost('/rpc/budgets/approve-request', { id }),
 	denyBudgetRequest: (id: string) => gwPost('/rpc/budgets/deny-request', { id }),
 	upsertBudgetNode: (node: Record<string, unknown>) => gwPost('/rpc/budgets/upsert-node', node),
+
+	// Delete a budget node + its whole subtree (server cascades via the parent_id self-FK).
+	// The org root is undeletable (400) — resolution is fail-closed. Capability `budget.write`.
+	deleteBudgetNode: (id: string) => gwPost<{ id: string }>('/rpc/budgets/delete-node', { id }),
 	// mint an identity-bound API key — the raw secret is returned once, never re-fetchable.
 	issueApiKey: (name?: string) => gwPost<IssuedKey>('/rpc/apikeys/issue', { name }),
 	// revoke a key — it stops authenticating immediately (auth denies non-active status).
@@ -340,14 +448,11 @@ export const api = {
 	oauthConnectConnection: (router: string, token: string) =>
 		gwPost('/rpc/connections/oauth-connect', { router, token }),
 	oauthRevokeConnection: (router: string) => gwPost('/rpc/connections/oauth-revoke', { router }),
-	// set a feature's workspace-scope governance posture (4-state).
-	setFeature: (feature_key: string, state: FeatureState) =>
-		gwPost('/rpc/governance/set-feature', {
-			feature_key,
-			scope_type: 'workspace',
-			scope_id: null,
-			state
-		}),
+	// set a feature's governance posture (4-state) for a scope. Scope defaults to the
+	// workspace default (scope_id null); pass a `role`/`space` scope to target it instead —
+	// the gateway resolves precedence workspace → space → role → user server-side (C4 §4.2).
+	setFeature: (feature_key: string, state: FeatureState, scope: FeatureScope = WORKSPACE_SCOPE) =>
+		gwPost('/rpc/governance/set-feature', setFeaturePayload(feature_key, state, scope)),
 	// enable/disable a fallback-chain step (the gateway skips inactive steps).
 	setRoutingStep: (id: string, is_active: boolean) =>
 		gwPost('/rpc/routing/set-step-active', { id, is_active }),

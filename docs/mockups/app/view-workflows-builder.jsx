@@ -4,38 +4,17 @@
    run-status colors live here and are reused by the index + runs views.
    Exposes window.StrategosWF. */
 (function () {
+  const { Chip, Split, Card } = window.StrategosUI;
   const { Icon } = window.StrategosIcons;
-  const { TOOLS } = window.StrategosData;
+  const { TOOLS } = window.StrategosAPI;
 
   // step type → glyph + label
-  const STEP = {
-    trigger:  { ic: 'bolt',     label: 'Trigger' },
-    retrieve: { ic: 'search',   label: 'Retrieve' },
-    draft:    { ic: 'create',   label: 'Draft' },
-    tool:     { ic: 'router',   label: 'Tool / MCP' },
-    classify: { ic: 'shield',   label: 'Classify' },
-    notify:   { ic: 'bell',     label: 'Notify' },
-    branch:   { ic: 'routing',  label: 'Branch' },
-    output:   { ic: 'check',    label: 'Output' },
-    agent:    { ic: 'spark',    label: 'Agent' },
-  };
-  const TRIG = {
-    schedule: { ic: 'calendar', label: 'Schedule' },
-    event:    { ic: 'bolt',     label: 'Event' },
-    manual:   { ic: 'playground', label: 'Manual' },
-  };
-  const STATUS = {
-    success: ['Success',      'var(--success)'],
-    review:  ['Needs review', 'var(--warning)'],
-    stepped: ['Stepped down', 'var(--accent)'],
-    failed:  ['Failed',       'var(--danger)'],
-    running: ['Running',      'var(--accent)'],
-  };
+  const { STEP, TRIG, STATUS, STEP_TYPES } = window.StrategosAPI.content.workflowsBuilder;
   const toolName = (id) => { const t = TOOLS.find((x) => x.id === id); return t ? t.name : id; };
 
   function ToolChip({ id }) {
     const t = TOOLS.find((x) => x.id === id) || {};
-    return <span className="chip"><Icon name="router" size={11} tone={t.allowed === false ? 'warning' : 'mute'} />{toolName(id)}</span>;
+    return <Chip><Icon name="router" size={11} tone={t.allowed === false ? 'warning' : 'mute'} />{toolName(id)}</Chip>;
   }
 
   /* ── List builder ──────────────────────────────────────────────── */
@@ -45,14 +24,14 @@
     return (
       <div className={'wf-step' + (isTrigger ? ' trigger' : '')}>
         <span className="wf-stepic"><Icon name={meta.ic} size={16} tone={isTrigger ? 'accent' : step.type === 'branch' ? 'warning' : 'soft'} /></span>
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="wf-node-kind">{isTrigger ? 'When' : meta.label}</span>
             {!isTrigger && <span className="wf-stepnum">step {num}</span>}
             {step && step.tool && <ToolChip id={step.tool} />}
           </div>
-          <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--ink)', marginTop: 2 }}>{isTrigger ? trigger.label : step.title}</div>
-          <div className="zs-body-sm" style={{ marginTop: 1 }}>{isTrigger ? trigger.detail : step.detail}</div>
+          <div className="text-sm font-semibold text-ink mt-0.5">{isTrigger ? trigger.label : step.title}</div>
+          <div className="zs-body-sm mt-px">{isTrigger ? trigger.detail : step.detail}</div>
         </div>
         {!isTrigger && <button className="icon-btn" title="Edit step" style={{ width: 26, height: 26, borderRadius: 'var(--radius-sm)', display: 'grid', placeItems: 'center' }}><Icon name="settings" size={14} tone="mute" /></button>}
       </div>
@@ -61,7 +40,6 @@
   const Conn = () => <div className="wf-conn"><span className="line" /></div>;
 
   /* step authoring helpers */
-  const STEP_TYPES = ['retrieve', 'draft', 'tool', 'classify', 'notify', 'branch', 'output'];
   function mkStep(type) {
     const title = { retrieve: 'Retrieve from workspace docs', draft: 'Draft from a template', tool: 'Run a tool', classify: 'Set classification', notify: 'Notify / hand off', branch: 'Condition?', output: 'Save the result' }[type];
     const s = { id: 's' + Date.now() + Math.floor(Math.random() * 9999), type, title, detail: '' };
@@ -73,11 +51,11 @@
   function AddStepMenu({ onAdd }) {
     const [open, setOpen] = React.useState(false);
     return (
-      <div style={{ position: 'relative', alignSelf: 'flex-start' }}>
+      <div className="relative self-start">
         <button className="wf-addbtn" onClick={() => setOpen((v) => !v)}><Icon name="plus" size={13} tone="mute" /> Add step</button>
         {open && (
           <React.Fragment>
-            <div style={{ position: 'fixed', inset: 0, zIndex: 19 }} onClick={() => setOpen(false)} />
+            <div className="fixed z-[19]" style={{ inset: 0}} onClick={() => setOpen(false)} />
             <div className="wf-addmenu">
               {STEP_TYPES.map((t) => (
                 <button key={t} onClick={() => { onAdd(mkStep(t)); setOpen(false); }}>
@@ -97,8 +75,8 @@
     return (
       <div className="wf-step">
         <span className="wf-stepic"><Icon name={meta.ic} size={16} tone={step.type === 'branch' ? 'warning' : 'soft'} /></span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="flex items-center gap-2" style={{ marginBottom: 2 }}>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-0.5">
             <select className="wf-typesel" value={step.type} onChange={(e) => { const nt = e.target.value; set(Object.assign({ type: nt, title: step.title }, nt === 'branch' ? { cond: step.cond || '', fail: step.fail || { type: 'notify', title: 'Else — escalate', detail: '' } } : {}, nt === 'tool' ? { tool: step.tool || 'files' } : {})); }}>
               {STEP_TYPES.map((t) => <option key={t} value={t}>{STEP[t].label}</option>)}
             </select>
@@ -112,7 +90,7 @@
           <input className="wf-edit-title" value={step.title} onChange={(e) => set({ title: e.target.value })} placeholder="Step title" />
           <input className="wf-edit-detail" value={step.detail || ''} onChange={(e) => set({ detail: e.target.value })} placeholder="Add detail (optional)" />
           {step.type === 'branch' && (
-            <div className="wf-fork" style={{ marginLeft: 0, marginTop: 6 }}>
+            <div className="wf-fork ml-0 mt-1.5">
               <input className="wf-edit-detail" style={{ color: 'var(--warning)' }} value={step.cond || ''} onChange={(e) => set({ cond: e.target.value })} placeholder="Condition — e.g. uplift > 5%" />
               <input className="wf-edit-title" value={(step.fail || {}).title || ''} onChange={(e) => set({ fail: Object.assign({}, step.fail, { title: e.target.value }) })} placeholder="Else — do what?" />
               <input className="wf-edit-detail" value={(step.fail || {}).detail || ''} onChange={(e) => set({ fail: Object.assign({}, step.fail, { detail: e.target.value }) })} placeholder="Else detail" />
@@ -133,8 +111,8 @@
     return (
       <div className="wf-step trigger">
         <span className="wf-stepic"><Icon name={TRIG[trigger.kind].ic} size={16} tone="accent" /></span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="flex items-center gap-2" style={{ marginBottom: 2 }}>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-0.5">
             <span className="wf-node-kind">When</span>
             <div className="tabs sm">
               {['schedule', 'event', 'manual'].map((k) => (
@@ -162,12 +140,12 @@
               <StepCard step={s} num={i + 1} />
               {s.type === 'branch' && s.fail && (
                 <div className="wf-fork">
-                  <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
+                  <div className="flex items-center gap-2 mb-1">
                     <Icon name={STEP[s.fail.type].ic} size={13} tone="warning" />
-                    <span className="wf-node-kind" style={{ color: 'var(--warning)' }}>else — {s.cond}</span>
+                    <span className="wf-node-kind text-warning">else — {s.cond}</span>
                   </div>
-                  <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--ink)' }}>{s.fail.title}</div>
-                  <div className="zs-body-sm" style={{ marginTop: 1 }}>{s.fail.detail}</div>
+                  <div className="text-sm font-semibold text-ink">{s.fail.title}</div>
+                  <div className="zs-body-sm mt-px">{s.fail.detail}</div>
                 </div>
               )}
             </React.Fragment>
@@ -191,7 +169,7 @@
         {steps.length === 0 && (
           <React.Fragment>
             <Conn />
-            <div className="zs-body-sm" style={{ padding: 'var(--space-5)', border: '1px dashed var(--paper-edge)', borderRadius: 'var(--radius-lg)', textAlign: 'center' }}>No steps yet — add the first one below.</div>
+            <div className="zs-body-sm p-6 border border-dashed rounded-lg text-center">No steps yet — add the first one below.</div>
           </React.Fragment>
         )}
         <Conn />
@@ -230,9 +208,9 @@
       return { d: `M ${ax},${ay} C ${ax + 48},${ay} ${bx - 48},${by} ${bx},${by}`, lx: (ax + bx) / 2, ly: (ay + by) / 2 - 2 };
     }
     return (
-      <div className="wf-canvas" style={{ maxHeight: 520 }}>
-        <div className="wf-canvas-inner" style={{ width: w, height: h, minWidth: '100%' }}>
-          <svg width={w} height={h} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+      <div className="wf-canvas max-h-[520px]">
+        <div className="wf-canvas-inner min-w-full" style={{ width: w, height: h}}>
+          <svg className="absolute" width={w} height={h} style={{ inset: 0, pointerEvents: 'none' }}>
             <defs>
               <marker id="wf-arrow" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto">
                 <path d="M0,0 L6,3 L0,6 Z" fill="var(--ink-faint)" />
@@ -265,19 +243,19 @@
     const g = wf.guardrails || {};
     return (
       <div>
-        <div className="flex items-center gap-3" style={{ padding: 'var(--space-3) var(--space-4)', borderRadius: 'var(--radius)', background: 'var(--accent-soft)', border: '1px solid oklch(0.58 0.15 35 / 0.25)', marginBottom: 'var(--space-5)' }}>
+        <div className="flex items-center gap-3 py-3 px-4 rounded bg-accent-soft border border-[oklch(0.58_0.15_35_/_0.25)] mb-6">
           <Icon name="spark" size={18} tone="accent" />
-          <div style={{ flex: 1 }}>
-            <div className="flex items-center gap-2"><span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--ink)' }}>Agent</span><span className="wf-preview-badge">v2 · preview</span></div>
-            <div className="zs-body-sm" style={{ marginTop: 1 }}>The agent decides its own steps to reach a goal — within the tools, budget and guardrails you set. Shipping in v2; editing is disabled in this preview.</div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2"><span className="text-sm font-semibold text-ink">Agent</span><span className="wf-preview-badge">v2 · preview</span></div>
+            <div className="zs-body-sm mt-px">The agent decides its own steps to reach a goal — within the tools, budget and guardrails you set. Shipping in v2; editing is disabled in this preview.</div>
           </div>
         </div>
 
-        <div className="grid-split">
-          <div className="card" style={{ padding: 'var(--space-5)' }}>
-            <div className="zs-eyebrow" style={{ marginBottom: 'var(--space-2)' }}>Goal</div>
-            <p style={{ fontFamily: 'var(--font-display)', fontSize: 'var(--text-lg)', lineHeight: 1.5, color: 'var(--ink)', textWrap: 'pretty' }}>{wf.goal}</p>
-            <div className="zs-eyebrow" style={{ margin: 'var(--space-5) 0 var(--space-2)' }}>Steps it chose · last dry-run</div>
+        <Split>
+          <Card className="p-6">
+            <div className="zs-eyebrow mb-2">Goal</div>
+            <p className="font-display text-lg leading-[1.5] text-ink [text-wrap:pretty]">{wf.goal}</p>
+            <div className="zs-eyebrow mt-6 mx-0 mb-2">Steps it chose · last dry-run</div>
             <div className="wf-list flex flex-col">
               {wf.trace.map((s, i) => (
                 <React.Fragment key={i}>
@@ -286,10 +264,10 @@
                 </React.Fragment>
               ))}
             </div>
-          </div>
+          </Card>
           <div className="flex flex-col gap-4">
-            <div className="card" style={{ padding: 'var(--space-5)' }}>
-              <div className="zs-eyebrow" style={{ marginBottom: 'var(--space-3)' }}>Guardrails</div>
+            <Card className="p-6">
+              <div className="zs-eyebrow mb-3">Guardrails</div>
               <div className="flex flex-col gap-3">
                 {[['Max steps', g.maxSteps + ' per run'], ['Budget cap', '$' + (g.budgetCap || 0).toFixed(2) + ' per run'], ['Grounding', g.grounded ? 'in-tenant only' : 'open']].map(([k, v]) => (
                   <div key={k} className="flex items-center justify-between">
@@ -298,13 +276,13 @@
                   </div>
                 ))}
               </div>
-            </div>
-            <div className="card" style={{ padding: 'var(--space-5)' }}>
-              <div className="zs-eyebrow" style={{ marginBottom: 'var(--space-3)' }}>Tools it may call</div>
+            </Card>
+            <Card className="p-6">
+              <div className="zs-eyebrow mb-3">Tools it may call</div>
               <div className="flex flex-wrap gap-2">{(wf.tools || []).map((t) => <ToolChip key={t} id={t} />)}</div>
-            </div>
+            </Card>
           </div>
-        </div>
+        </Split>
       </div>
     );
   }

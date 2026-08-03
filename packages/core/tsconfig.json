@@ -1,4 +1,11 @@
 {
   "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@kavach/sentry": ["./src/kavach-shims.d.ts"],
+      "@kavach/adapter-supabase": ["./src/kavach-shims.d.ts"],
+      "kavach": ["./src/kavach-shims.d.ts"]
+    }
+  },
   "include": ["src"]
 }

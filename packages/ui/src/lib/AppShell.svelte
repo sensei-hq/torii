@@ -26,7 +26,9 @@
 	// standalone use; the fallbacks are neutral labels — never fabricated data.
 	const shell = getContext('adminShell')
 	const user = $derived(shell?.user ?? userProp ?? { name: 'Account', initial: '·', role: '' })
-	const org = $derived(shell?.org ?? orgProp ?? { mark: '·', name: 'Workspace', sub: 'organization' })
+	const org = $derived(
+		shell?.org ?? orgProp ?? { mark: '·', name: 'Workspace', sub: 'organization' }
+	)
 	const onSignout = $derived(shell?.onSignout ?? onSignoutProp)
 
 	// Grouped nav — mirrors the mockup's Overview / Tenant / Gateway / Govern sections,
@@ -36,14 +38,23 @@
 			label: 'Overview',
 			items: [
 				{ href: '/', label: 'Overview', icon: 'i-solar-widget-5-bold-duotone' },
-				{ href: '/requests', label: 'Requests & audit', icon: 'i-solar-clipboard-list-bold-duotone', live: true }
+				{
+					href: '/requests',
+					label: 'Usage patterns',
+					icon: 'i-solar-clipboard-list-bold-duotone',
+					live: true
+				}
 			]
 		},
 		{
 			label: 'Tenant',
 			items: [
-				{ href: '/organization', label: 'Members & roles', icon: 'i-solar-buildings-3-bold-duotone' },
-				{ href: '/devices', label: 'Devices', icon: 'i-solar-laptop-bold-duotone' }
+				{
+					href: '/organization',
+					label: 'Members & roles',
+					icon: 'i-solar-buildings-3-bold-duotone'
+				},
+				{ href: '/devices', label: 'Device fleet', icon: 'i-solar-laptop-bold-duotone' }
 			]
 		},
 		{
@@ -90,11 +101,15 @@
 				<span class="i-solar-cpu-bold-duotone h-3 w-3"></span>Desktop app
 			</span>
 			<span class="mx-1 h-4 w-px bg-paper-edge"></span>
-			<button class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute" title="Search" aria-label="Search"
-				><span class="i-solar-magnifer-bold-duotone h-4 w-4"></span></button
+			<button
+				class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute"
+				title="Search"
+				aria-label="Search"><span class="i-solar-magnifer-bold-duotone h-4 w-4"></span></button
 			>
-			<button class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute" title="Notifications" aria-label="Notifications"
-				><span class="i-solar-bell-bold-duotone h-4 w-4"></span></button
+			<button
+				class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute"
+				title="Notifications"
+				aria-label="Notifications"><span class="i-solar-bell-bold-duotone h-4 w-4"></span></button
 			>
 			<button
 				onclick={toggleMode}
@@ -102,7 +117,11 @@
 				title="Toggle light / dark"
 				aria-label="Toggle light or dark theme"
 			>
-				<span class="{vibe.mode === 'dark' ? 'i-solar-sun-2-bold-duotone' : 'i-solar-moon-bold-duotone'} block h-4 w-4"></span>
+				<span
+					class="{vibe.mode === 'dark'
+						? 'i-solar-sun-2-bold-duotone'
+						: 'i-solar-moon-bold-duotone'} block h-4 w-4"
+				></span>
 			</button>
 			<span class="mx-1 h-4 w-px bg-paper-edge"></span>
 			<span class="flex items-center gap-2" title={user.role}>
@@ -111,13 +130,14 @@
 					>{user.initial}</span
 				>
 				<span class="whitespace-nowrap text-xs text-ink-soft"
-				>{user.name}{user.role ? ` · ${user.role}` : ''}</span
-			>
+					>{user.name}{user.role ? ` · ${user.role}` : ''}</span
+				>
 			</span>
 			{#if onSignout}
 				<button
 					class="rounded-md p-1.5 text-ink-mute hover:bg-paper-mute"
-					title="Sign out" aria-label="Sign out"
+					title="Sign out"
+					aria-label="Sign out"
 					onclick={onSignout}><span class="i-solar-logout-3-bold-duotone h-4 w-4"></span></button
 				>
 			{/if}
@@ -153,9 +173,7 @@
 			<!-- nav groups -->
 			{#each NAV as group (group.label)}
 				<div class="mt-5">
-					<div
-						class="mb-1.5 px-2 text-xs font-semibold uppercase tracking-[0.14em] text-ink-faint"
-					>
+					<div class="mb-1.5 px-2 text-xs font-semibold uppercase tracking-[0.14em] text-ink-faint">
 						{group.label}
 					</div>
 					<div class="flex flex-col gap-0.5">

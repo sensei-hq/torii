@@ -3,6 +3,8 @@
 	import { SvelteSet } from 'svelte/reactivity'
 	import { AppShell, PageHeader, Card, CardHead, Glyph, Chip, Async, Empty } from '@torii/ui'
 	import { api } from '$lib/api'
+	import { orgTreeState } from '$lib/org-tree-state.svelte'
+	import BudgetTreeNode from '$lib/BudgetTreeNode.svelte'
 
 	/** @type {import('$lib/api').Member[]} */
 	let members = $state([])
@@ -13,16 +15,35 @@
 	/** the caller's own identity, for gating owner-only controls (e.g. transfer ownership) */
 	/** @type {import('$lib/api').WhoAmI | null} */
 	let me = $state(null)
+	/** @type {import('$lib/api').ApiKey[]} */
+	let keys = $state([])
 	let error = $state('')
 	let loading = $state(true)
 	let busy = $state('')
 
+	// API-identity issuance — reveal-once. The raw secret is held only in memory, shown once,
+	// then cleared. Own `keyName`/`keyBusy` so key ops never disable the member/role controls.
+	let keyName = $state('')
+	let issuing = $state(false)
+	let keyBusy = $state('') // id of the key currently being revoked
+	/** @type {import('$lib/api').IssuedKey | null} */
+	let revealed = $state(null)
+	let copied = $state(false)
+
 	async function load() {
 		try {
-			const o = await api.org()
+			// Budgets ride their own capability (budget.read) — a denial or an unseeded tree must
+			// NOT blank the RBAC below, so it degrades to an empty tree in its own slot.
+			const [o, k, b] = await Promise.all([
+				api.org(),
+				api.apikeys(),
+				api.budgets().catch(() => ({ nodes: [], requests: [] }))
+			])
 			members = o.members
 			roles = o.roles
 			capabilities = o.capabilities
+			keys = k.keys
+			orgTreeState.load(b.nodes)
 			me = await api.whoami()
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e)
@@ -31,6 +52,59 @@
 		}
 	}
 	onMount(load)
+
+	// org root (the parent-less node) drives the header "left this month" pill.
+	const orgRoot = $derived(orgTreeState.nodes.find((n) => n.parent_id == null))
+	/** @param {number | null | undefined} n */
+	const money0 = (n) => (n == null ? '∞' : '$' + Math.round(n).toLocaleString())
+
+	/** Issue a scoped API identity — the raw key is returned once, kept only in `revealed`. */
+	async function issue() {
+		if (issuing) return
+		issuing = true
+		error = ''
+		copied = false
+		try {
+			revealed = await api.issueApiKey(keyName.trim() || undefined)
+			keyName = ''
+			await load() // refresh the masked list; the raw key stays only in `revealed`
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e)
+		} finally {
+			issuing = false
+		}
+	}
+
+	/** Revoke a key — it stops authenticating immediately. Irreversible (re-issue a new one).
+	 * @param {string} id */
+	async function revoke(id) {
+		if (keyBusy) return
+		keyBusy = id
+		error = ''
+		try {
+			await api.revokeApiKey(id)
+			await load()
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e)
+		} finally {
+			keyBusy = ''
+		}
+	}
+
+	async function copyKey() {
+		if (!revealed) return
+		try {
+			await navigator.clipboard.writeText(revealed.key)
+			copied = true
+		} catch {
+			copied = false
+		}
+	}
+
+	/** @param {string} iso */
+	const fmtDate = (iso) => new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' })
+	/** @param {unknown} scope */
+	const scopeLabel = (scope) => (Array.isArray(scope) ? scope.join(' · ') : 'inference')
 
 	/**
 	 * Assign a role to a member via the committed /rpc/rbac/assign-role. NOTE: this bumps the
@@ -177,14 +251,90 @@
 <AppShell app="admin" title="Organization">
 	<PageHeader
 		eyebrow="Organization"
-		title="People & access"
-		sub="Members and their roles, and the authoritative role × capability matrix. Effective access is the union of a member's roles — resolved server-side by the gateway, never trusted from the token."
-	/>
+		title="Hierarchy & budgets"
+		sub="Model your org as it really is — the budget hierarchy (add levels, rename, cap each; caps cascade org → team → user), the people and roles that map onto it, and the API identities for your own apps. Access resolves server-side, never trusted from the token."
+	>
+		{#snippet actions()}
+			{#if orgRoot}
+				<span
+					class="inline-flex items-center gap-1.5 rounded-full border border-paper-edge bg-paper px-2.5 py-1 text-xs text-ink-soft"
+				>
+					<span class="h-1.5 w-1.5 rounded-full bg-success"></span>
+					{#if orgRoot.cap_amount != null}
+						{money0(orgRoot.cap_amount - orgRoot.spent_amount)} left this {orgRoot.period ===
+						'daily'
+							? 'day'
+							: orgRoot.period === 'weekly'
+								? 'week'
+								: 'month'}
+					{:else}
+						{money0(orgRoot.spent_amount)} spent · no org cap
+					{/if}
+				</span>
+			{/if}
+		{/snippet}
+	</PageHeader>
 
 	{#if loading}
 		<Async loading />
 	{:else}
-		<div class="space-y-4 px-5 pb-6">
+		<div class="space-y-6 px-4 pb-12 sm:px-6 xl:px-12 xl:pb-16">
+			<!-- Budget hierarchy — the editable org → dept → team → user tree (real /v1/budgets +
+			     upsert/delete RPCs). The mock's SSO/SCIM directory card is intentionally omitted:
+			     auth method (magic-link/OAuth/SSO) is out of scope; the hierarchy + budgets are the point. -->
+			<Card flush>
+				<CardHead title="Budget hierarchy" icon="i-solar-buildings-2-bold-duotone">
+					{#snippet right()}
+						{#if orgRoot}
+							<button
+								type="button"
+								onclick={() => orgTreeState.addChild(orgRoot)}
+								disabled={orgTreeState.busy === orgRoot.id}
+								class="inline-flex items-center gap-1.5 rounded-md border border-paper-edge bg-paper px-2.5 py-1 text-xs text-ink-soft transition-colors hover:bg-paper-mute disabled:opacity-40"
+							>
+								<span class="i-solar-add-circle-linear h-3.5 w-3.5 text-ink-mute"></span>
+								Add department
+							</button>
+						{/if}
+					{/snippet}
+				</CardHead>
+				{#if orgTreeState.error}
+					<div class="flex items-center gap-2 border-b border-paper-edge px-6 py-2">
+						<span class="text-xs text-danger" role="alert">{orgTreeState.error}</span>
+						<button
+							type="button"
+							onclick={() => orgTreeState.clearError()}
+							class="text-xs text-ink-mute hover:text-ink">dismiss</button
+						>
+					</div>
+				{/if}
+				<div class="px-4 py-3">
+					{#each orgTreeState.tree as root (root.id)}
+						<BudgetTreeNode node={root} />
+					{/each}
+					{#if orgTreeState.tree.length === 0}
+						<Empty
+							icon="i-solar-wallet-bold-duotone"
+							message="No budget tree seeded for this tenant."
+							pad="py-8"
+						/>
+					{/if}
+				</div>
+				<div
+					class="flex items-start gap-2 border-t border-dashed border-paper-edge px-6 py-3 text-xs text-ink-mute"
+				>
+					<span class="i-solar-info-circle-linear mt-0.5 h-3.5 w-3.5 shrink-0"></span>
+					<span>
+						Each level shows <b>alloc</b> — the sum of its children's caps against its own;
+						over-allocate and it turns red. The gear sets a node's <b>hard/soft</b> cap,
+						<b>alert threshold</b>
+						and
+						<b>free-floor</b>; <b>D·W·M</b> set its enforcement window. Caps cascade — a call needs
+						headroom at user, team, department <em>and</em> org.
+					</span>
+				</div>
+			</Card>
+
 			<!-- action/load errors show inline here, without hiding the member list -->
 			{#if error}
 				<Card pad
@@ -269,6 +419,124 @@
 				</div>
 			</Card>
 
+			<!-- Reveal-once banner: the raw secret, shown exactly once, then unrecoverable. -->
+			{#if revealed}
+				<Card pad class="border-accent bg-accent-soft">
+					<div class="flex items-start gap-3">
+						<span class="i-solar-key-bold-duotone mt-0.5 h-4 w-4 text-accent"></span>
+						<div class="min-w-0 flex-1">
+							<p class="text-sm font-medium text-ink">
+								Copy this key now — it will not be shown again.
+							</p>
+							<div class="mt-2 flex items-center gap-2">
+								<code
+									class="flex-1 select-all overflow-x-auto whitespace-nowrap rounded-md border border-paper-edge bg-paper px-2.5 py-1.5 font-mono text-xs text-ink"
+									>{revealed.key}</code
+								>
+								<button
+									onclick={copyKey}
+									class="rounded-md bg-ink px-3 py-1.5 text-xs font-medium text-paper hover:opacity-90"
+									>{copied ? 'Copied' : 'Copy'}</button
+								>
+								<button
+									onclick={() => (revealed = null)}
+									class="rounded-md border border-paper-edge px-3 py-1.5 text-xs text-ink-soft hover:bg-paper-mute"
+									>Dismiss</button
+								>
+							</div>
+						</div>
+					</div>
+				</Card>
+			{/if}
+
+			<!-- API identities — non-human principals for the org's own apps. Issue reveal-once, list masked. -->
+			<Card flush>
+				<CardHead>
+					{#snippet left()}
+						<span class="flex items-center gap-2">
+							<span class="text-xs font-semibold uppercase tracking-wider text-ink-mute"
+								>API identities</span
+							>
+							<span class="font-mono text-xs text-ink-mute"
+								>{keys.filter((k) => k.status === 'active').length} active</span
+							>
+						</span>
+					{/snippet}
+					{#snippet right()}
+						<div class="flex items-center gap-2">
+							<input
+								bind:value={keyName}
+								aria-label="API key name"
+								placeholder="key name (e.g. ingest-worker)"
+								class="w-48 rounded-md border border-paper-edge bg-paper px-2.5 py-1 font-mono text-xs text-ink placeholder:text-ink-mute"
+								onkeydown={(e) => e.key === 'Enter' && issue()}
+							/>
+							<button
+								onclick={issue}
+								disabled={issuing}
+								class="rounded-md bg-primary px-3 py-1 text-xs font-medium text-on-primary disabled:opacity-40"
+								>{issuing ? 'Issuing…' : 'Issue key'}</button
+							>
+						</div>
+					{/snippet}
+				</CardHead>
+				<div>
+					{#each keys as k (k.id)}
+						<div
+							class="flex items-center gap-3 border-b border-paper-edge px-4 py-3 last:border-b-0"
+							class:opacity-55={k.status === 'revoked'}
+						>
+							<Glyph
+								icon={k.service_account_id
+									? 'i-solar-server-bold-duotone'
+									: 'i-solar-key-bold-duotone'}
+								tone="soft"
+							/>
+							<div class="min-w-0 flex-1">
+								<div class="flex flex-wrap items-center gap-2">
+									<span class="font-mono text-sm text-ink">{k.prefix}…</span>
+									<Chip>{k.service_account_id ? 'service account' : 'API key'}</Chip>
+									<Chip>{scopeLabel(k.scope)}</Chip>
+								</div>
+								<div class="mt-1 font-mono text-xs text-ink-mute">
+									created {fmtDate(k.created_at)} · last used
+									{k.last_used_at ? fmtDate(k.last_used_at) : '—'}
+								</div>
+							</div>
+							<div class="flex flex-shrink-0 items-center gap-2">
+								<Chip tone={k.status === 'active' ? 'success' : 'warning'}>{k.status}</Chip>
+								{#if k.status === 'active'}
+									<button
+										onclick={() => revoke(k.id)}
+										disabled={keyBusy === k.id}
+										aria-label={`Revoke API key ${k.prefix}`}
+										title="Revoke this key"
+										class="rounded-md border border-paper-edge px-2 py-1 text-xs text-ink-mute hover:border-danger hover:text-danger disabled:opacity-40"
+										>{keyBusy === k.id ? 'Revoking…' : 'Revoke'}</button
+									>
+								{/if}
+							</div>
+						</div>
+					{/each}
+					{#if keys.length === 0}
+						<Empty
+							icon="i-solar-key-bold-duotone"
+							message="No API identities yet"
+							hint="Issue one above."
+							pad="py-8"
+						/>
+					{/if}
+				</div>
+				<div class="flex items-start gap-2 border-t border-dashed border-paper-edge px-4 py-3">
+					<span class="i-solar-shield-check-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
+					<span class="text-xs leading-relaxed text-ink-mute">
+						Keys are shown once at creation, then stored only as an argon2id hash. A key carries no
+						budget — spend meters to the bound identity's node in the org tree, and every call is
+						audited.
+					</span>
+				</div>
+			</Card>
+
 			<!-- roles overview -->
 			<Card flush>
 				<CardHead title="Roles" meta={`${roles.length}`} />
@@ -301,9 +569,8 @@
 							<h3 class="text-sm font-semibold text-ink">
 								New custom role <span class="font-normal text-ink-mute">from {sourceName}</span>
 							</h3>
-							<button
-								onclick={() => (dupOpen = false)}
-								class="text-xs text-ink-mute hover:text-ink">Cancel</button
+							<button onclick={() => (dupOpen = false)} class="text-xs text-ink-mute hover:text-ink"
+								>Cancel</button
 							>
 						</div>
 						<div class="flex flex-wrap gap-3">

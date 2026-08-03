@@ -35,7 +35,7 @@ Define how the desktop app runs **local chat/reasoning and embeddings in-process
 ## 2. Responsibilities
 
 1. **Assemble the local engine at boot** — construct the `ChainedResolver`, the `EmbeddedLlamaAdapter` (shared llama.cpp backend, chat+embed) and `OrtAdapter` (ONNX embed), register them into an `AdapterRegistry`, and wire the `ProvisioningSupervisor` as the local `ReadinessProbe`.
-2. **Own the on-device model registry** — resolve a stable model id to on-disk bytes across Managed (`~/.strategos/models`, app-owned), Ollama (read-through of an existing `~/.ollama` cache — never written), and External (user-pointed paths) sources.
+2. **Own the on-device model registry** — resolve a stable model id to on-disk bytes across Managed (`~/.torii/models`, app-owned), Ollama (read-through of an existing `~/.ollama` cache — never written), and External (user-pointed paths) sources.
 3. **Manage model lifecycle** — fit-check → pull (HF-hub, revision-pinned, hash-verified) → verify → load → register, with **streamed provisioning phases**; update; remove (managed bytes only); GC unreferenced managed files; report storage usage.
 4. **Serve local inference in-process** — chat/reasoning + streaming, and **1024-dim embeddings**, at `$0`, offline-capable, via the capability adapters; enforce the 1024-dim contract at registration.
 5. **Provide readiness/degradation signal** — expose per-model `ProvisionPhase` so D3/C2's local steps degrade (fall through) when a model isn't `Ready` instead of blocking a request.
@@ -73,7 +73,7 @@ From `sensei-kernel::registry` (verified):
 ```rust
 enum ModelFormat { Gguf, Onnx, Safetensors }               // #[serde snake_case]
 enum ModelSource {                                          // #[serde tag="kind"]
-    Managed  { path: PathBuf },                             // app-owned, GC-able (~/.strategos/models)
+    Managed  { path: PathBuf },                             // app-owned, GC-able (~/.torii/models)
     Ollama   { manifest: PathBuf, blob_digest: String, blob_path: PathBuf }, // read-through, never written
     External { path: PathBuf },                             // user-pointed, linked in place
 }
@@ -216,7 +216,7 @@ impl LocalEngine {
 - **No `service_role`, no direct tenant-DB access.** D2 owns no F1 table and opens no `service_role` connection. Governance over "which local models are allowed" arrives **read-only** via the D4 config snapshot (catalog overrides + `feature_states`, resolved workspace→space→role→user); D2 enforces the resolved verdict client-side but the authoritative gate is server-side (offering a disabled model is refused, and a cloud step is never fulfilled locally).
 - **Local calls are `$0` but attributed + logged.** Every local inference is recorded into D4's **signed, idempotent** offline buffer as an `inference_calls` row with `execution_location='local'`, `cost_usd=0`, bound to the caller's identity/subject node — so a device cannot forge or under-report spend (DECISIONS §2 apply-without-asking) and budgets stay unified even though local is free.
 - **Device revocation.** Local inference is deliberately **offline-capable** and continues on a network partition; but a **revoked device** loses config sync (D4) and cannot proxy cloud steps (C1 hot-path device check). D2 respects the last-known governance snapshot when offline and stops honoring org-scoped local features once D4 reports revocation.
-- **Model-bytes supply-chain integrity.** HF pulls pin a `revision` and verify `ModelEntry.sha256` on load where present; a hash/format mismatch is a hard registration error (the model is not offered). Managed bytes live under an app-owned root (`~/.strategos/models`) the app controls; Ollama/External sources are **read-only** (never mutated).
+- **Model-bytes supply-chain integrity.** HF pulls pin a `revision` and verify `ModelEntry.sha256` on load where present; a hash/format mismatch is a hard registration error (the model is not offered). Managed bytes live under an app-owned root (`~/.torii/models`) the app controls; Ollama/External sources are **read-only** (never mutated).
 - **Redaction still applies on the local plane (DECISIONS §2 W5).** On-device ingestion/inference runs through C5's redact-at-rest and C4's redact-in-flight exactly as the cloud plane — a local model is not a bypass for secret/PII egress controls; §3c sensitive datasets **prefer** the local plane precisely so raw values never leave the machine.
 - **Single-user device boundary.** The local store + local RAG index belong to the enrolled user/tenant session (D1); there is no multi-tenant data co-resident on a device. Tenant isolation on the central plane is unaffected (D2 never queries it).
 - **No secret in logs.** Provisioning/hardware logs emit model ids, sizes, phases, and fit verdicts only — never a keychain token or any credential (asserted by a log-scan test).
@@ -226,7 +226,7 @@ impl LocalEngine {
 ## 6. Key flows
 
 **Flow 1 — Boot the local engine (app start).**
-1. Read `LocalConfig` (managed root default `~/.strategos/models`, enabled features, device defaults) from the D1 local store.
+1. Read `LocalConfig` (managed root default `~/.torii/models`, enabled features, device defaults) from the D1 local store.
 2. Build `ChainedResolver` = `ManagedResolver::new(root)` → `OllamaResolver::new(~/.ollama)` (if present) → `ExternalResolver::new()` (Managed→Ollama→External precedence).
 3. Construct `EmbeddedLlamaAdapter::with_shared_backend("local-llama", Arc<resolver>)` (implements **chat+embed**) and, if an ONNX embed model is chosen, `OrtAdapter::load(entry, OrtConfig::bert(id))`.
 4. `AdapterRegistry::register(Arc::new(embedded_llama))` (lands in both chat+embed maps) and `register(Arc::new(ort))` (embed map).
@@ -273,7 +273,7 @@ Consumes the six `sensei-*` crates @ pinned **`v0.4.6`** (dev-in-place via `[pat
 Settling D2's residuals per the RESOLVED ARCHITECTURE DEFAULTS and the crate reality:
 
 1. **"Embedded" = `EmbeddedLlamaAdapter` (llama.cpp, in-process) — NOT "embedded Ollama".** The desktop local plane runs models **in-process via `EmbeddedLlamaAdapter`** (chat+embed) and `OrtAdapter` (embed). **`OllamaResolver` is a read-through** that reuses bytes already in an existing `~/.ollama` cache (no daemon call for inference); `sensei-cloud-providers::OllamaAdapter` (HTTP-to-a-server) is a **cloud/router** option, not this path. *This corrects the D2 seed's and mockup §A.9's "embedded Ollama" wording (crate_issues / mockup_gaps).* *Rationale: verified — there is no embedded-Ollama inference path in `v0.4.6`; "embedded" means the in-process llama.cpp adapter.*
-2. **Managed model root = `~/.strategos/models` (app-configurable), not the crate default `~/.sensei/models`.** Set explicitly via `ManagedResolver::new(root)`. *Rationale: no-hardcoded-ops + product isolation; the crate default is a sensei-CLI convention, overridable by construction.*
+2. **Managed model root = `~/.torii/models` (app-configurable), not the crate default `~/.sensei/models`.** Set explicitly via `ManagedResolver::new(root)`. *Rationale: no-hardcoded-ops + product isolation; the crate default is a sensei-CLI convention, overridable by construction.*
 3. **Default embed model = a 1024-dim GGUF for `EmbeddedLlamaAdapter` (e.g. `mxbai-embed-large` / `bge-large`), with `OrtAdapter` (ONNX, `OrtConfig::bert`, Mean pooling) as the alternate embed path.** D2 **asserts output dim == 1024** at registration and per-call; mismatch is a hard error. *Rationale: matches `document_embeddings vector(1024)` (F1 §9b, C5 §7.1) so the device and cloud indexes are interchangeable; a single llama backend already serves chat, so a GGUF embed model avoids a second runtime.*
 4. **Default local chat model = a small instruct GGUF (operator-curated catalog; e.g. Llama-3.2-3B-Instruct / gemma2:2b-class), not a baked constant.** The catalog is operator-governed via the D4 snapshot (catalog overrides + feature governance). *Rationale: no-hardcoded-ops (DECISIONS §3 / project-gateway-no-hardcoded-ops); device RAM varies, so the offered/default model must be config, gated by fit.*
 5. **v1 fit-gating uses the crate's disk+RAM pre-flight (`FitReport`); GPU/accelerator detection is best-effort advisory only.** A model is offered/pullable iff `FitReport.fits`; the accelerator field is informational. *Rationale: the crate provides only `sysinfo` disk+RAM (verified); a robust cross-platform GPU probe is out of v1's crate surface — advisory now, first-class later (open question 1).*
@@ -294,7 +294,7 @@ Settling D2's residuals per the RESOLVED ARCHITECTURE DEFAULTS and the crate rea
 6. **Local chat is `$0` and logged.** `LocalEngine::chat` returns a real local completion offline; exactly one `inference_calls` record with `execution_location='local'` and `cost_usd=0`, bound to the caller's subject node, is handed to the D4 buffer.
 7. **Degradation, not block.** With a local model not `Ready`, D3's local step is told to fall through (via `phase()`), rather than the request hanging; a `Ready` model serves normally.
 8. **Storage & GC.** `local_model_remove` on a Managed model deletes its bytes and drops `local_storage_usage.managed_bytes` accordingly; removing a referenced model or an Ollama/External entry returns a typed refusal; `local_gc` removes only unreferenced managed files.
-9. **Managed root.** Managed models are written under `~/.strategos/models` (configurable), not `~/.sensei/models`.
+9. **Managed root.** Managed models are written under `~/.torii/models` (configurable), not `~/.sensei/models`.
 10. **No credentials on device.** No `router_credentials`/provider secret is read, stored, or logged by D2; a chain step requiring a credential is never fulfilled locally (it is proxied to C1 by D3); a log-scan test finds no secret.
 11. **Offline capability.** With the network down, `local_models_list`, load, `chat`, and `embed` all succeed on already-downloaded models; a cloud-only chain degrades to the local free-floor step (via D3) at `$0`.
 12. **Hardware detection.** `local_device_capabilities` reports CPU count + `sysinfo` RAM/disk consistent with `FitReport`, plus an accelerator advisory flagged `advisory:true`.

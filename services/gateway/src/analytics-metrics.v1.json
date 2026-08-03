@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "note": "O2 §4.2 metric descriptor. W1/W2/O3 clients render labels + units FROM this, hardcoding no keys. Adding a metric bumps schema_version additively (no key removed/renamed in-version). unit ∈ usd|ms|percent|ratio|count; source ∈ ledger|quality-signal|derived.",
+  "metrics": [
+    { "key": "cost_usd", "unit": "usd", "source": "ledger", "dimension": "money", "description": "Actual metered spend (0 for local calls)." },
+    { "key": "cloud_equiv_usd", "unit": "usd", "source": "derived", "dimension": "money", "description": "Cloud-equivalent cost of local calls, priced at the cheapest cloud step in the chain." },
+    { "key": "savings_usd", "unit": "usd", "source": "derived", "dimension": "money", "description": "Avoided cloud spend = cloud_equiv_usd − cost_usd (≥ 0)." },
+    { "key": "savings_14d", "unit": "usd", "source": "derived", "dimension": "money", "description": "Trailing-14d avoided cloud spend." },
+    { "key": "spend_today", "unit": "usd", "source": "derived", "dimension": "money", "description": "Today's actual metered spend." },
+    { "key": "blended_cost_per_call", "unit": "usd", "source": "derived", "dimension": "money", "description": "cost_usd / calls over the window." },
+    { "key": "pct_of_cap", "unit": "percent", "source": "derived", "dimension": "ratio", "description": "Spend as a percentage of the node's budget cap." },
+    { "key": "share_pct", "unit": "percent", "source": "derived", "dimension": "ratio", "description": "A model's share of the window's calls." },
+    { "key": "savings_pct", "unit": "percent", "source": "derived", "dimension": "ratio", "description": "savings_usd / (cloud cost + savings)." },
+    { "key": "delta_pct", "unit": "percent", "source": "derived", "dimension": "ratio", "description": "Period-over-period change of a metric." },
+    { "key": "calls", "unit": "count", "source": "ledger", "dimension": "volume", "description": "Number of inference calls." },
+    { "key": "calls_today", "unit": "count", "source": "ledger", "dimension": "volume", "description": "Today's inference calls." },
+    { "key": "fallbacks_today", "unit": "count", "source": "ledger", "dimension": "volume", "description": "Today's calls that fell through the chain." },
+    { "key": "fallback_calls", "unit": "count", "source": "ledger", "dimension": "volume", "description": "Calls that fell through the chain." },
+    { "key": "input_tokens", "unit": "count", "source": "ledger", "dimension": "volume", "description": "Prompt tokens." },
+    { "key": "output_tokens", "unit": "count", "source": "ledger", "dimension": "volume", "description": "Completion tokens." },
+    { "key": "latency_avg_ms", "unit": "ms", "source": "ledger", "dimension": "latency", "description": "Mean call latency." },
+    { "key": "latency_p95_ms", "unit": "ms", "source": "ledger", "dimension": "latency", "description": "95th-percentile call latency (per-day at reconcile)." },
+    { "key": "grounding_avg", "unit": "ratio", "source": "quality-signal", "dimension": "quality", "description": "Mean grounding score (C6)." },
+    { "key": "judge_score_avg", "unit": "ratio", "source": "quality-signal", "dimension": "quality", "description": "Mean LLM-judge quality score (C6)." },
+    { "key": "rating_avg", "unit": "ratio", "source": "quality-signal", "dimension": "quality", "description": "Mean explicit user rating." },
+    { "key": "rated_calls", "unit": "count", "source": "quality-signal", "dimension": "quality", "description": "Calls with an explicit rating." },
+    { "key": "guardrail_hit_calls", "unit": "count", "source": "quality-signal", "dimension": "quality", "description": "Calls where a guardrail fired." },
+    { "key": "redaction_hit_calls", "unit": "count", "source": "quality-signal", "dimension": "quality", "description": "Calls where redaction occurred (count only — W5-clean, never the redacted content)." }
+  ]
+}

@@ -2,7 +2,7 @@
    Exposes window.StrategosUI. */
 (function () {
   const { Icon } = window.StrategosIcons;
-  const { PROVIDER_HUE } = window.StrategosData;
+  const { PROVIDER_HUE } = window.StrategosAPI;
 
   function Switch({ on, onClick, label }) {
     return React.createElement('button', {
@@ -38,14 +38,15 @@
     );
   }
 
-  function Pill({ children, kind, icon }) {
-    return React.createElement('span', { className: 'pill' + (kind ? ' ' + kind : '') },
+  function Pill({ children, kind, icon, className, style, ...rest }) {
+    const TONE = { accent: 'border-line-accent bg-accent-soft text-accent', success: 'border-line-success bg-success-soft text-success' };
+    return React.createElement('span', Object.assign({ style, className: 'inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full border bg-paper-soft font-mono text-xs text-ink-soft tabular-nums whitespace-nowrap ' + (TONE[kind] || '') + ' ' + (className || '') }, rest),
       icon && React.createElement(Icon, { name: icon, size: 13, tone: kind === 'accent' ? 'accent' : kind === 'success' ? 'success' : 'mute' }),
       children);
   }
 
-  function Tag({ children }) {
-    return React.createElement('span', { className: 'tag' }, children);
+  function Tag({ children, className, style, ...rest }) {
+    return React.createElement('span', Object.assign({ style, className: 'inline-flex items-center gap-1 h-5 px-2 rounded-sm bg-paper-mute font-mono text-[10px] tracking-[0.04em] text-ink-mute whitespace-nowrap shrink-0 ' + (className || '') }, rest), children);
   }
 
   // a control row with icon + title + sub + a trailing control (switch)
@@ -186,9 +187,9 @@
 
   // model picker (compact select styled)
   function ModelPicker({ value, onChange }) {
-    const { MODELS } = window.StrategosData;
+    const { MODELS } = window.StrategosAPI;
     return React.createElement('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 7, height: 30, padding: '0 10px', borderRadius: 'var(--radius)', border: '1px solid var(--paper-edge)', background: 'var(--paper)' } },
-      React.createElement(ProviderDot, { provider: (window.StrategosData.modelById(value) || {}).provider, size: 7 }),
+      React.createElement(ProviderDot, { provider: (window.StrategosAPI.modelById(value) || {}).provider, size: 7 }),
       React.createElement('select', {
         value, onChange: (e) => onChange(e.target.value),
         style: { border: 'none', outline: 'none', background: 'transparent', font: '500 12px var(--font-mono)', color: 'var(--ink)', cursor: 'pointer' },
@@ -263,22 +264,22 @@
      Makes auto-routing legible: which model answered, why, what it cost,
      and a control to pin it. Reused by Ask and Playground. */
   function RoutingPanel({ modelId, reason, callCost = 0, pinned, onTogglePin, exec }) {
-    const m = window.StrategosData.modelById(modelId) || {};
-    const { money } = window.StrategosData;
+    const m = window.StrategosAPI.modelById(modelId) || {};
+    const { money } = window.StrategosAPI;
     const costLabel = callCost === 0 ? 'free' : '$' + callCost.toFixed(callCost < 0.1 ? 3 : 2);
     const factor = (k, v) => React.createElement('div', null,
       React.createElement('div', { style: { fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--ink-faint)' } }, k),
       React.createElement('div', { style: { fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--ink)', marginTop: 2, fontVariantNumeric: 'tabular-nums' } }, v));
-    return React.createElement('div', { className: 'rise', style: { background: 'var(--paper-soft)', borderBottom: '1px solid var(--paper-edge)', padding: 'var(--space-4)' } },
+    return React.createElement('div', { className: 'rise', style: { background: 'var(--paper-soft)', borderBottom: '1px solid var(--paper-edge)', padding: '16px' } },
       React.createElement('div', { className: 'flex items-center gap-2', style: { marginBottom: 8, flexWrap: 'wrap' } },
         React.createElement(ProviderDot, { provider: m.provider, size: 8 }),
         React.createElement('span', { style: { fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--ink)' } }, modelId),
         m.tier && React.createElement('span', { className: 'tag' }, m.tier),
         pinned && React.createElement('span', { className: 'pill accent' }, React.createElement(Icon, { name: 'pin', size: 12, tone: 'accent' }), 'pinned'),
-        React.createElement('span', { className: 'grow' }),
+        React.createElement('span', { className: 'flex-1' }),
         exec && React.createElement(ExecBadge, Object.assign({ verb: true }, exec))),
       React.createElement('div', { style: { fontSize: 'var(--text-sm)', color: 'var(--ink-soft)', lineHeight: 1.5, marginBottom: 12 } }, reason),
-      React.createElement('div', { className: 'grid-facts', style: { paddingTop: 12, borderTop: '1px solid var(--paper-edge)' } },
+      React.createElement('div', { className: 'grid grid-cols-3 gap-3 sm:grid-cols-[repeat(auto-fit,minmax(96px,1fr))]', style: { paddingTop: 12, borderTop: '1px solid var(--paper-edge)' } },
         factor('Tier', m.tier || '—'),
         factor('Quality', m.q != null ? m.q + '' : '—'),
         factor('Latency', m.lat ? (m.lat / 1000).toFixed(1) + 's' : '—'),
@@ -296,13 +297,13 @@
   const WS_KEY = 'zs-workspace';
   let _ws = 'leasing';
   try { _ws = localStorage.getItem(WS_KEY) || 'leasing'; } catch (e) {}
-  if (!window.StrategosData.wsById(_ws) || window.StrategosData.wsById(_ws).id !== _ws) _ws = 'leasing';
+  if (!window.StrategosAPI.wsById(_ws) || window.StrategosAPI.wsById(_ws).id !== _ws) _ws = 'leasing';
   const _wsListeners = new Set();
   const _wsOpenListeners = new Set();
   const StrategosWorkspace = {
     get: () => _ws,
-    ws: () => window.StrategosData.wsById(_ws),
-    set(id) { if (!window.StrategosData.wsById(id)) return; _ws = id; try { localStorage.setItem(WS_KEY, id); } catch (e) {} _wsListeners.forEach((f) => f(id)); },
+    ws: () => window.StrategosAPI.wsById(_ws),
+    set(id) { if (!window.StrategosAPI.wsById(id)) return; _ws = id; try { localStorage.setItem(WS_KEY, id); } catch (e) {} _wsListeners.forEach((f) => f(id)); },
     subscribe(fn) { _wsListeners.add(fn); return () => _wsListeners.delete(fn); },
     openSwitcher() { _wsOpenListeners.forEach((f) => f()); },
     onOpenRequest(fn) { _wsOpenListeners.add(fn); return () => _wsOpenListeners.delete(fn); },
@@ -330,8 +331,8 @@
       chip ? h(WorkspaceChip, { ws: chip === true ? undefined : chip }) : null);
     const subEl = sub == null ? null
       : h('p', { className: subKind === 'sm' ? 'zs-body-sm' : 'zs-body', style: { marginTop: subKind === 'sm' ? 4 : 6, maxWidth: subMax || 620 } }, sub);
-    return h('div', { className: 'page-hd', style: align === 'start' ? { alignItems: 'flex-start' } : null },
-      h('div', { style: { minWidth: 0 } },
+    return h('div', { className: 'flex flex-wrap items-start justify-between gap-4 gap-x-6 mb-8', style: align === 'start' ? { alignItems: 'flex-start' } : null },
+      h('div', { className: 'flex-[1_1_340px] min-w-0' },
         before || null, eb,
         h('h1', { className: 'zs-h1', style: Object.assign({ marginTop: 4 }, titleStyle || {}) }, title),
         subEl),
@@ -339,22 +340,148 @@
   }
 
   // Card: paper-soft + hairline + radius. flush => clip children (for a
-  // card-hd + list); pad => standard space-5 inner padding.
+  // card head + list); pad => standard inner padding.
+  const CARD = 'bg-paper-soft border rounded-lg';
   function Card({ children, flush, pad, style, className }) {
-    const s = Object.assign({}, flush ? { overflow: 'hidden' } : null, pad ? { padding: 'var(--space-5)' } : null, style || {});
-    return React.createElement('div', { className: 'card' + (className ? ' ' + className : ''), style: Object.keys(s).length ? s : undefined }, children);
+    const cls = [CARD, flush ? 'overflow-hidden' : '', pad ? 'p-6' : '', className || ''].filter(Boolean).join(' ');
+    return React.createElement('div', { className: cls, style }, children);
   }
 
-  // CardHead: the hairline-bottomed header strip. Pass title (+optional
-  // icon) and meta for the common eyebrow/meta pattern, or left/right nodes.
-  function CardHead({ left, right, title, icon, meta }) {
+  // CardHead: the hairline-bottomed header strip. Pass children, or title
+  // (+optional icon) and meta for the common eyebrow/meta pattern.
+  function CardHead({ left, right, title, icon, meta, children, className }) {
     const h = React.createElement;
+    const cls = 'flex items-center justify-between gap-3 px-6 py-4 border-b ' + (className || '');
+    if (children != null) return h('div', { className: cls }, children);
     const leftEl = left != null ? left
       : (icon
         ? h('span', { className: 'flex items-center gap-2' }, h(Icon, { name: icon, size: 15, tone: 'soft' }), h('span', { className: 'zs-eyebrow' }, title))
         : h('span', { className: 'zs-eyebrow' }, title));
     const rightEl = right != null ? right : (meta != null ? h('span', { className: 'zs-meta' }, meta) : null);
-    return h('div', { className: 'card-hd' }, leftEl, rightEl);
+    return h('div', { className: cls }, leftEl, rightEl);
+  }
+
+  // CardFoot: the quiet footnote strip under a card.
+  function CardFoot({ children, dashed, className, style }) {
+    const cls = ['flex items-center gap-2 px-6 py-3 border-t text-xs text-ink-mute',
+      dashed ? 'border-dashed' : '', className || ''].filter(Boolean).join(' ');
+    return React.createElement('div', { className: cls, style }, children);
+  }
+
+  /* ── Layout ────────────────────────────────────────────────────────
+     The view shell and the three column rhythms. Compositions live in
+     these components, not in a class vocabulary. */
+  function ViewPad({ children, wide, className, style }) {
+    const cls = ['mx-auto', wide ? '' : 'max-w-[1180px]',
+      'px-4 pt-4 pb-12 sm:px-6 sm:pt-6 xl:px-12 xl:pt-8 xl:pb-16', className || '']
+      .filter(Boolean).join(' ');
+    return React.createElement('div', { className: cls, style }, children);
+  }
+  // main + aside, 1.6 : 1 · stacks below lg
+  function Split({ children, className, style }) {
+    return React.createElement('div', { className: 'grid grid-cols-1 gap-6 items-start lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] ' + (className || ''), style }, children);
+  }
+  function Half({ children, tight, className, style }) {
+    const cls = tight ? 'grid grid-cols-2 gap-4 gap-x-6 items-stretch'
+      : 'grid grid-cols-1 gap-6 items-start lg:grid-cols-2';
+    return React.createElement('div', { className: cls + ' ' + (className || ''), style }, children);
+  }
+  function Stats({ children, tight, className, style }) {
+    const cls = 'grid grid-cols-2 ' + (tight ? 'gap-3' : 'gap-4') + ' sm:grid-cols-[repeat(auto-fit,minmax(160px,1fr))]';
+    return React.createElement('div', { className: cls + ' ' + (className || ''), style }, children);
+  }
+  function Facts({ children, className, style }) {
+    return React.createElement('div', { className: 'grid grid-cols-3 gap-3 sm:grid-cols-[repeat(auto-fit,minmax(96px,1fr))] ' + (className || ''), style }, children);
+  }
+
+  /* ── Component kit ───────────────────────────────────────────────
+     One primitive per pattern, so an artboard never re-states the class
+     vocabulary. All of them pass unknown props straight through. */
+
+  // Button: the only way to render a button. variant primary|secondary|ghost,
+  // size sm|md|lg, optional leading icon.
+  const BTN_ICON_TONE = { primary: 'paper', secondary: 'soft', ghost: 'mute' };
+  function Button(props) {
+    const { variant = 'ghost', size = 'md', icon, iconSize, iconTone, children, className, ...rest } = props;
+    const cls = ['zs-btn', 'zs-btn-' + variant, size !== 'md' ? 'zs-btn-' + size : '', className || '']
+      .filter(Boolean).join(' ');
+    return React.createElement('button', Object.assign({ type: 'button', className: cls }, rest),
+      icon ? React.createElement(Icon, { name: icon, size: iconSize || (size === 'sm' ? 13 : 15), tone: iconTone || BTN_ICON_TONE[variant] }) : null,
+      children);
+  }
+
+  // Table: hairline table. `min` keeps a wide table readable inside a
+  // scroller on desktop and stacks it into labelled rows on phones
+  // (each <td> needs data-th). `scroll` adds the overflow wrapper.
+  function Table({ min, scroll, className, children, ...rest }) {
+    const cls = ['tbl', 'tbl-stack', min ? 'sm:min-w-[' + min + 'px]' : '', className || '']
+      .filter(Boolean).join(' ');
+    const table = React.createElement('table', Object.assign({ className: cls }, rest), children);
+    return scroll ? React.createElement('div', { style: { overflowX: 'auto' } }, table) : table;
+  }
+
+  // Section: `.sec` + optional hairline section header.
+  function Section({ title, meta, actions, children, style, className }) {
+    const h = React.createElement;
+    return h('div', { className: 'mt-12 ' + (className || ''), style },
+      (title || actions || meta) ? h('div', { className: 'flex flex-wrap items-baseline justify-between gap-4 mb-4' },
+        h('span', { className: 'zs-eyebrow' }, title),
+        actions || (meta != null ? h('span', { className: 'zs-meta' }, meta) : null)) : null,
+      children);
+  }
+
+  // Stat: display number + unit + label, inside a card.
+  function Stat({ label, value, unit, sub, className, style }) {
+    const h = React.createElement;
+    return h('div', { className: 'p-6 ' + (className || ''), style },
+      h('div', { className: 'zs-eyebrow', style: { marginBottom: 6 } }, label),
+      h('div', { className: 'flex items-baseline gap-2' },
+        h('span', { className: 'font-display font-light text-3xl leading-none tracking-tight' }, value),
+        unit ? h('span', { className: 'text-sm text-ink-mute' }, unit) : null),
+      sub != null ? h('div', { className: 'zs-meta', style: { marginTop: 4 } }, sub) : null);
+  }
+
+  function Chip({ icon, children, className, style, ...rest }) {
+    return React.createElement('span', Object.assign({ style, className: 'inline-flex items-center gap-1 h-[19px] px-1.5 rounded-sm bg-paper border font-mono text-[10px] text-ink-mute whitespace-nowrap ' + (className || '') }, rest),
+      icon ? React.createElement(Icon, { name: icon, size: 11, tone: 'mute' }) : null, children);
+  }
+
+  // StatusDot: dot + word, one tone vocabulary everywhere.
+  const DOT_TONE = { success: 'var(--success)', warning: 'var(--warning)', accent: 'var(--accent)', mute: 'var(--ink-mute)', faint: 'var(--ink-faint)' };
+  function StatusDot({ tone = 'mute', children, className }) {
+    return React.createElement('span', { className: 'inline-flex items-center gap-1.5 font-mono text-xs whitespace-nowrap ' + (className || '') },
+      React.createElement('span', { className: 'w-1.5 h-1.5 rounded-full shrink-0', style: { background: DOT_TONE[tone] || tone } }),
+      children);
+  }
+
+  function Kbd({ children, className, style }) { return React.createElement('span', { style, className: 'font-mono text-[10px] text-ink-mute border rounded-sm px-1 py-0.5 bg-paper ' + (className || '') }, children); }
+
+  // Track: a budget/usage bar. value + max, tone from the meter vocabulary.
+  function Track({ value, max = 100, tone = 'accent', className }) {
+    const pct = Math.max(0, Math.min(100, (value / max) * 100));
+    return React.createElement('span', { className: 'block h-1.5 rounded-full bg-paper-mute overflow-hidden ' + (className || '') },
+      React.createElement('i', { className: 'block h-full rounded-full transition-[width] duration-slow', style: { width: pct + '%', background: METER_TONE[tone] || tone } }));
+  }
+
+  // Tabs: segmented control. items = [{id,label,icon}] | [[id,label]].
+  function Tabs({ items, value, onChange, size, style }) {
+    const norm = items.map((it) => (Array.isArray(it) ? { id: it[0], label: it[1] } : it));
+    return React.createElement('div', { className: 'tabs' + (size === 'sm' ? ' sm' : ''), style },
+      norm.map((it) => React.createElement('button', {
+        key: it.id, type: 'button',
+        className: 'tab' + (value === it.id ? ' on' : ''),
+        onClick: () => onChange && onChange(it.id),
+      }, it.icon ? React.createElement(Icon, { name: it.icon, size: 15, tone: value === it.id ? 'accent' : 'mute' }) : null, it.label)));
+  }
+
+  // EmptyState: the system's silence. Kanji mark + one calm line.
+  function EmptyState({ kanji = '空', title = 'Nothing here yet.', sub, actions }) {
+    const h = React.createElement;
+    return h('div', { className: 'py-16 px-6 text-center' },
+      h('div', { className: 'font-kanji text-[32px] text-ink-faint mb-3' }, kanji),
+      h('div', { className: 'text-sm font-semibold text-ink' }, title),
+      sub ? h('div', { className: 'zs-body-sm mt-1 max-w-[420px] mx-auto' }, sub) : null,
+      actions ? h('div', { className: 'flex items-center justify-center gap-2 mt-4' }, actions) : null);
   }
 
   function useWorkspace() {
@@ -362,11 +489,11 @@
     React.useEffect(() => StrategosWorkspace.subscribe(setId), []);
     return {
       id,
-      ws: window.StrategosData.wsById(id),
+      ws: window.StrategosAPI.wsById(id),
       set: (x) => StrategosWorkspace.set(x),
       open: () => StrategosWorkspace.openSwitcher(),
-      all: window.StrategosData.WORKSPACES,
-      byTier: window.StrategosData.wsByTier(),
+      all: window.StrategosAPI.WORKSPACES,
+      byTier: window.StrategosAPI.wsByTier(),
     };
   }
 
@@ -376,5 +503,14 @@
     useEnv, EnvChip, DeviceFooter, DevicePill, OfflineBanner, DesktopOnlyNote,
     usePinnedModel, getPinnedModel, setPinnedModel, useWorkspace, WorkspaceChip, PageHeader, Card, CardHead,
     useSnippets, getSnippets, saveSnippet, isSnippetSaved, SaveSnippetButton, RoutingPanel,
-    Sessions, MyTemplates, Handoff };
+    Sessions, MyTemplates, Handoff,
+    /* component kit */
+    Button, Table, Section, Stat, Chip, StatusDot, Kbd, Track, Tabs, EmptyState,
+    CardFoot, ViewPad, Split, Half, Stats, Facts };
+
+  /* Class recipes are shortcuts in app/uno.config.js — the runtime only
+     compiles arbitrary variants ([&_td]:…) declared there, never from markup.
+     Kept as a name map for callers that build a class string by hand. */
+  const TW = { stackTable: 'tbl-stack' };
+  window.StrategosUI.TW = TW;
 })();

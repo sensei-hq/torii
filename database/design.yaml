@@ -1,5 +1,5 @@
 project:
-  name: strategos
+  name: torii
 source:
   dialect: postgresql
 target:
@@ -32,6 +32,8 @@ import:
     # M1: import_role_permissions() only ADDS (on conflict do nothing) — this deletes
     # role.manage/apikey.manage from any admin default row provisioned before the M1 reservation.
     - import/rework_admin_grants.sql
+    # C5: the 'embedding' fallback chain → Ollama mxbai-embed-large (1024d). Idempotent.
+    - import/embedding_chain.sql
 dbml:
   exclude:
     schemas:

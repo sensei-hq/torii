@@ -2,7 +2,7 @@
 
 > Reconciled to [`../DECISIONS.md`](../DECISIONS.md) 2026-07-23.
 
-**Plane:** Ops · **Status:** Planned · **Depends on:** C1, C3
+**Plane:** Ops · **Status:** Built (P12, 2026-08-03) · **Depends on:** C1, C3
 
 ## Purpose
 
@@ -25,4 +25,8 @@ Turn the ledger into the dashboards that justify the product — cost down, work
 
 ## Open questions
 
-- Precomputed rollups vs on-the-fly; how local ($0) calls factor into "savings".
+**Resolved** (P12; see spec [`../specs/O2-analytics.md`](../specs/O2-analytics.md) §8):
+- ~~Precomputed rollups vs on-the-fly~~ — both: day-or-coarser dashboard reads hit the live `analytics_*` rollups (incremental on ledger insert via triggers); ad-hoc ranges + `spend`/`plane-split` run on the fly against `inference_calls`. Rollups are a reconstructable cache reconciled against the immutable ledger.
+- ~~How local ($0) calls factor into "savings"~~ — the cloud-equivalent baseline prices a local call's actual tokens at the **cheapest priced cloud step** in its chain (`analytics_cloud_equiv`); local-only chains and unpriced counterfactuals are surfaced separately, never guessed.
+
+**Still deferred** (spec §10): per-tenant effective/BYOK cloud pricing for the savings baseline (v1 uses catalog list pricing); session-only Playground experiment counting (tied to C6 §10); long-horizon month-grained rollups + retention past 90 days; exact (vs approximated) p95/p99 on precomputed dashboards. Operational: `pg_cron` MV-refresh/reconcile schedule not yet enabled.

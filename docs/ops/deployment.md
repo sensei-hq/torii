@@ -88,7 +88,7 @@ fly certs add api-torii.sensei-hq.com            # Fly issues TLS
 **Env the gateway reads** (`services/gateway/src/*.rs`): `DATABASE_URL`,
 `PUBLIC_SUPABASE_URL`, `PORT` (Fly sets `8080` → see `fly.toml`), `TORII_ENV` (`prod`), and
 each provider's BYOK key by the env-var name in `config.routers.api_key_env_var`. Vault KEK:
-in **dev** a base64 `TORII_KEK` (legacy `STRATEGOS_KEK` accepted); in **prod** the KEK is read
+in **dev** a base64 `TORII_KEK` (legacy `TORII_KEK` accepted); in **prod** the KEK is read
 from **Supabase Vault** (raw env KEK refused) under the secret named by `TORII_KEK_VAULT_SECRET`
 (default `torii_kek`).
 

@@ -21,6 +21,15 @@ create table if not exists inference_calls (
 , error_type         text                                              -- nullable; Option<String>
 , fallback_sequence  smallint     not null default 0                  -- u8 (0-255); which attempt in the chain
 , recorded_at        timestamptz  not null default now()
+  -- RW7: budget attribution + split-plane columns on the authoritative ledger.
+, budget_node_id     uuid
+, org_node_id        uuid
+, dept_node_id       uuid
+, team_node_id       uuid
+, user_node_id       uuid
+, execution_location varchar(10)
+    check (execution_location is null or execution_location in ('local', 'cloud'))
+, hold_id            uuid
 , primary key (tenant_id, id)
 , constraint inference_calls_session_fkey
     foreign key (tenant_id, session_id)
@@ -47,14 +56,5 @@ comment on table inference_calls is
 - duration_ms is bigint (Rust u64) to handle pathological long calls without overflow.
 - fallback_sequence (u8) indicates which position in the fallback chain succeeded.
 - session_id composite FK is NULL-safe; project_id has no FK until a projects table lands.
+- RW7 columns (budget attribution + execution_location + hold_id) are declared inline above.
 - Written by service_role (bypasses RLS); clients SELECT via RLS (tenant_isolation.sql).';
-
--- RW7: budget attribution + split-plane columns on the authoritative ledger.
-alter table inference_calls add column if not exists budget_node_id    uuid;
-alter table inference_calls add column if not exists org_node_id       uuid;
-alter table inference_calls add column if not exists dept_node_id      uuid;
-alter table inference_calls add column if not exists team_node_id      uuid;
-alter table inference_calls add column if not exists user_node_id      uuid;
-alter table inference_calls add column if not exists execution_location varchar(10)
-    check (execution_location is null or execution_location in ('local', 'cloud'));
-alter table inference_calls add column if not exists hold_id           uuid;

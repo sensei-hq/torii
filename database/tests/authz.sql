@@ -104,25 +104,28 @@ begin;
   do $$
   declare
     t          uuid := '00000000-0000-0000-0000-000000000000';
-    owner_role uuid := (select id from core.roles where tenant_id = t and key = 'owner');
-    admin_role uuid := (select id from core.roles where tenant_id = t and key = 'admin');
+    owner_role uuid := (select role_id from core.effective_roles where tenant_id = t and key = 'owner');
+    admin_role uuid := (select role_id from core.effective_roles where tenant_id = t and key = 'admin');
     escalating int;
   begin
     -- Capabilities `owner` grants that `admin` does not → the subset check denies them.
+    -- Read via core.effective_* views: default roles/perms are shared rows (tenant_id
+    -- NULL) exposed per-tenant through the views (project-rbac-shared-defaults) — the
+    -- base tables carry no concrete-tenant rows, so resolution MUST go through them.
     select count(*) into escalating
-      from core.role_permissions o
+      from core.effective_role_permissions o
      where o.role_id = owner_role and o.tenant_id = t
        and not exists (
-         select 1 from core.role_permissions a
+         select 1 from core.effective_role_permissions a
           where a.role_id = admin_role and a.tenant_id = t
             and a.capability = o.capability);
     if escalating = 0 then
       raise exception 'FAIL escalation-subset: owner adds no capability beyond admin — guard would wrongly ALLOW admin→owner';
     end if;
     -- The canonical escalation cap must be owner-only (admin cannot self-grant it).
-    if not exists (select 1 from core.role_permissions
+    if not exists (select 1 from core.effective_role_permissions
                      where role_id = owner_role and tenant_id = t and capability = 'tenant.manage')
-       or exists (select 1 from core.role_permissions
+       or exists (select 1 from core.effective_role_permissions
                     where role_id = admin_role and tenant_id = t and capability = 'tenant.manage') then
       raise exception 'FAIL escalation-subset: tenant.manage is not owner-only as expected';
     end if;
@@ -204,6 +207,105 @@ begin;
       raise exception 'FAIL append-only: DELETE allowed on audit_events (superuser)';
     exception when insufficient_privilege then null; end;
     raise notice 'O1 audit_events append-only (immutable to superuser) ✓';
+  end $$;
+rollback;
+
+-- 12. O2 analytics — tenant isolation + no client write + no secret/PII surface (A8).
+begin;
+  insert into core.tenants(id, name, slug, is_platform, status, modified_by)
+    values ('99999999-9999-9999-9999-999999999999', 'TestB', 'testb', false, 'active', 'test')
+    on conflict (id) do nothing;
+  -- one usage-rollup row per tenant (superuser write; the grid columns are all NOT NULL).
+  insert into public.analytics_usage_daily
+    (tenant_id, day, budget_node_id, served_model, provider, capability, execution_location, calls, cost_usd) values
+    ('00000000-0000-0000-0000-000000000000','2026-07-30','b0de0000-0000-0000-0000-0000000000f1','claude','anthropic','text_chat','cloud',1,0.01),
+    ('99999999-9999-9999-9999-999999999999','2026-07-30','b0de0000-0000-0000-0000-0000000000f2','claude','anthropic','text_chat','cloud',1,0.02);
+
+  -- (a) structural: no free-text/content/secret column on the rollups (only metadata).
+  do $$
+  declare bad text;
+  begin
+    select string_agg(table_name||'.'||column_name, ', ') into bad
+      from information_schema.columns
+     where table_schema='public'
+       and table_name in ('analytics_usage_daily','analytics_quality_daily','analytics_applied_calls')
+       and column_name ~ '(content|prompt|response|secret|body|message|payload|api_key|token_text)';
+    if bad is not null then
+      raise exception 'FAIL A8: analytics rollups expose a content/secret column: %', bad; end if;
+    raise notice 'A8 analytics rollups carry metadata only (no content/secret column) ✓';
+  end $$;
+
+  set local role authenticated;
+  set local request.jwt.claims = '{"sub":"cccccccc-cccc-cccc-cccc-cccccccccccc","tenant_id":"00000000-0000-0000-0000-000000000000"}';
+  do $$
+  begin
+    -- (b) cross-tenant isolation: tenant A sees ONLY its own rollup row, never tenant B's.
+    if (select count(*) from public.analytics_usage_daily) <> 1 then
+      raise exception 'FAIL A8: tenant A sees % analytics rows (expected 1 — B leaked)',
+        (select count(*) from public.analytics_usage_daily); end if;
+    if (select count(*) from public.analytics_usage_daily
+          where tenant_id='99999999-9999-9999-9999-999999999999') <> 0 then
+      raise exception 'FAIL A8: tenant A can read tenant B analytics rows'; end if;
+
+    -- (c) no client write on the rollups (grant revoked → insufficient_privilege).
+    begin
+      insert into public.analytics_usage_daily
+        (tenant_id, day, budget_node_id, served_model, provider, capability, execution_location)
+        values ('00000000-0000-0000-0000-000000000000','2026-07-31','b0de0000-0000-0000-0000-0000000000f1','x','x','x','cloud');
+      raise exception 'FAIL A8: authenticated could INSERT analytics_usage_daily';
+    exception when insufficient_privilege then null; end;
+    -- MVs + the apply-marker are not readable by authenticated at all (no RLS on MVs).
+    begin
+      perform 1 from public.analytics_model_mix_daily;
+      raise exception 'FAIL A8: authenticated could SELECT analytics_model_mix_daily (MV → no RLS)';
+    exception when insufficient_privilege then null; end;
+    begin
+      perform 1 from public.analytics_applied_calls;
+      raise exception 'FAIL A8: authenticated could SELECT analytics_applied_calls (internal marker)';
+    exception when insufficient_privilege then null; end;
+    raise notice 'A8 analytics tenant-isolation + write-denied + MV/marker-locked ✓';
+  end $$;
+rollback;
+
+-- 13. O3-4 device fleet — own-vs-`device.manage` read scope + no client write. A member
+-- without device.manage must see ONLY their own devices (regression guard against the
+-- tenant-wide devices_read policy reopening), and sync_policy is service_role-only.
+begin;
+  insert into core.profiles (id) values
+    ('11111111-1111-1111-1111-111111111111'),
+    ('22222222-2222-2222-2222-222222222222') on conflict do nothing;
+  -- two devices in the platform tenant: one owned by member M (11111111), one by another user.
+  insert into public.devices(tenant_id, id, profile_id, name, status) values
+    ('00000000-0000-0000-0000-000000000000','deac0000-0000-0000-0000-0000000000a1',
+     '11111111-1111-1111-1111-111111111111','M own laptop','active'),
+    ('00000000-0000-0000-0000-000000000000','deac0000-0000-0000-0000-0000000000a2',
+     '22222222-2222-2222-2222-222222222222','other user phone','active')
+    on conflict do nothing;
+
+  set local role authenticated;
+  set local request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111","tenant_id":"00000000-0000-0000-0000-000000000000"}';
+  do $$
+  begin
+    -- (a) own-vs-manage: a member WITHOUT device.manage sees ONLY their own device.
+    if (select count(*) from public.devices) <> 1 then
+      raise exception 'FAIL O3-4: member sees % devices (expected 1 — own only; devices_read leak reopened?)',
+        (select count(*) from public.devices); end if;
+    if (select count(*) from public.devices
+          where profile_id='22222222-2222-2222-2222-222222222222') <> 0 then
+      raise exception 'FAIL O3-4: member can read another user''s device (own-vs-manage broken)'; end if;
+    if (select count(*) from public.devices
+          where profile_id='11111111-1111-1111-1111-111111111111') <> 1 then
+      raise exception 'FAIL O3-4: member cannot see their OWN device'; end if;
+
+    -- (b) sync_policy is service_role-only — a direct client UPDATE is denied (SELECT-only grant),
+    -- so the only write path is /rpc/devices/set-sync-policy (capability device.manage).
+    begin
+      update public.devices set sync_policy = '{"config_pull":"manual"}'::jsonb
+        where id='deac0000-0000-0000-0000-0000000000a1';
+      raise exception 'FAIL O3-4: member could UPDATE devices.sync_policy directly (bypassing /rpc)';
+    exception when insufficient_privilege then null; end;
+
+    raise notice 'O3-4 device fleet: member sees own device only + no direct sync_policy write ✓';
   end $$;
 rollback;
 

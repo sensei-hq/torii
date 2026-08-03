@@ -288,8 +288,13 @@
 							{:else if r?.status === 'err'}
 								<p class="text-sm text-danger">{r.error}</p>
 							{:else if r?.status === 'ok'}
-								<div class="mb-2"><ExecBadge plane={r.plane} region={r.plane === 'cloud' ? 'eu-west-2' : ''} /></div>
-								<div class="whitespace-pre-wrap text-[13px] leading-relaxed text-ink">{r.content}</div>
+								<div class="mb-2">
+									<!-- region omitted (M3): from the gateway response, not a hardcode. -->
+									<ExecBadge plane={r.plane} />
+								</div>
+								<div class="whitespace-pre-wrap text-[13px] leading-relaxed text-ink">
+									{r.content}
+								</div>
 							{:else}
 								<p class="text-sm text-ink-faint">Run to compare.</p>
 							{/if}
@@ -351,7 +356,9 @@
 												? 'i-solar-cpu-bold-duotone'
 												: 'i-solar-server-minimalistic-bold-duotone'} h-3.5 w-3.5 flex-shrink-0 text-ink-mute"
 										></span>
-										<span class="min-w-0 flex-1 truncate font-mono text-[13px] text-ink">{m.name}</span>
+										<span class="min-w-0 flex-1 truncate font-mono text-[13px] text-ink"
+											>{m.name}</span
+										>
 										<Chip tone={m.local ? 'mute' : 'accent'}>{m.local ? 'local' : 'cloud'}</Chip>
 									</button>
 								{/each}
@@ -389,7 +396,9 @@
 								<span class="w-5 font-heading text-lg {i === 0 ? 'text-accent' : 'text-ink-mute'}"
 									>{i + 1}</span
 								>
-								<span class="flex-1 truncate font-mono text-[13px] font-semibold text-ink">{m.name}</span>
+								<span class="flex-1 truncate font-mono text-[13px] font-semibold text-ink"
+									>{m.name}</span
+								>
 								{#if judged && score != null}
 									<span class="font-mono text-[11px] font-semibold text-accent"
 										>{Math.round(score * 100)}%</span
@@ -405,12 +414,13 @@
 						<span class="i-solar-info-circle-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
 						<span class="text-[11px] leading-relaxed text-ink-mute">
 							{#if judged}
-								Ranked by the local quality judge, which scores each answer 0–1. The judge is a model
-								too — treat its ranking as a fast heuristic, not a final verdict. Cost and latency are
-								shown per column.
+								Ranked by the local quality judge, which scores each answer 0–1. The judge is a
+								model too — treat its ranking as a fast heuristic, not a final verdict. Cost and
+								latency are shown per column.
 							{:else}
-								Ranked on real cost then latency. Turn the quality judge on to rank by answer quality
-								instead — this is a cost-and-speed heuristic, not a verdict on which answer is best.
+								Ranked on real cost then latency. Turn the quality judge on to rank by answer
+								quality instead — this is a cost-and-speed heuristic, not a verdict on which answer
+								is best.
 							{/if}
 						</span>
 					</div>

@@ -38,7 +38,7 @@ _generated/
 
 # Finder (MacOS) folder config
 .DS_Store
-strategos.config.yaml
+torii.config.yaml
 .env.md
 
 # Tesseract OCR trained data (downloaded at runtime)

@@ -18,10 +18,10 @@
 | **C5 · §3c** | Sensitive-data `dataset_safe_schema` (structure not values) + `k_anon_ok` | `tests/dataset.sql` |
 | **X1 · MCP** | Default-deny `tool_allowed` allow-list resolver | `tests/tools.sql` |
 | **Gateway issues** | GH-1 #37 (trace plane), GH-2 #36 (OAuth adapter) filed on `sensei-hq/gateway` | — |
-| **Infra isolation** | Torii on its **own** Supabase stack (project `strategos`, API 55321 / DB 55322); sensei-dojo untouched + cleaned | both stacks coexist; suite green on isolated DB |
+| **Infra isolation** | Torii on its **own** Supabase stack (project `torii`, API 55321 / DB 55322); sensei-dojo untouched + cleaned | both stacks coexist; suite green on isolated DB |
 | **🔓 Live auth E2E** | Real GoTrue signup → hook injects `tenant_id`+`role_ids`+`claims_version` → sign-in → **ES256 token → JWKS verify → capability gate** → `POST /rpc/budgets/upsert-node` **200** + actor-bound audit; viewer → 403 | verified against the real stack |
 | **fix: signup-500** | RW2 broke `assign_tenant_by_domain` (old profile_tenants shape) → repaired (creates profiles anchor, SECURITY DEFINER, default role) | signup works |
-| **☁️ Live cloud inference (C1)** | Real tenant-bound ES256 token → JWKS → auth → chain routing (`chat`) → **C4 redact-in-flight** → **authenticated Anthropic call** → real answer; `inference_calls` ledger row written (adapter/model/api_model_id/tokens/cost/status) | `POST /v1/chat` **200** `"Strategos live."`, $0.000168, ledger `after=1` |
+| **☁️ Live cloud inference (C1)** | Real tenant-bound ES256 token → JWKS → auth → chain routing (`chat`) → **C4 redact-in-flight** → **authenticated Anthropic call** → real answer; `inference_calls` ledger row written (adapter/model/api_model_id/tokens/cost/status) | `POST /v1/chat` **200** `"Torii live."`, $0.000168, ledger `after=1` |
 | **fix: router base-url double-`/v1`** | Seeded `api_base_url` carried a trailing `/v1` (`/api/v1` for openrouter), but the sensei adapters append `/v1/messages`\|`/v1/chat/completions` → double `/v1` → provider 404. Stripped the version segment from **anthropic/openai/openrouter/grok** in `routers.jsonl` | anthropic call 200 after fix; others audited + corrected |
 | **🖥️ Walking skeleton (P0–P2b)** | Desktop client done: shell + Kavach client-only auth (P1a), in-process local Ask (P1b), C1 cloud passthrough (P2a), and **D3 split-plane** (P2b) — Ask Local/Cloud toggle; cloud leg proxies `/v1/chat` to C1 with the JWT (keys stay on C1); per-plane `ExecBadge` | 5/5 desktop Tauri E2E green; live desktop→C1 contract check (real token, $0) |
 | **fix: desktop macOS build** | `llama-cpp-sys-2` (vendored llama.cpp `std::filesystem`) needs macOS deploy target ≥ 10.15 → set `MACOSX_DEPLOYMENT_TARGET=11.0` in `src-tauri/.cargo/config.toml` (was blocking the whole Tauri build on clang 17/cmake 4) | Tauri app builds + bundles; E2E runs |
@@ -41,7 +41,7 @@ Full suite: `DATABASE_URL=postgresql://…@127.0.0.1:55322/postgres database/tes
 - ✅ ~~Supabase JWKS + auth~~ — RESOLVED (isolated stack, ES256/JWKS, hook enabled; live auth verified).
 - ✅ ~~Paid-provider-call approval + provider key~~ — RESOLVED (Anthropic key supplied via `.env.local`; real `/v1/chat` → Anthropic **200** verified, $0.000168, ledger row written; key never surfaced in logs).
 - **Anthropic OAuth** client (client_id/secret/redirect/scopes) — with GH-2, when the OAuth connect flow is built.
-- **KMS/KEK** for a hosted deploy (local dev uses `STRATEGOS_KEK`; I re-seed `tenant_keys` under a dev KEK for live vault tests).
+- **KMS/KEK** for a hosted deploy (local dev uses `TORII_KEK`; I re-seed `tenant_keys` under a dev KEK for live vault tests).
 
 ## Unattended run
 

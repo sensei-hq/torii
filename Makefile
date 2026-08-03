@@ -1,4 +1,4 @@
-## Strategos monorepo build coordinator
+## Torii monorepo build coordinator
 ##
 ## Stack:
 ##   apps/admin    — SvelteKit + Cloudflare Workers (admin panel)

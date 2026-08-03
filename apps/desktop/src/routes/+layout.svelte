@@ -8,20 +8,16 @@
 	import { vibe } from '@rokkit/states'
 	import { themable } from '@rokkit/actions'
 	import { createToriiKavach, session, createGuard } from '@torii/core'
+	import { deriveGuardRules } from '$lib/guard-rules'
+	import { IS_E2E } from '$lib/e2e'
 	import { SUPABASE_URL, SUPABASE_ANON_KEY } from '$lib/env'
 
 	let { children } = $props()
 
-	const rules = [
-		{ path: '/signin', public: true },
-		{ path: '/', roles: '*' },
-		{ path: '/ask', roles: '*' },
-		{ path: '/library', roles: '*' },
-		{ path: '/playground', roles: '*' },
-		{ path: '/workflows', roles: '*' },
-		{ path: '/activity', roles: '*' },
-		{ path: '/settings', roles: '*' }
-	]
+	// Allowlist DERIVED from the route tree (H3) — a hand-maintained list silently broke nav when
+	// /compare + /models were added. Every `+page.svelte` becomes a rule (see deriveGuardRules), so
+	// a new screen is guarded the moment its page file exists.
+	const rules = deriveGuardRules(Object.keys(import.meta.glob('./**/+page.svelte')))
 	const guard = createGuard(rules, { login: '/signin', home: '/' })
 	const sk = createToriiKavach(SUPABASE_URL, SUPABASE_ANON_KEY)
 	setContext('kavach', sk.kavach)
@@ -34,7 +30,7 @@
 	}
 
 	onMount(async () => {
-		if (import.meta.env.VITE_E2E === 'true') {
+		if (IS_E2E) {
 			// E2E only: deterministic seeded session, no network. Never true in production builds.
 			// Set `user` BEFORE `ready`: flipping `ready` triggers the reactive guard, which
 			// would bounce the session if it saw no user yet.

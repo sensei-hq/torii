@@ -79,17 +79,19 @@
 	<PageHeader
 		eyebrow="Gateway"
 		title="Tools & MCP servers"
-		sub="Register MCP servers and grant their tools per role. Default-deny — a role may call only the tools explicitly allowed here; the gateway enforces it at tool-call time."
+		sub="Register the MCP servers your org exposes — stdio for on-device desktop tools, http/sse for shared gateway tools — and decide which roles may call each tool. Default-deny; grants are saved now and enforced at tool-call time once the Tools runtime ships."
 	/>
 
 	{#if loading}
 		<Async loading />
 	{:else}
-		<div class="space-y-4 px-5 pb-6">
+		<div class="space-y-6 px-4 pb-12 sm:px-6 xl:px-12 xl:pb-16">
 			{#if error}
 				<Card pad
 					><p class="text-sm text-danger" role="alert">
-						{error}{error.includes('403') ? ' — needs the mcp.manage capability (owner/admin).' : ''}
+						{error}{error.includes('403')
+							? ' — needs the mcp.manage capability (owner/admin).'
+							: ''}
 					</p></Card
 				>
 			{/if}
@@ -164,9 +166,8 @@
 									>Tool</th
 								>
 								{#each roles as r (r.id)}
-									<th
-										class="px-2 py-2 text-center text-xs font-medium text-ink-soft"
-										title={r.name}>{r.key}</th
+									<th class="px-2 py-2 text-center text-xs font-medium text-ink-soft" title={r.name}
+										>{r.key}</th
 									>
 								{/each}
 							</tr>
@@ -221,7 +222,8 @@
 					<span class="i-solar-shield-keyhole-bold-duotone mt-0.5 h-3.5 w-3.5 text-ink-mute"></span>
 					<span class="text-xs leading-relaxed text-ink-mute">
 						Default-deny — a role may call only the tools granted here (the role default). Per-space
-						tightening (a space can remove, never add) is a fast-follow. Enforced server-side.
+						tightening (a space can remove, never add) is a fast-follow. Allow-lists are saved now;
+						the gateway enforces them at tool-call time once the Tools runtime ships.
 					</span>
 				</div>
 			</Card>

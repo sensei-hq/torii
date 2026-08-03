@@ -5,9 +5,17 @@
 	import { BrandMark } from '@torii/ui'
 
 	let email = $state('')
+	let code = $state('')
 	let password = $state('')
 	let error = $state('')
 	let loading = $state(false)
+	// Auth model (DECISIONS §10.2): passwordless OTP is PRIMARY (+ the register path); password
+	// is a revealed SECONDARY with a reset path. Desktop uses the emailed 6-digit CODE, so no
+	// torii:// deep-link handler is needed.
+	let mode = $state(/** @type {'otp' | 'password'} */ ('otp'))
+	let codeSent = $state(false) // OTP requested → show the code entry
+	let resetSent = $state(false) // password-reset email dispatched
+	const emailOk = $derived(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
 
 	const VALUE = [
 		{
@@ -27,9 +35,34 @@
 		}
 	]
 
-	async function handleSubmit(e) {
-		e.preventDefault()
-		if (loading) return
+	async function sendCode() {
+		if (loading || !emailOk) return
+		loading = true
+		error = ''
+		const { error: err } = await session.signInWithOtp(email)
+		loading = false
+		if (err) {
+			error = err.message
+			return
+		}
+		codeSent = true
+	}
+
+	async function verifyCode() {
+		if (loading || !code.trim()) return
+		loading = true
+		error = ''
+		const { error: err } = await session.verifyOtp(email, code.trim())
+		loading = false
+		if (err) {
+			error = err.message
+			return
+		}
+		goto(resolve('/'))
+	}
+
+	async function signInPassword() {
+		if (loading || !email || !password) return
 		loading = true
 		error = ''
 		const { error: err } = await session.signInWithPassword(email, password)
@@ -39,6 +72,34 @@
 			return
 		}
 		goto(resolve('/'))
+	}
+
+	async function sendReset() {
+		if (loading || !emailOk) return
+		loading = true
+		error = ''
+		const { error: err } = await session.resetPasswordForEmail(email)
+		loading = false
+		if (err) {
+			error = err.message
+			return
+		}
+		resetSent = true
+	}
+
+	// One submit control per state → the Enter key always triggers the visible primary action.
+	function handleSubmit(e) {
+		e.preventDefault()
+		if (mode === 'password') signInPassword()
+		else if (codeSent) verifyCode()
+		else sendCode()
+	}
+
+	function useDifferentEmail() {
+		codeSent = false
+		resetSent = false
+		code = ''
+		error = ''
 	}
 </script>
 
@@ -68,8 +129,8 @@
 			<!-- left: routing graphic + value props -->
 			<section class="sgn-intro">
 				<p class="text-sm text-ink-soft mb-5" style="max-width:460px">
-					Torii routes every request across Anthropic, Google, OpenAI and your local models —
-					then keeps spend, access and answer quality under one roof.
+					Torii routes every request across Anthropic, Google, OpenAI and your local models — then
+					keeps spend, access and answer quality under one roof.
 				</p>
 
 				<div class="rounded border border-paper-edge bg-paper-soft p-5">
@@ -210,53 +271,146 @@
 						<h2 class="font-heading text-xl text-ink text-center">Sign in to your workspace</h2>
 						<p class="text-sm text-ink-mute text-center mt-1.5 mb-5">Torii Console · gateway</p>
 
-						<form onsubmit={handleSubmit} class="flex flex-col gap-4">
-							<div>
-								<label
-									class="block text-xs font-medium tracking-wide text-ink-soft mb-1.5"
-									for="email"
+						{#if resetSent}
+							<div class="text-center" aria-live="polite">
+								<span class="i-solar-letter-bold-duotone mx-auto mb-3 block h-8 w-8 text-accent"
+								></span>
+								<p class="text-sm text-ink">Check your inbox</p>
+								<p class="mt-1 text-sm leading-relaxed text-ink-mute">
+									We sent a password-reset link to <span class="font-medium text-ink">{email}</span
+									>.
+								</p>
+								<button
+									type="button"
+									onclick={useDifferentEmail}
+									class="mt-4 text-xs font-medium text-accent hover:underline"
 								>
-									Work email
-								</label>
-								<input
-									id="email"
-									type="email"
-									autocomplete="email"
-									required
-									bind:value={email}
-									placeholder="you@company.com"
-									class="sgn-input"
-								/>
+									Back to sign in
+								</button>
 							</div>
-							<div>
-								<label
-									class="block text-xs font-medium tracking-wide text-ink-soft mb-1.5"
-									for="password"
+						{:else}
+							<form onsubmit={handleSubmit} class="flex flex-col gap-4">
+								<div>
+									<label
+										class="block text-xs font-medium tracking-wide text-ink-soft mb-1.5"
+										for="email"
+									>
+										Work email
+									</label>
+									<input
+										id="email"
+										type="email"
+										autocomplete="email"
+										required
+										readonly={mode === 'otp' && codeSent}
+										bind:value={email}
+										placeholder="you@company.com"
+										class="sgn-input"
+									/>
+								</div>
+
+								{#if mode === 'otp' && codeSent}
+									<!-- passwordless: verify the emailed one-time code (no deep link needed) -->
+									<div>
+										<label
+											class="block text-xs font-medium tracking-wide text-ink-soft mb-1.5"
+											for="code"
+										>
+											Sign-in code
+										</label>
+										<input
+											id="code"
+											type="text"
+											inputmode="numeric"
+											autocomplete="one-time-code"
+											required
+											bind:value={code}
+											placeholder="6-digit code from your email"
+											class="sgn-input"
+										/>
+										<p class="mt-1.5 text-xs text-ink-mute">
+											We emailed a code to <span class="text-ink">{email}</span>.
+											<button
+												type="button"
+												onclick={useDifferentEmail}
+												class="font-medium text-accent hover:underline"
+												>Use a different email</button
+											>
+										</p>
+									</div>
+								{:else if mode === 'password'}
+									<div>
+										<label
+											class="block text-xs font-medium tracking-wide text-ink-soft mb-1.5"
+											for="password"
+										>
+											Password
+										</label>
+										<input
+											id="password"
+											type="password"
+											autocomplete="current-password"
+											required
+											bind:value={password}
+											class="sgn-input"
+										/>
+									</div>
+								{/if}
+
+								{#if error}
+									<p class="text-sm text-danger bg-danger-soft rounded px-3 py-2">{error}</p>
+								{/if}
+
+								<button
+									type="submit"
+									disabled={loading ||
+										(mode === 'otp' && !codeSent && !emailOk) ||
+										(mode === 'otp' && codeSent && !code.trim()) ||
+										(mode === 'password' && (!email || !password))}
+									class="sgn-btn-primary"
 								>
-									Password
-								</label>
-								<input
-									id="password"
-									type="password"
-									autocomplete="current-password"
-									required
-									bind:value={password}
-									class="sgn-input"
-								/>
+									{#if loading}
+										Working…
+									{:else if mode === 'password'}
+										Sign in
+									{:else if codeSent}
+										Verify &amp; sign in
+									{:else}
+										Email me a sign-in code
+									{/if}
+								</button>
+							</form>
+
+							<div class="mt-3 flex flex-col items-center gap-1.5">
+								<button
+									type="button"
+									onclick={() => {
+										mode = mode === 'password' ? 'otp' : 'password'
+										codeSent = false
+										error = ''
+									}}
+									class="text-xs font-medium text-ink-mute hover:text-ink"
+								>
+									{mode === 'password'
+										? 'Use a sign-in code instead'
+										: 'Prefer a password? Sign in with a password'}
+								</button>
+								{#if mode === 'password'}
+									<button
+										type="button"
+										onclick={sendReset}
+										disabled={loading || !emailOk}
+										class="text-xs font-medium text-ink-mute hover:text-ink disabled:opacity-40"
+									>
+										Forgot password? Email a reset link
+									</button>
+								{/if}
 							</div>
-
-							{#if error}
-								<p class="text-sm text-danger bg-danger-soft rounded px-3 py-2">{error}</p>
-							{/if}
-
-							<button type="submit" disabled={loading} class="sgn-btn-primary">
-								{loading ? 'Signing in…' : 'Sign in'}
-							</button>
-						</form>
+						{/if}
 					</div>
 
 					<p class="text-center mt-4 text-xs text-ink-faint">
-						Session pinned to your workspace · all traffic via the gateway
+						Passwordless by default · new work-email users are set up automatically
 					</p>
 				</div>
 			</main>

@@ -6,7 +6,7 @@
 //! (in-process llama.cpp via `sensei-local-providers::EmbeddedLlamaAdapter`,
 //! re-exported as `gateway::local::EmbeddedLlamaAdapter`) serves chat locally, with the model
 //! bytes resolved through a two-stage registry — managed files first
-//! (`~/.strategos/models`), then a read-through view of the local Ollama cache
+//! (`~/.torii/models`), then a read-through view of the local Ollama cache
 //! (`~/.ollama/models`). A model already pulled by Ollama (e.g. `gemma2:2b`) is
 //! reused in place; nothing has to ship with the binary. The per-model worker
 //! loads lazily on first inference.
@@ -83,19 +83,36 @@ async fn register_embedded_llama(adapters: &AdapterRegistry) {
 
 /// The user's home directory. Falls back to the current dir if `HOME` is unset
 /// (never expected on macOS/Linux desktop; keeps this infallible).
-fn home_dir() -> PathBuf {
+///
+/// `pub(crate)` so the local-models commands (`commands::models`) resolve the
+/// same `~/.torii` root this module already owns.
+pub(crate) fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Torii's managed model directory. Path stays `~/.strategos/models` for now —
-/// the on-disk identity (this dir, `local.db`, the `strategos://` deep-link
-/// scheme, the Tauri bundle id) renames together in the deferred T3 sweep so a
-/// piecemeal change can't orphan a user's pulled models. Created if missing;
-/// first leg of the resolver chain.
-fn managed_models_dir() -> PathBuf {
-    let dir = home_dir().join(".strategos").join("models");
+/// Torii's managed model directory, `~/.torii/models` (first leg of the resolver chain,
+/// created if missing). Completes the rename off the old `~/.strategos/*` on-disk identity:
+/// a one-time migration moves an existing `~/.strategos/models` to the new path so pulled
+/// models are never orphaned (the concern that had deferred this). `local.db` already lives
+/// under the Tauri app-data dir keyed by the bundle id `dev.torii.app`, so this dir was the
+/// last `strategos`-named on-disk artifact.
+///
+/// `pub(crate)`: the local-models commands scan / pull into this same managed root.
+pub(crate) fn managed_models_dir() -> PathBuf {
+    let dir = home_dir().join(".torii").join("models");
+    // One-time migration: relocate models pulled under the old brand rather than re-download.
+    let legacy = home_dir().join(".strategos").join("models");
+    if legacy.is_dir() && !dir.exists() {
+        if let Some(parent) = dir.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::rename(&legacy, &dir) {
+            Ok(()) => log::info!("gateway: migrated {} -> {}", legacy.display(), dir.display()),
+            Err(e) => log::warn!("gateway: could not migrate {}: {e}", legacy.display()),
+        }
+    }
     if let Err(e) = std::fs::create_dir_all(&dir) {
         log::warn!("gateway: could not create {}: {e}", dir.display());
     }
@@ -104,7 +121,9 @@ fn managed_models_dir() -> PathBuf {
 
 /// Local Ollama cache root (`~/.ollama/models`). Read-through only — the Ollama
 /// daemon owns these bytes. Second leg of the resolver chain.
-fn ollama_models_dir() -> PathBuf {
+///
+/// `pub(crate)`: the local-models commands enumerate this read-through cache too.
+pub(crate) fn ollama_models_dir() -> PathBuf {
     home_dir().join(".ollama").join("models")
 }
 

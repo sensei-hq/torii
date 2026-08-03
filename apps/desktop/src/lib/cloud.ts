@@ -1,4 +1,5 @@
 import { GATEWAY_URL } from './env'
+import { IS_E2E } from './e2e'
 import { session } from '@torii/core'
 import type { ChatMessage, InferResult } from './gateway'
 
@@ -17,7 +18,7 @@ export async function cloudInfer(
 	opts: { chain?: string; model?: string } = {}
 ): Promise<InferResult> {
 	// Deterministic E2E stub — no network, no token required. Strictly env-gated.
-	if (import.meta.env.VITE_E2E === 'true') {
+	if (IS_E2E) {
 		return {
 			content: 'Hello from the cloud gateway.',
 			model: opts.model ?? 'gemma4',
@@ -30,12 +31,14 @@ export async function cloudInfer(
 	const token = session.accessToken
 	if (!token) throw new Error('not signed in — the cloud plane needs a session')
 
-	// A named model targets that model directly (the gateway routes + governs it, e.g.
-	// the workspace model-disable check); otherwise fall back to a chain. chain defaults
-	// to 'local' so the demo routes C1 → Ollama at $0; production uses 'chat'.
+	// A named model targets that model directly (the gateway routes + governs it, e.g. the
+	// workspace model-disable check); otherwise request a CAPABILITY CHAIN and let the gateway
+	// route it (step-down / free-floor / budget) — the client must not hardcode the plane. Default
+	// is the real 'chat' chain (M1); a demo/harness that wants a $0 local-only run passes
+	// `chain: 'local'` explicitly rather than baking it into the product path.
 	const body = opts.model
 		? { messages, model: opts.model }
-		: { messages, chain: opts.chain ?? 'local' }
+		: { messages, chain: opts.chain ?? 'chat' }
 	const res = await fetch(`${GATEWAY_URL}/v1/chat`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
@@ -62,7 +65,7 @@ export async function judgeAnswers(
 	answers: { id: string; content: string }[]
 ): Promise<Record<string, number | null>> {
 	// Deterministic E2E stub — descending scores, no network.
-	if (import.meta.env.VITE_E2E === 'true') {
+	if (IS_E2E) {
 		return Object.fromEntries(answers.map((a, i) => [a.id, Math.max(0, 1 - i * 0.15)]))
 	}
 

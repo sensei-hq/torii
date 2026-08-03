@@ -23,3 +23,11 @@ create index if not exists idx_document_versions_doc on document_versions(tenant
 comment on table document_versions is
 'Version history of a document''s source file. Access inherits the parent document
 (policies/knowledge.sql); composite FK keeps versions in-tenant.';
+
+-- C5 RAG (2026-08-01): content-hash dedup/idempotency, parser provenance, and the stale-chunk
+-- retirement marker (superseded_at pairs with document_embeddings.superseded_at on re-ingest).
+alter table document_versions add column if not exists content_hash   char(64);
+alter table document_versions add column if not exists parser         varchar(60);
+alter table document_versions add column if not exists parser_version varchar(40);
+alter table document_versions add column if not exists superseded_at  timestamptz;
+create index if not exists idx_document_versions_hash on document_versions(tenant_id, content_hash);

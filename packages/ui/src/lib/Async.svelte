@@ -26,8 +26,10 @@
 		<div class="space-y-3 px-5 py-6" aria-busy="true" aria-live="polite">
 			<span class="async-sr">Loading…</span>
 			{#each Array(rows) as _, i (i)}
-				<div class="async-skel h-4 rounded bg-paper-mute" style="width:{widths[i % widths.length]}">
-				</div>
+				<div
+					class="async-skel h-4 rounded bg-paper-mute"
+					style="width:{widths[i % widths.length]}"
+				></div>
 			{/each}
 		</div>
 	{/if}

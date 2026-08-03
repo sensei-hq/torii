@@ -12,13 +12,13 @@
 //! spaces, mcp, apikeys, models) follow the same shape and land through P5.
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Extension, Json,
 };
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use sqlx::Acquire; // savepoint-per-attempt in orgs_create (nested `tx.begin()` → SAVEPOINT)
 use uuid::Uuid;
 
@@ -64,7 +64,11 @@ mod slug_tests {
 
 /// Resolve capabilities + run the freshness gate, or return the mapped error
 /// response. Shared preamble for every privileged handler.
-async fn authorize(
+///
+/// `pub(crate)` so the C5 RAG read/retrieve handlers (`routes::documents`,
+/// `routes::retrieve`) reuse the exact same authz preamble (freshness gate +
+/// server-side capability resolution) rather than re-implementing it.
+pub(crate) async fn authorize(
     state: &SharedState,
     claims: &Claims,
     capability: &str,
@@ -105,6 +109,11 @@ pub struct UpsertNode {
     pub cap_amount: Option<f64>,
     pub period: Option<String>,
     pub enforcement: Option<String>,
+    /// Alert fraction 0..1 (e.g. 0.8 = alert at 80%); null = no alert.
+    pub alert_threshold: Option<f64>,
+    /// Drop to a free local model when the cap is exhausted (schema default true).
+    /// The client sends the whole node on every edit, so an omitted value resets to true.
+    pub free_floor_enabled: Option<bool>,
 }
 
 /// `POST /rpc/budgets/upsert-node` — capability `budget.write`.
@@ -121,12 +130,16 @@ pub async fn budgets_upsert_node(
     let id = body.id.unwrap_or_else(Uuid::new_v4);
     let write = sqlx::query(
         "insert into public.budget_nodes \
-           (tenant_id, id, parent_id, kind, name, cap_amount, period, enforcement, modified_by) \
-         values ($1,$2,$3,$4,$5,$6, coalesce($7,'monthly'), coalesce($8,'hard'), $9) \
+           (tenant_id, id, parent_id, kind, name, cap_amount, period, enforcement, \
+            alert_threshold, free_floor_enabled, modified_by) \
+         values ($1,$2,$3,$4,$5,$6, coalesce($7,'monthly'), coalesce($8,'hard'), \
+                 $9, coalesce($10, true), $11) \
          on conflict (tenant_id, id) do update set \
            parent_id = excluded.parent_id, kind = excluded.kind, name = excluded.name, \
            cap_amount = excluded.cap_amount, period = excluded.period, \
-           enforcement = excluded.enforcement, modified_at = now(), modified_by = excluded.modified_by",
+           enforcement = excluded.enforcement, alert_threshold = excluded.alert_threshold, \
+           free_floor_enabled = excluded.free_floor_enabled, \
+           modified_at = now(), modified_by = excluded.modified_by",
     )
     .bind(tenant)
     .bind(id)
@@ -136,6 +149,8 @@ pub async fn budgets_upsert_node(
     .bind(body.cap_amount)
     .bind(&body.period)
     .bind(&body.enforcement)
+    .bind(body.alert_threshold)
+    .bind(body.free_floor_enabled)
     .bind(actor.to_string())
     .execute(&state.pool)
     .await;
@@ -154,7 +169,78 @@ pub async fn budgets_upsert_node(
         Some(id),
     )
     .await;
+    crate::routes::config::bump(&state.pool, tenant, "budgets").await;
     (StatusCode::OK, Json(json!({ "id": id }))).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct DeleteNode {
+    pub id: Uuid,
+}
+
+/// `POST /rpc/budgets/delete-node` — capability `budget.write`. Deletes a budget node and,
+/// via the `(tenant_id, parent_id)` self-FK `ON DELETE CASCADE`, its entire subtree. The
+/// tenant's org ROOT (`parent_id IS NULL`) is UNDELETABLE: budget resolution is fail-closed
+/// and every call needs a seeded org root, so removing it would break metering tenant-wide.
+pub async fn budgets_delete_node(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<DeleteNode>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "budget.write").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+
+    // Look up the node IN THE CALLER'S TENANT (no cross-tenant delete). A NULL parent
+    // identifies the org root, which is refused.
+    let parent: Result<Option<Option<Uuid>>, _> = sqlx::query_scalar(
+        "select parent_id from public.budget_nodes where tenant_id = $1 and id = $2",
+    )
+    .bind(tenant)
+    .bind(body.id)
+    .fetch_optional(&state.pool)
+    .await;
+
+    match parent {
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such budget node").into_response(),
+        Ok(Some(None)) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "cannot delete the org root budget node",
+            )
+                .into_response()
+        }
+        Ok(Some(Some(_))) => {}
+        Err(e) => {
+            tracing::error!("budgets_delete_node lookup: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response();
+        }
+    }
+
+    // Cascade delete — descendants go with it via the parent_id self-FK ON DELETE CASCADE.
+    let del = sqlx::query("delete from public.budget_nodes where tenant_id = $1 and id = $2")
+        .bind(tenant)
+        .bind(body.id)
+        .execute(&state.pool)
+        .await;
+
+    if let Err(e) = del {
+        tracing::error!("budgets_delete_node: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "delete failed").into_response();
+    }
+
+    audit(
+        &state,
+        tenant,
+        actor,
+        "budget.node.deleted",
+        "budget_node",
+        Some(body.id),
+    )
+    .await;
+    crate::routes::config::bump(&state.pool, tenant, "budgets").await;
+    (StatusCode::OK, Json(json!({ "id": body.id }))).into_response()
 }
 
 #[derive(Deserialize)]
@@ -841,8 +927,33 @@ pub struct SetFeature {
     pub state: String, // locked | default-on | default-off | user-overridable
 }
 
+/// Validate a feature-governance write (pure, DB-free) → `Err(reason)` maps to `400`.
+/// `state` must be one of the four governance states; `scope_id` must be present for
+/// space/role scopes and absent for the workspace scope (a mismatch is a client bug).
+pub(crate) fn validate_feature_write(
+    scope_type: &str,
+    scope_id: Option<Uuid>,
+    state: &str,
+) -> Result<(), &'static str> {
+    if !matches!(
+        state,
+        "locked" | "default-on" | "default-off" | "user-overridable"
+    ) {
+        return Err("bad_state");
+    }
+    match scope_type {
+        "workspace" if scope_id.is_some() => Err("scope_id_forbidden"),
+        "space" | "role" if scope_id.is_none() => Err("scope_id_required"),
+        "workspace" | "space" | "role" => Ok(()),
+        _ => Err("bad_scope_type"),
+    }
+}
+
 /// `POST /rpc/governance/set-feature` — capability `feature.manage`. Upserts the
-/// 4-state feature-governance policy for a feature × scope (RW6).
+/// 4-state feature-governance policy for a feature × scope (RW6). Bumps the tenant
+/// `config_version` (so subscribed devices re-resolve) and emits an actor-bound audit row.
+/// NB(v1): all scopes are gated on the tenant-wide `feature.manage`; a per-space authority
+/// gate (via `space_members.role`) is a deferred refinement — no `space.manage` cap exists.
 pub async fn governance_set_feature(
     Extension(claims): Extension<Claims>,
     State(state): State<SharedState>,
@@ -852,6 +963,34 @@ pub async fn governance_set_feature(
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    if let Err(reason) = validate_feature_write(&body.scope_type, body.scope_id, &body.state) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": reason }))).into_response();
+    }
+    // A workspace-scope LOCK is broadest-wins — no narrower (space/role) override may be
+    // written under it (it would be inert per the resolver, and silently accepting it is
+    // misleading). Fail CLOSED: a read error blocks the write rather than allowing it.
+    if body.scope_type != "workspace" {
+        match sqlx::query_scalar::<_, bool>(
+            "select exists(select 1 from public.feature_policies \
+               where tenant_id = $1 and feature_key = $2 \
+                 and scope_type = 'workspace' and state = 'locked')",
+        )
+        .bind(tenant)
+        .bind(&body.feature_key)
+        .fetch_one(&state.pool)
+        .await
+        {
+            Ok(true) => {
+                return (StatusCode::CONFLICT, Json(json!({ "error": "locked_by_workspace" })))
+                    .into_response()
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::error!("set-feature lock check: {e}");
+                return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+            }
+        }
+    }
     // Delete-then-insert (idempotent). `on conflict` is unreliable here because a
     // workspace-scope policy has scope_id NULL, and Postgres treats NULLs as DISTINCT in
     // the unique index — so ON CONFLICT never fires and rows accumulate. `is not distinct
@@ -898,7 +1037,100 @@ pub async fn governance_set_feature(
         None,
     )
     .await;
+    crate::routes::config::bump(&state.pool, tenant, "features").await;
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct ClearFeature {
+    pub feature_key: String,
+    pub scope_type: String,
+    pub scope_id: Option<Uuid>,
+}
+
+/// `POST /rpc/governance/clear-feature` — capability `feature.manage`. Removes one policy
+/// row so the feature reverts to the next-broader scope (or the catalog default) per the
+/// resolver. Bumps `config_version` + audits. Idempotent (clearing an absent row is OK).
+pub async fn governance_clear_feature(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<ClearFeature>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "feature.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if !matches!(body.scope_type.as_str(), "workspace" | "space" | "role") {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad_scope_type" })))
+            .into_response();
+    }
+    let deleted = sqlx::query(
+        "delete from public.feature_policies \
+          where tenant_id = $1 and feature_key = $2 and scope_type = $3 \
+            and scope_id is not distinct from $4",
+    )
+    .bind(tenant)
+    .bind(&body.feature_key)
+    .bind(&body.scope_type)
+    .bind(body.scope_id)
+    .execute(&state.pool)
+    .await;
+    let rows = match deleted {
+        Ok(r) => r.rows_affected(),
+        Err(e) => {
+            tracing::error!("clear-feature: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+        }
+    };
+    audit(
+        &state,
+        tenant,
+        actor,
+        "governance.feature.cleared",
+        "feature_policy",
+        None,
+    )
+    .await;
+    crate::routes::config::bump(&state.pool, tenant, "features").await;
+    (StatusCode::OK, Json(json!({ "ok": true, "cleared": rows }))).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct MatrixQuery {
+    pub space_id: Option<Uuid>,
+}
+
+/// `GET /rpc/governance/matrix?space_id=` — capability `feature.manage`. The RAW per-scope
+/// policy rows (the admin authoring view). Members never get raw rows — they use the
+/// resolver verdict (`/v1/governance`). An optional `space_id` narrows space-scope rows to
+/// that space; workspace + role rows are always included.
+pub async fn governance_matrix(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Query(q): Query<MatrixQuery>,
+) -> Response {
+    let (tenant, _actor) = match authorize(&state, &claims, "feature.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let rows: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.feature_key, t.scope_type), '[]'::json) from ( \
+           select feature_key, scope_type, scope_id, state, modified_at \
+             from public.feature_policies \
+            where tenant_id = $1 \
+              and ($2::uuid is null or scope_type <> 'space' or scope_id = $2)) t",
+    )
+    .bind(tenant)
+    .bind(q.space_id)
+    .fetch_one(&state.pool)
+    .await;
+    match rows {
+        Ok(policies) => (StatusCode::OK, Json(json!({ "policies": policies }))).into_response(),
+        Err(e) => {
+            tracing::error!("governance matrix: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -943,6 +1175,7 @@ pub async fn models_set_enabled(
         None,
     )
     .await;
+    crate::routes::config::bump(&state.pool, tenant, "catalog").await;
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
@@ -988,6 +1221,7 @@ pub async fn routing_set_step(
                 Some(body.id),
             )
             .await;
+            crate::routes::config::bump(&state.pool, tenant, "routing").await;
             (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
         }
         Err(e) => {
@@ -1332,7 +1566,10 @@ pub async fn orgs_transfer_ownership(
 /// stated "at minimum, emit an error-level alert" bar) so it is alertable rather than
 /// silent. Full transactional mutation+audit atomicity is a tracked follow-up
 /// (several handlers do multi-step writes; wrapping each in one tx is the ideal).
-async fn audit(
+///
+/// `pub(crate)` so the C5 RAG document handlers (`routes::documents`) emit the
+/// same actor-bound audit row on register/ingest/delete.
+pub(crate) async fn audit(
     state: &SharedState,
     tenant: Uuid,
     actor: Uuid,
@@ -1401,6 +1638,7 @@ pub async fn settings_set(
         None,
     )
     .await;
+    crate::routes::config::bump(&state.pool, tenant, "settings").await;
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
@@ -1457,6 +1695,7 @@ pub async fn mcp_set_enabled(
         Some(body.mcp_server_id),
     )
     .await;
+    crate::routes::config::bump(&state.pool, tenant, "tools").await;
     (StatusCode::OK, Json(json!({ "enabled": body.enabled }))).into_response()
 }
 
@@ -1545,6 +1784,7 @@ pub async fn mcp_set_tool_grant(
         Some(body.role_id),
     )
     .await;
+    crate::routes::config::bump(&state.pool, tenant, "tools").await;
     (
         StatusCode::OK,
         Json(json!({ "role_id": body.role_id, "tool_name": body.tool_name, "allowed": body.allowed })),
@@ -1602,6 +1842,64 @@ pub async fn devices_revoke(
     )
     .await;
     (StatusCode::OK, Json(json!({ "revoked": body.id }))).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct SetSyncPolicy {
+    pub id: Uuid,
+    pub sync_policy: Value,
+}
+
+/// `POST /rpc/devices/set-sync-policy` — capability `device.manage`. Sets one device's
+/// `sync_policy` jsonb (O3 §3.4: `{config_pull, pull_interval_s, offline_grace_h,
+/// buffer_flush}`), which D4 reads to drive its config-pull cadence + buffer flushing.
+/// Tenant-scoped (404 if the device isn't in the caller's tenant), fail-closed validated
+/// (400 on a malformed policy), audited `device.sync_policy_changed`.
+///
+/// Deliberately does **not** bump the tenant `config_version`: sync_policy is per-device and
+/// is not part of the tenant-wide config snapshot (`config::assemble_snapshot`), so a
+/// tenant-wide bump would force every device to re-pull for a one-device change carrying no
+/// snapshot delta. The device receives its own policy over its per-device channel (D4).
+pub async fn devices_set_sync_policy(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<SetSyncPolicy>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "device.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if let Err(reason) = crate::devices::validate_sync_policy(&body.sync_policy) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": reason }))).into_response();
+    }
+    let write = sqlx::query(
+        "update public.devices set sync_policy = $3 where id = $1 and tenant_id = $2",
+    )
+    .bind(body.id)
+    .bind(tenant)
+    .bind(&body.sync_policy)
+    .execute(&state.pool)
+    .await;
+    let affected = match write {
+        Ok(r) => r.rows_affected(),
+        Err(e) => {
+            tracing::error!("devices_set_sync_policy: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+        }
+    };
+    if affected == 0 {
+        return (StatusCode::NOT_FOUND, "device not found in tenant").into_response();
+    }
+    audit(
+        &state,
+        tenant,
+        actor,
+        "device.sync_policy_changed",
+        "device",
+        Some(body.id),
+    )
+    .await;
+    (StatusCode::OK, Json(json!({ "ok": true, "id": body.id }))).into_response()
 }
 
 #[derive(Deserialize)]
@@ -1752,18 +2050,19 @@ pub async fn connections_oauth_connect(
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    // v1 paste-token: a long-lived Anthropic `setup-token` (no refresh/expiry/scopes) — the
+    // ToS-safe non-official-client path (DECISIONS §F3). vault 0.5.0 takes a single
+    // `OAuthCredential` struct in place of the former positional token/refresh/expiry args.
+    let cred = vault::OAuthCredential {
+        access_token: &body.token,
+        refresh_token: None,
+        expires_at_ms: None,
+        scopes: None,
+        client_id: None,
+    };
     match state
         .tenant_keys
-        .store_oauth(
-            tenant,
-            router_id,
-            &body.token,
-            None,
-            None,
-            None,
-            None,
-            &actor.to_string(),
-        )
+        .store_oauth(tenant, router_id, &cred, &actor.to_string())
         .await
     {
         Ok(id) => {
@@ -1820,6 +2119,137 @@ pub async fn connections_oauth_revoke(
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
+// ---------------------------------------------------------------------------
+// C5 · RAG privileged writes (declassify + per-space retrieval config).
+// ---------------------------------------------------------------------------
+
+/// The fixed 4-level classification lattice (mirrors the `documents.classification` CHECK and
+/// `policies/knowledge.sql`). Declassify may only set one of these.
+const DOC_CLASSIFICATIONS: &[&str] = &["public", "internal", "confidential", "restricted"];
+
+#[derive(Deserialize)]
+pub struct Declassify {
+    pub document_id: Uuid,
+    pub classification: String,
+}
+
+/// `POST /rpc/documents/declassify` — capability `doc.declassify`. Changes a document's
+/// classification (the ONLY sanctioned path: the `trg_guard_document_classification` trigger
+/// rejects a classification change from any non-`service_role` caller, so this must go through
+/// the gateway). Tenant-scoped (404 if the doc isn't in the caller's tenant — no cross-tenant
+/// reclassify) and validated against the fixed lattice (400 on an unknown value). Audited.
+pub async fn documents_declassify(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<Declassify>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "doc.declassify").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    if !DOC_CLASSIFICATIONS.contains(&body.classification.as_str()) {
+        return (StatusCode::BAD_REQUEST, "invalid classification").into_response();
+    }
+    let write = sqlx::query(
+        "update public.documents set classification = $3, modified_at = now() \
+          where tenant_id = $1 and id = $2",
+    )
+    .bind(tenant)
+    .bind(body.document_id)
+    .bind(&body.classification)
+    .execute(&state.pool)
+    .await;
+    match write {
+        Ok(r) if r.rows_affected() == 0 => {
+            (StatusCode::NOT_FOUND, "document not found in tenant").into_response()
+        }
+        Ok(_) => {
+            audit(
+                &state,
+                tenant,
+                actor,
+                "document.declassified",
+                "document",
+                Some(body.document_id),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                Json(json!({ "document_id": body.document_id, "classification": body.classification })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::error!("documents_declassify: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SetRetrievalConfig {
+    pub space_id: Uuid,
+    /// The resolved retrieval config to promote as the space default (opaque JSON — the
+    /// retrieval engine reads it via the per-space `settings` seam; v1 still serves
+    /// `RetrievalConfig::default()` at query time, see `routes::retrieve`).
+    pub config: serde_json::Value,
+}
+
+/// `POST /rpc/retrieval/set-config` — capability `retrieval.manage`. Upserts the per-space
+/// retrieval configuration into `public.settings(scope='space', space_id, key='retrieval')`.
+/// Tenant + space scoped (404 if the space isn't the caller's tenant — no cross-tenant write).
+/// Audited. This is the WRITE seam; per-space read resolution at query time is a tracked
+/// follow-up (v1 retrieve uses `RetrievalConfig::default()`).
+pub async fn retrieval_set_config(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Json(body): Json<SetRetrievalConfig>,
+) -> Response {
+    let (tenant, actor) = match authorize(&state, &claims, "retrieval.manage").await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    // Space must belong to the caller's tenant (else 404 — no cross-tenant config write, and
+    // avoids tripping the settings→spaces composite FK).
+    let space_ok: bool = sqlx::query_scalar(
+        "select exists(select 1 from public.spaces where tenant_id = $1 and id = $2)",
+    )
+    .bind(tenant)
+    .bind(body.space_id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(false);
+    if !space_ok {
+        return (StatusCode::NOT_FOUND, "space not found in tenant").into_response();
+    }
+    let write = sqlx::query(
+        "insert into public.settings (tenant_id, scope, space_id, key, value, modified_by) \
+         values ($1, 'space', $2, 'retrieval', $3::jsonb, $4) \
+         on conflict (tenant_id, scope, space_id, key) \
+         do update set value = excluded.value, modified_at = now(), modified_by = excluded.modified_by",
+    )
+    .bind(tenant)
+    .bind(body.space_id)
+    .bind(body.config.to_string())
+    .bind(actor.to_string())
+    .execute(&state.pool)
+    .await;
+    if let Err(e) = write {
+        tracing::error!("retrieval_set_config: {e}");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
+    }
+    audit(
+        &state,
+        tenant,
+        actor,
+        "retrieval.config.set",
+        "space",
+        Some(body.space_id),
+    )
+    .await;
+    (StatusCode::OK, Json(json!({ "ok": true, "space_id": body.space_id }))).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use sqlx::PgPool;
@@ -1831,6 +2261,85 @@ mod tests {
         PgPool::connect(&url)
             .await
             .expect("connect local Supabase (55322)")
+    }
+
+    /// O3-3: the pure feature-governance write validator (400 surface). Every valid
+    /// state/scope combination passes; each malformed one names its reason.
+    #[test]
+    fn validate_feature_write_rules() {
+        use super::validate_feature_write;
+        // valid: workspace has no scope_id; space/role require one.
+        assert!(validate_feature_write("workspace", None, "locked").is_ok());
+        assert!(validate_feature_write("space", Some(Uuid::new_v4()), "default-on").is_ok());
+        assert!(validate_feature_write("role", Some(Uuid::new_v4()), "user-overridable").is_ok());
+        // bad state → 4-state enum only.
+        assert_eq!(validate_feature_write("workspace", None, "on"), Err("bad_state"));
+        // scope_id ↔ scope_type mismatches.
+        assert_eq!(
+            validate_feature_write("workspace", Some(Uuid::new_v4()), "locked"),
+            Err("scope_id_forbidden")
+        );
+        assert_eq!(validate_feature_write("space", None, "locked"), Err("scope_id_required"));
+        assert_eq!(validate_feature_write("role", None, "locked"), Err("scope_id_required"));
+        // unknown scope.
+        assert_eq!(validate_feature_write("tenant", None, "locked"), Err("bad_scope_type"));
+    }
+
+    /// O3-3 SQL invariants against the live schema: (1) feature_policies rejects an
+    /// out-of-enum state + honours the (feature,scope_type,scope_id) uniqueness via the
+    /// delete-then-insert grain; (2) the workspace-lock existence query the set-feature 409
+    /// relies on flips true once a workspace `locked` row exists; (3) clearing a row removes
+    /// exactly it. Rolled back — live data untouched.
+    #[tokio::test]
+    #[ignore = "requires local Supabase (55322)"]
+    async fn governance_feature_policy_invariants() {
+        let pool = pool().await;
+        let t = Uuid::new_v4();
+        sqlx::query("insert into core.tenants (id,name,slug,modified_by) values ($1,'gov-test',$2,'test')")
+            .bind(t)
+            .bind(format!("gov-test-{t}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let feat = "grounded-only";
+
+        // (1) the state CHECK rejects a non-4-state value.
+        let bad = sqlx::query(
+            "insert into public.feature_policies (tenant_id, feature_key, scope_type, scope_id, state, modified_by) \
+             values ($1,$2,'workspace',null,'on','test')",
+        )
+        .bind(t).bind(feat).execute(&pool).await;
+        assert!(bad.is_err(), "state CHECK must reject 'on'");
+
+        // no workspace lock yet → the set-feature 409 query is false.
+        let locked = |p: PgPool, t: Uuid| async move {
+            sqlx::query_scalar::<_, bool>(
+                "select exists(select 1 from public.feature_policies \
+                   where tenant_id=$1 and feature_key='grounded-only' \
+                     and scope_type='workspace' and state='locked')",
+            )
+            .bind(t).fetch_one(&p).await.unwrap()
+        };
+        assert!(!locked(pool.clone(), t).await, "no lock yet");
+
+        // (2) write a workspace lock → the existence query flips true (the 409 guard fires).
+        sqlx::query(
+            "insert into public.feature_policies (tenant_id, feature_key, scope_type, scope_id, state, modified_by) \
+             values ($1,$2,'workspace',null,'locked','test')",
+        )
+        .bind(t).bind(feat).execute(&pool).await.unwrap();
+        assert!(locked(pool.clone(), t).await, "workspace lock now blocks narrower writes");
+
+        // (3) clear the workspace row (the clear-feature grain) → gone.
+        let del = sqlx::query(
+            "delete from public.feature_policies \
+              where tenant_id=$1 and feature_key=$2 and scope_type='workspace' and scope_id is not distinct from null",
+        )
+        .bind(t).bind(feat).execute(&pool).await.unwrap();
+        assert_eq!(del.rows_affected(), 1, "clear removes exactly the workspace row");
+        assert!(!locked(pool.clone(), t).await, "lock cleared");
+
+        sqlx::query("delete from core.tenants where id=$1").bind(t).execute(&pool).await.unwrap();
     }
 
     /// The two SQL contracts `rbac_create_role` relies on: (1) the no-shadowing key-check flags a
@@ -1868,6 +2377,52 @@ mod tests {
         assert!(taken("support", tenant, pool.clone()).await, "created custom key is now taken (409 on re-create)");
 
         // cleanup: dropping the tenant cascades to its roles + grants.
+        sqlx::query("delete from core.tenants where id=$1").bind(tenant).execute(&pool).await.unwrap();
+    }
+
+    /// The SQL contracts `budgets_delete_node` relies on: (1) the org root is identified by a
+    /// NULL `parent_id` (so the handler can refuse it), and (2) deleting a non-root node CASCADES
+    /// to its whole subtree via the `(tenant_id, parent_id)` self-FK `ON DELETE CASCADE`. A revert
+    /// of the cascade FK (or the root guard) fails this. DB-gated (needs local Supabase 55322).
+    #[tokio::test]
+    #[ignore = "requires local Supabase (55322) with the budget_nodes schema"]
+    async fn budgets_delete_cascades_subtree_and_root_is_null_parent() {
+        let pool = pool().await;
+        let tenant = Uuid::new_v4();
+        sqlx::query("insert into core.tenants (id,name,slug,modified_by) values ($1,'budtree-test',$2,'test')")
+            .bind(tenant).bind(format!("budtree-{tenant}")).execute(&pool).await.unwrap();
+
+        // org (root) → dept → user, plus alert/floor to prove the columns round-trip.
+        let (org, dept, user) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let ins = |id: Uuid, parent: Option<Uuid>, kind: &'static str, p: PgPool, t: Uuid| async move {
+            sqlx::query("insert into public.budget_nodes (tenant_id,id,parent_id,kind,name,cap_amount,alert_threshold,free_floor_enabled,enforcement,modified_by) \
+                         values ($1,$2,$3,$4,$4,100,0.8,false,'hard','test')")
+                .bind(t).bind(id).bind(parent).bind(kind).execute(&p).await.unwrap();
+        };
+        ins(org, None, "org", pool.clone(), tenant).await;
+        ins(dept, Some(org), "dept", pool.clone(), tenant).await;
+        ins(user, Some(dept), "user", pool.clone(), tenant).await;
+
+        // (1) root guard: the org node has a NULL parent → the handler refuses to delete it.
+        let root_parent: Option<Uuid> = sqlx::query_scalar(
+            "select parent_id from public.budget_nodes where tenant_id=$1 and id=$2")
+            .bind(tenant).bind(org).fetch_one(&pool).await.unwrap();
+        assert!(root_parent.is_none(), "org root must have a NULL parent (undeletable)");
+        // alert/floor persisted (columns exposed by the read + upsert).
+        let (alert, floor): (Option<f64>, bool) = sqlx::query_as(
+            "select alert_threshold::float8, free_floor_enabled from public.budget_nodes where tenant_id=$1 and id=$2")
+            .bind(tenant).bind(dept).fetch_one(&pool).await.unwrap();
+        assert_eq!(alert, Some(0.8));
+        assert!(!floor, "free_floor_enabled must round-trip false");
+
+        // (2) delete the dept → cascade removes dept + its user child; only the org root remains.
+        sqlx::query("delete from public.budget_nodes where tenant_id=$1 and id=$2")
+            .bind(tenant).bind(dept).execute(&pool).await.unwrap();
+        let remaining: i64 = sqlx::query_scalar(
+            "select count(*) from public.budget_nodes where tenant_id=$1")
+            .bind(tenant).fetch_one(&pool).await.unwrap();
+        assert_eq!(remaining, 1, "cascade must remove dept + user, leaving only the org root");
+
         sqlx::query("delete from core.tenants where id=$1").bind(tenant).execute(&pool).await.unwrap();
     }
 

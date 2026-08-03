@@ -13,9 +13,10 @@
 //! superuser role, so every query filters by `tenant_id` explicitly. Spend + plane-split
 //! read the ledger on the fly (they need the GH-5 denormalized attribution columns and the
 //! per-call cloud-equivalent baseline); the rollup-backed panels read the live
-//! `analytics_*` tables (kept current by the A2 triggers). Scope authz + the `analytics.view`
-//! capability + `scope_node_id`-outside-subtree `403` are layered on in A7 — A5 is
-//! tenant-scoped for any authenticated member.
+//! `analytics_*` tables (kept current by the A2 triggers). A7 scope authz: own-subtree
+//! reads need no capability; tenant-wide / cross-subtree (or a `scope_node_id` outside the
+//! caller's subtree) requires `audit.read` (analytics observability shares O1's audit gate)
+//! → else `403 capability_required`.
 
 use axum::{
     extract::{Query, State},
@@ -28,23 +29,106 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::{
-    analytics::{Bucket, ExportReport, SpendGroup, Window},
+    analytics::{scope_decision, Bucket, ExportReport, ScopeDecision, ScopeFilter, SpendGroup, Window},
     auth::Claims,
-    capabilities::check_claims_version,
+    capabilities::{check_claims_version, CapabilitySet},
     state::SharedState,
 };
 
-/// Freshness gate + tenant resolution for an analytics read. A5 posture: any authenticated
-/// member may read their tenant's analytics; A7 adds the `analytics.view` capability for
-/// tenant-wide / cross-subtree scope and the `scope_node_id`-outside-subtree `403`.
-async fn require_analytics(state: &SharedState, claims: &Claims) -> Result<Uuid, Response> {
+fn capability_required(cap: &str) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({ "error": "capability_required", "capability": cap })),
+    )
+        .into_response()
+}
+
+#[derive(Debug)]
+enum ScopeErr {
+    Denied,
+    Db(sqlx::Error),
+}
+
+/// All node ids in the subtree rooted at `root` (root + descendants) — a bounded
+/// budget-tree walk used only for authz scoping, NOT on the spend aggregation path (the
+/// P12 no-recursive-CTE gate is about the spend GROUP BY, which stays recursion-free).
+async fn subtree_ids(pool: &sqlx::PgPool, tenant: Uuid, root: Uuid) -> Result<Vec<Uuid>, sqlx::Error> {
+    sqlx::query_scalar(
+        "with recursive sub as ( \
+           select id from public.budget_nodes where tenant_id = $1 and id = $2 \
+           union all \
+           select b.id from public.budget_nodes b \
+             join sub on b.parent_id = sub.id where b.tenant_id = $1) \
+         select id from sub",
+    )
+    .bind(tenant)
+    .bind(root)
+    .fetch_all(pool)
+    .await
+}
+
+/// The scope-filter resolution (testable without the auth stack): resolve the caller's
+/// PERSONAL budget leaf (`ref_id = subject`, no org-root fallback — that would leak
+/// tenant-wide), then apply [`scope_decision`]. `has_wide` = holds `audit.read`.
+async fn scope_filter_for(
+    pool: &sqlx::PgPool,
+    tenant: Uuid,
+    subject: Uuid,
+    has_wide: bool,
+    requested: Option<Uuid>,
+) -> Result<ScopeFilter, ScopeErr> {
+    let own_leaf: Option<Uuid> = sqlx::query_scalar(
+        "select id from public.budget_nodes \
+           where tenant_id = $1 and ref_id = $2 order by (kind = 'user') desc limit 1",
+    )
+    .bind(tenant)
+    .bind(subject)
+    .fetch_optional(pool)
+    .await
+    .map_err(ScopeErr::Db)?;
+
+    let own_subtree = match own_leaf {
+        Some(o) => subtree_ids(pool, tenant, o).await.map_err(ScopeErr::Db)?,
+        None => Vec::new(),
+    };
+    let in_own = requested.map(|s| own_subtree.contains(&s)).unwrap_or(false);
+
+    match scope_decision(has_wide, requested, own_leaf, in_own) {
+        ScopeDecision::Unrestricted => Ok(ScopeFilter::All),
+        ScopeDecision::Scope(root) => {
+            Ok(ScopeFilter::Nodes(subtree_ids(pool, tenant, root).await.map_err(ScopeErr::Db)?))
+        }
+        ScopeDecision::Denied => Err(ScopeErr::Denied),
+    }
+}
+
+/// A7 scope authz for an analytics read: freshness gate → capability resolution → scope.
+/// Own-subtree reads need no capability; tenant-wide / cross-subtree needs `audit.read`
+/// (analytics observability shares O1's audit gate). Returns `(tenant, ScopeFilter)` or a
+/// mapped `401`/`403` response. The returned filter is bound to every query as the
+/// `budget_node_id = any($n)` predicate.
+async fn resolve_scope(
+    state: &SharedState,
+    claims: &Claims,
+    requested: Option<Uuid>,
+) -> Result<(Uuid, ScopeFilter), Response> {
     let tenant = claims
         .tenant_id
         .ok_or_else(|| (StatusCode::FORBIDDEN, "no active tenant").into_response())?;
     check_claims_version(&state.pool, claims)
         .await
         .map_err(|_| (StatusCode::UNAUTHORIZED, "stale token — re-authenticate").into_response())?;
-    Ok(tenant)
+    let caps = CapabilitySet::resolve(&state.pool, claims).await.map_err(|e| {
+        tracing::error!("analytics caps: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+    })?;
+    let subject = Uuid::parse_str(&claims.sub)
+        .map_err(|_| (StatusCode::UNAUTHORIZED, "bad subject").into_response())?;
+    match scope_filter_for(&state.pool, tenant, subject, caps.has("audit.read"), requested).await {
+        Ok(filter) => Ok((tenant, filter)),
+        Err(ScopeErr::Denied) => Err(capability_required("audit.read")),
+        Err(ScopeErr::Db(e)) => Err(read_err("scope", e)),
+    }
 }
 
 fn read_err(what: &str, e: sqlx::Error) -> Response {
@@ -76,8 +160,8 @@ pub async fn get_overview(
     Extension(claims): Extension<Claims>,
     State(state): State<SharedState>,
 ) -> Response {
-    let tenant = match require_analytics(&state, &claims).await {
-        Ok(t) => t,
+    let (tenant, scope) = match resolve_scope(&state, &claims, None).await {
+        Ok(x) => x,
         Err(r) => return r,
     };
     // Served from the live usage rollup (fresh via the A2 triggers): today's stat row,
@@ -116,9 +200,11 @@ pub async fn get_overview(
                     - (sum(cost_usd) filter (where day between current_date - 28 and current_date - 15)/nullif(sum(calls) filter (where day between current_date - 28 and current_date - 15),0))) \
                     / nullif((sum(cost_usd) filter (where day between current_date - 28 and current_date - 15)/nullif(sum(calls) filter (where day between current_date - 28 and current_date - 15),0)),0))::numeric,1) else null end as blended_delta, \
           coalesce(sum(savings_usd) filter (where day > current_date - 14),0)::float8 as savings14 \
-        from public.analytics_usage_daily where tenant_id = $1) s";
+        from public.analytics_usage_daily \
+        where tenant_id = $1 and ($2::uuid[] is null or budget_node_id = any($2))) s";
     match sqlx::query_scalar::<_, Value>(q)
         .bind(tenant)
+        .bind(scope.bind())
         .fetch_one(&state.pool)
         .await
     {
@@ -132,6 +218,7 @@ pub async fn get_overview(
 pub struct TrendQ {
     pub window: Option<String>,
     pub bucket: Option<String>,
+    pub scope_node_id: Option<Uuid>,
 }
 
 pub async fn get_cost_trend(
@@ -139,8 +226,8 @@ pub async fn get_cost_trend(
     State(state): State<SharedState>,
     Query(q): Query<TrendQ>,
 ) -> Response {
-    let tenant = match require_analytics(&state, &claims).await {
-        Ok(t) => t,
+    let (tenant, scope) = match resolve_scope(&state, &claims, q.scope_node_id).await {
+        Ok(x) => x,
         Err(r) => return r,
     };
     let win = match Window::parse(q.window.as_deref()) {
@@ -159,15 +246,18 @@ pub async fn get_cost_trend(
                from ( select day, sum(cost_usd) cost_usd, sum(calls) calls, sum(savings_usd) savings_usd \
                         from public.analytics_usage_daily \
                        where tenant_id = $1 and day > current_date - $2 \
+                         and ($3::uuid[] is null or budget_node_id = any($3)) \
                        group by day) d) x) as series, \
           ( select round((100.0*((sum(cost_usd) filter (where day > current_date - ($2/2)) / nullif(sum(calls) filter (where day > current_date - ($2/2)),0)) \
                    - (sum(cost_usd) filter (where day <= current_date - ($2/2)) / nullif(sum(calls) filter (where day <= current_date - ($2/2)),0))) \
                    / nullif((sum(cost_usd) filter (where day <= current_date - ($2/2)) / nullif(sum(calls) filter (where day <= current_date - ($2/2)),0)),0))::numeric,1) \
-              from public.analytics_usage_daily where tenant_id = $1 and day > current_date - $2) as delta \
+              from public.analytics_usage_daily where tenant_id = $1 and day > current_date - $2 \
+                and ($3::uuid[] is null or budget_node_id = any($3))) as delta \
         ) t";
     match sqlx::query_scalar::<_, Value>(sql)
         .bind(tenant)
         .bind(win.days)
+        .bind(scope.bind())
         .fetch_one(&state.pool)
         .await
     {
@@ -180,6 +270,7 @@ pub async fn get_cost_trend(
 #[derive(Deserialize)]
 pub struct WindowQ {
     pub window: Option<String>,
+    pub scope_node_id: Option<Uuid>,
 }
 
 pub async fn get_model_mix(
@@ -187,8 +278,8 @@ pub async fn get_model_mix(
     State(state): State<SharedState>,
     Query(q): Query<WindowQ>,
 ) -> Response {
-    let tenant = match require_analytics(&state, &claims).await {
-        Ok(t) => t,
+    let (tenant, scope) = match resolve_scope(&state, &claims, q.scope_node_id).await {
+        Ok(x) => x,
         Err(r) => return r,
     };
     let win = match Window::parse(q.window.as_deref()) {
@@ -202,10 +293,12 @@ pub async fn get_model_mix(
                sum(cost_usd)::float8 as cost_usd, sum(savings_usd)::float8 as savings_usd \
           from public.analytics_usage_daily \
          where tenant_id = $1 and day > current_date - $2 \
+           and ($3::uuid[] is null or budget_node_id = any($3)) \
          group by served_model, provider, execution_location) t";
     match sqlx::query_scalar::<_, Value>(sql)
         .bind(tenant)
         .bind(win.days)
+        .bind(scope.bind())
         .fetch_one(&state.pool)
         .await
     {
@@ -232,7 +325,7 @@ fn plane_split_sql() -> String {
              from public.inference_calls ic {lat} \
             where ic.tenant_id = $1 \
               and ic.recorded_at >= now() - make_interval(days => $2) \
-              and ($3::uuid is null or $3 in (ic.org_node_id, ic.dept_node_id, ic.team_node_id, ic.user_node_id, ic.budget_node_id)) \
+              and ($3::uuid[] is null or ic.budget_node_id = any($3)) \
               and ic.budget_node_id is not null) \
          select json_build_object( \
            'local', json_build_object('calls', l.calls, 'cost_usd', l.cost, 'cloud_equiv_usd', l.ce), \
@@ -256,8 +349,8 @@ pub async fn get_plane_split(
     State(state): State<SharedState>,
     Query(q): Query<ScopedWindowQ>,
 ) -> Response {
-    let tenant = match require_analytics(&state, &claims).await {
-        Ok(t) => t,
+    let (tenant, scope) = match resolve_scope(&state, &claims, q.scope_node_id).await {
+        Ok(x) => x,
         Err(r) => return r,
     };
     let win = match Window::parse(q.window.as_deref()) {
@@ -268,7 +361,7 @@ pub async fn get_plane_split(
     match sqlx::query_scalar::<_, Value>(&sql)
         .bind(tenant)
         .bind(win.days)
-        .bind(q.scope_node_id)
+        .bind(scope.bind())
         .fetch_one(&state.pool)
         .await
     {
@@ -296,7 +389,7 @@ fn spend_sql(group: SpendGroup) -> String {
              from public.inference_calls ic {lat} \
             where ic.tenant_id = $1 \
               and ic.recorded_at >= now() - make_interval(days => $2) \
-              and ($3::uuid is null or $3 in (ic.org_node_id, ic.dept_node_id, ic.team_node_id, ic.user_node_id, ic.budget_node_id)) \
+              and ($3::uuid[] is null or ic.budget_node_id = any($3)) \
               and ic.{col} is not null)",
         col = col, sav = SAVINGS_EXPR, lat = CE_LATERAL
     );
@@ -328,8 +421,8 @@ pub async fn get_spend(
     State(state): State<SharedState>,
     Query(q): Query<SpendQ>,
 ) -> Response {
-    let tenant = match require_analytics(&state, &claims).await {
-        Ok(t) => t,
+    let (tenant, scope) = match resolve_scope(&state, &claims, q.scope_node_id).await {
+        Ok(x) => x,
         Err(r) => return r,
     };
     let win = match Window::parse(q.window.as_deref()) {
@@ -344,7 +437,7 @@ pub async fn get_spend(
     match sqlx::query_scalar::<_, Value>(&sql)
         .bind(tenant)
         .bind(win.days)
-        .bind(q.scope_node_id)
+        .bind(scope.bind())
         .fetch_one(&state.pool)
         .await
     {
@@ -359,8 +452,8 @@ pub async fn get_quality(
     State(state): State<SharedState>,
     Query(q): Query<WindowQ>,
 ) -> Response {
-    let tenant = match require_analytics(&state, &claims).await {
-        Ok(t) => t,
+    let (tenant, scope) = match resolve_scope(&state, &claims, q.scope_node_id).await {
+        Ok(x) => x,
         Err(r) => return r,
     };
     let win = match Window::parse(q.window.as_deref()) {
@@ -379,10 +472,12 @@ pub async fn get_quality(
                (sum(thumb_up) + sum(thumb_down) + sum(accept_calls) + sum(edit_calls) + sum(retry_calls)) as interactions \
           from public.analytics_quality_daily \
          where tenant_id = $1 and day > current_date - $2 \
+           and ($3::uuid[] is null or budget_node_id = any($3)) \
          group by served_model) t";
     match sqlx::query_scalar::<_, Value>(sql)
         .bind(tenant)
         .bind(win.days)
+        .bind(scope.bind())
         .fetch_one(&state.pool)
         .await
     {
@@ -404,8 +499,8 @@ pub async fn get_export(
     State(state): State<SharedState>,
     Query(q): Query<ExportQ>,
 ) -> Response {
-    let tenant = match require_analytics(&state, &claims).await {
-        Ok(t) => t,
+    let (tenant, scope) = match resolve_scope(&state, &claims, None).await {
+        Ok(x) => x,
         Err(r) => return r,
     };
     let win = match Window::parse(q.window.as_deref()) {
@@ -426,6 +521,7 @@ pub async fn get_export(
                       count(*) as calls, sum(coalesce(ic.cost_usd,0))::float8 as cost_usd \
                  from public.inference_calls ic \
                 where ic.tenant_id = $1 and ic.recorded_at >= now() - make_interval(days => $2) \
+                  and ($3::uuid[] is null or ic.budget_node_id = any($3)) \
                 group by coalesce(ic.execution_location,'cloud')) t"
         }
         _ => {
@@ -434,12 +530,14 @@ pub async fn get_export(
                       sum(calls) as calls, sum(cost_usd)::float8 as cost_usd, sum(savings_usd)::float8 as savings_usd \
                  from public.analytics_usage_daily \
                 where tenant_id = $1 and day > current_date - $2 \
+                  and ($3::uuid[] is null or budget_node_id = any($3)) \
                 group by served_model, provider, execution_location) t"
         }
     };
     let data = match sqlx::query_scalar::<_, Value>(rows_sql)
         .bind(tenant)
         .bind(win.days)
+        .bind(scope.bind())
         .fetch_one(&state.pool)
         .await
     {
@@ -569,7 +667,7 @@ mod gate {
 
         // ── gate half 1: spend by team, grouped by the denormalized column ──
         let spend: Value = sqlx::query_scalar(&spend_sql(SpendGroup::Team))
-            .bind(t).bind(3650_i32).bind(None::<Uuid>)
+            .bind(t).bind(3650_i32).bind(None::<Vec<Uuid>>)
             .fetch_one(&pool).await.expect("spend query runs");
         let rows = spend["rows"].as_array().expect("rows array");
         let row = rows.iter().find(|r| r["node_id"] == team.to_string())
@@ -582,15 +680,28 @@ mod gate {
         // EXPLAIN must show NO recursive CTE (the whole point of GH-5 denormalization).
         let explain = format!("explain {}", spend_sql(SpendGroup::Team));
         let plan: String = sqlx::query(&explain)
-            .bind(t).bind(3650_i32).bind(None::<Uuid>)
+            .bind(t).bind(3650_i32).bind(None::<Vec<Uuid>>)
             .fetch_all(&pool).await.expect("explain runs")
             .iter().map(|r| r.get::<String, _>(0)).collect::<Vec<_>>().join("\n");
         assert!(!plan.to_lowercase().contains("recursive"),
                 "spend-by-scope must not use a recursive CTE:\n{plan}");
 
+        // A7 scope filter (the `budget_node_id = any($3)` predicate): binding the team's
+        // subtree keeps its row; binding a foreign node id yields no rows.
+        let in_scope: Value = sqlx::query_scalar(&spend_sql(SpendGroup::Team))
+            .bind(t).bind(3650_i32).bind(Some(vec![team]))
+            .fetch_one(&pool).await.expect("scoped spend runs");
+        assert!(in_scope["rows"].as_array().unwrap().iter().any(|r| r["node_id"] == team.to_string()),
+                "in-scope node array keeps the team row");
+        let out_scope: Value = sqlx::query_scalar(&spend_sql(SpendGroup::Team))
+            .bind(t).bind(3650_i32).bind(Some(vec![Uuid::new_v4()]))
+            .fetch_one(&pool).await.expect("out-of-scope spend runs");
+        assert!(out_scope["rows"].as_array().unwrap().is_empty(),
+                "out-of-scope node array yields no rows");
+
         // ── gate half 2: plane-split $0-local-vs-cloud savings from execution_location ──
         let ps: Value = sqlx::query_scalar(&plane_split_sql())
-            .bind(t).bind(3650_i32).bind(None::<Uuid>)
+            .bind(t).bind(3650_i32).bind(None::<Vec<Uuid>>)
             .fetch_one(&pool).await.expect("plane-split query runs");
         assert_eq!(ps["local"]["calls"].as_i64(), Some(1));
         assert!(approx(&ps["local"]["cost_usd"], 0.0), "local cost is $0");
@@ -607,6 +718,92 @@ mod gate {
         ] { sqlx::query(q).bind(t).execute(&pool).await.unwrap(); }
         sqlx::query("delete from config.model_endpoints where model_id=$1").bind(model).execute(&pool).await.unwrap();
         sqlx::query("delete from config.models where id=$1").bind(model).execute(&pool).await.unwrap();
+        sqlx::query("delete from core.tenants where id=$1").bind(t).execute(&pool).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod scope_authz {
+    //! A7 scope authz — hits local Supabase (55322). Ignored by default:
+    //!   cargo test -p torii-gateway --bin torii-gateway -- --ignored scope_authz::
+    //! Seeds an org→team→user budget tree and drives scope_filter_for directly (no auth
+    //! stack): a member is confined to their own subtree; requesting a wider node is denied
+    //! unless they hold audit.read; an audit.read holder is unrestricted.
+    use super::{scope_filter_for, subtree_ids, ScopeErr};
+    use crate::analytics::ScopeFilter;
+    use sqlx::postgres::PgPoolOptions;
+    use uuid::Uuid;
+
+    async fn pool() -> sqlx::PgPool {
+        let url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgresql://postgres:postgres@127.0.0.1:55322/postgres".into());
+        PgPoolOptions::new().max_connections(2).connect(&url).await.expect("connect 55322")
+    }
+
+    fn sorted(f: &ScopeFilter) -> Option<Vec<Uuid>> {
+        match f {
+            ScopeFilter::All => None,
+            ScopeFilter::Nodes(v) => {
+                let mut v = v.clone();
+                v.sort();
+                Some(v)
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local Supabase (55322)"]
+    async fn scope_confines_member_and_gates_wider_on_audit_read() {
+        let pool = pool().await;
+        let t = Uuid::new_v4();
+        let (org, team, user) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let subject = Uuid::new_v4(); // the member's identity (user node ref_id)
+        let outsider = Uuid::new_v4(); // an identity with no node
+
+        sqlx::query("insert into core.tenants (id,name,slug,modified_by) values ($1,'sc','sc-'||$1,'test')")
+            .bind(t).execute(&pool).await.unwrap();
+        for (id, parent, kind, name, refid) in [
+            (org, None, "org", "Org", None),
+            (team, Some(org), "team", "Team", None),
+            (user, Some(team), "user", "User", Some(subject)),
+        ] {
+            sqlx::query("insert into public.budget_nodes (tenant_id,id,parent_id,kind,name,ref_id,modified_by) \
+                         values ($1,$2,$3,$4,$5,$6,'test')")
+                .bind(t).bind(id).bind(parent).bind(kind).bind(name).bind(refid)
+                .execute(&pool).await.unwrap();
+        }
+
+        // subtree_ids: org → all three; team → {team,user}; user → {user}.
+        let mut all3 = vec![org, team, user]; all3.sort();
+        let mut tu = vec![team, user]; tu.sort();
+        let mut got = subtree_ids(&pool, t, org).await.unwrap(); got.sort();
+        assert_eq!(got, all3, "org subtree = org+team+user");
+        let mut got = subtree_ids(&pool, t, team).await.unwrap(); got.sort();
+        assert_eq!(got, tu, "team subtree = team+user");
+        assert_eq!(subtree_ids(&pool, t, user).await.unwrap(), vec![user], "user subtree = self");
+
+        // member (no audit.read), no scope → confined to own subtree = {user}.
+        let f = scope_filter_for(&pool, t, subject, false, None).await.unwrap();
+        assert_eq!(sorted(&f), Some(vec![user]), "member confined to own leaf subtree");
+
+        // member requesting a WIDER node (their team) without audit.read → denied.
+        let d = scope_filter_for(&pool, t, subject, false, Some(team)).await;
+        assert!(matches!(d, Err(ScopeErr::Denied)), "wider scope without audit.read is denied");
+
+        // member requesting their OWN node → allowed.
+        let f = scope_filter_for(&pool, t, subject, false, Some(user)).await.unwrap();
+        assert_eq!(sorted(&f), Some(vec![user]), "own node is allowed");
+
+        // audit.read holder: unrestricted when unscoped; any subtree when scoped.
+        let f = scope_filter_for(&pool, t, subject, true, None).await.unwrap();
+        assert_eq!(f, ScopeFilter::All, "audit.read → tenant-wide");
+        let f = scope_filter_for(&pool, t, subject, true, Some(team)).await.unwrap();
+        assert_eq!(sorted(&f), Some(tu.clone()), "audit.read may scope to any subtree");
+
+        // an identity with NO node and no audit.read → denied (no org-root fallback → no leak).
+        let d = scope_filter_for(&pool, t, outsider, false, None).await;
+        assert!(matches!(d, Err(ScopeErr::Denied)), "no personal node + no audit.read → denied");
+
         sqlx::query("delete from core.tenants where id=$1").bind(t).execute(&pool).await.unwrap();
     }
 }

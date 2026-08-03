@@ -152,6 +152,60 @@ impl ExportReport {
     }
 }
 
+// ── A7 · scope authz ─────────────────────────────────────────────────────────
+use uuid::Uuid;
+
+/// The resolved read scope for one analytics request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScopeFilter {
+    /// Tenant-wide — no node filter (only an `audit.read` holder gets this).
+    All,
+    /// Confined to these `budget_node_id`s (a node's subtree). Empty ⇒ sees nothing.
+    Nodes(Vec<Uuid>),
+}
+
+impl ScopeFilter {
+    /// The bind value for the `= any($n)` predicate: `None` for `All` (predicate is a
+    /// no-op), else the node-id set. Every scoped query filters `budget_node_id`.
+    pub fn bind(&self) -> Option<Vec<Uuid>> {
+        match self {
+            ScopeFilter::All => None,
+            ScopeFilter::Nodes(v) => Some(v.clone()),
+        }
+    }
+}
+
+/// Outcome of the scope-authz decision (before the subtree is materialized).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeDecision {
+    /// Tenant-wide (audit.read holder, no scope requested).
+    Unrestricted,
+    /// Confine to this node's subtree.
+    Scope(Uuid),
+    /// Requested a scope the caller may not see, or has no scope at all → 403.
+    Denied,
+}
+
+/// Pure scope-authz decision. `own_leaf` is the caller's PERSONAL budget node (no org-root
+/// fallback — that would leak tenant-wide); `requested_in_own` is whether the requested
+/// node lies in the caller's own subtree. Own-subtree reads need no capability; tenant-wide
+/// / cross-subtree needs `audit.read` (`has_wide`).
+pub fn scope_decision(
+    has_wide: bool,
+    requested: Option<Uuid>,
+    own_leaf: Option<Uuid>,
+    requested_in_own: bool,
+) -> ScopeDecision {
+    match (has_wide, requested, own_leaf) {
+        (true, Some(s), _) => ScopeDecision::Scope(s), // admin may scope anywhere
+        (true, None, _) => ScopeDecision::Unrestricted, // admin, tenant-wide
+        (false, Some(s), Some(_)) if requested_in_own => ScopeDecision::Scope(s),
+        (false, Some(_), _) => ScopeDecision::Denied,  // out-of-subtree without audit.read
+        (false, None, Some(own)) => ScopeDecision::Scope(own), // confined to own subtree
+        (false, None, None) => ScopeDecision::Denied,  // no personal node + no audit.read
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,5 +264,41 @@ mod tests {
         assert_eq!(ExportReport::parse("raw-calls"), Err(ParamError::Report));
         assert_eq!(ExportReport::parse("audit"), Err(ParamError::Report));
         assert!(ExportReport::parse("plane-split").is_ok());
+    }
+
+    #[test]
+    fn scope_admin_is_unrestricted_or_any_scope() {
+        let s = Uuid::new_v4();
+        // audit.read holder: tenant-wide when unscoped, any node when scoped.
+        assert_eq!(scope_decision(true, None, None, false), ScopeDecision::Unrestricted);
+        assert_eq!(scope_decision(true, Some(s), None, false), ScopeDecision::Scope(s));
+    }
+
+    #[test]
+    fn scope_member_confined_to_own_subtree() {
+        let own = Uuid::new_v4();
+        let child = Uuid::new_v4();
+        let sibling = Uuid::new_v4();
+        // no audit.read, no scope → confined to own subtree.
+        assert_eq!(scope_decision(false, None, Some(own), false), ScopeDecision::Scope(own));
+        // requesting a node WITHIN own subtree → allowed (narrowing).
+        assert_eq!(scope_decision(false, Some(child), Some(own), true), ScopeDecision::Scope(child));
+        // requesting a node OUTSIDE own subtree → denied (needs audit.read).
+        assert_eq!(scope_decision(false, Some(sibling), Some(own), false), ScopeDecision::Denied);
+    }
+
+    #[test]
+    fn scope_member_without_personal_node_is_denied() {
+        // No personal node + no audit.read → no scope at all → deny (fail-closed, never
+        // falls back to the org root, which would leak tenant-wide).
+        assert_eq!(scope_decision(false, None, None, false), ScopeDecision::Denied);
+        assert_eq!(scope_decision(false, Some(Uuid::new_v4()), None, false), ScopeDecision::Denied);
+    }
+
+    #[test]
+    fn scope_filter_bind() {
+        assert_eq!(ScopeFilter::All.bind(), None);
+        let n = Uuid::new_v4();
+        assert_eq!(ScopeFilter::Nodes(vec![n]).bind(), Some(vec![n]));
     }
 }

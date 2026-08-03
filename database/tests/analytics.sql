@@ -257,4 +257,79 @@ begin;
     raise notice 'A3 savings baseline (priced/local-only/unpriced/conservative-floor) ✓';
   end $$;
 rollback;
-\echo 'ANALYTICS A1+A2+A3 TEST PASSED'
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- A4 — MV refresh + reconciliation (reconstructable cache; drift audited to O1).
+-- ─────────────────────────────────────────────────────────────────────────
+\echo '== O2 analytics: A4 MV refresh + reconcile =='
+-- refresh runs at top level: REFRESH … CONCURRENTLY needs the unique indexes (A1)
+-- and cannot run inside the rolled-back txn below. Must not error.
+select public.analytics_refresh_mviews();
+
+begin;
+  -- minimal priced cloud chain so savings reconstructability is exercised
+  insert into config.models (id, name, version) values
+    ('a4400000-0000-0000-0000-000000000001','recon-cloud','1');
+  insert into config.model_endpoints
+    (id, model_id, router_id, capability_id, endpoint_url, cost_per_input_token, cost_per_output_token, is_active)
+    values ('a4410000-0000-0000-0000-000000000001','a4400000-0000-0000-0000-000000000001',
+            'b3fb5f18-cfe9-4793-a1f5-8ae7ef524377','cc536ed2-41b5-424a-af84-bd7152027380','http://t',0.00001,0.00003,true);
+  insert into public.fallback_chains (id, tenant_id, name, capability_id, is_active, modified_by)
+    values ('a4420000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000000',
+            'recon-chain','cc536ed2-41b5-424a-af84-bd7152027380',true,'test');
+  insert into public.fallback_chain_models
+    (id, tenant_id, fallback_chain_id, router_id, model_id, sequence_order, plane, is_active, modified_by)
+    values ('a4430000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000000',
+            'a4420000-0000-0000-0000-000000000001','b3fb5f18-cfe9-4793-a1f5-8ae7ef524377',
+            'a4400000-0000-0000-0000-000000000001',1,'cloud',true,'test');
+
+  -- 3 cloud calls (one bucket; latencies 100/200/300) + 1 local call (savings bucket)
+  insert into public.inference_calls
+    (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence,
+     recorded_at,input_tokens,output_tokens,execution_location,chain_id,budget_node_id) values
+    ('00000000-0000-0000-0000-000000000000','a44c0000-0000-0000-0000-000000000001','text_chat','anthropic','sonnet-4.6',0.01,100,'success',0,'2026-07-27T09:00:00Z',100,50,'cloud','recon-chain','b0de0000-0000-0000-0000-0000000000b1'),
+    ('00000000-0000-0000-0000-000000000000','a44c0000-0000-0000-0000-000000000002','text_chat','anthropic','sonnet-4.6',0.01,200,'success',0,'2026-07-27T10:00:00Z',100,50,'cloud','recon-chain','b0de0000-0000-0000-0000-0000000000b1'),
+    ('00000000-0000-0000-0000-000000000000','a44c0000-0000-0000-0000-000000000003','text_chat','anthropic','sonnet-4.6',0.01,300,'success',0,'2026-07-27T11:00:00Z',100,50,'cloud','recon-chain','b0de0000-0000-0000-0000-0000000000b1'),
+    ('00000000-0000-0000-0000-000000000000','a44c0000-0000-0000-0000-000000000004','text_chat','ollama','local-x',0,90,'success',0,'2026-07-27T12:00:00Z',512,128,'local','recon-chain','b0de0000-0000-0000-0000-0000000000b2');
+
+  do $$
+  declare pre_calls bigint; pre_cost numeric; pre_sav numeric; n0 bigint;
+  begin
+    -- incremental (trigger-produced) figures
+    select calls, cost_usd into pre_calls, pre_cost from public.analytics_usage_daily
+      where budget_node_id='b0de0000-0000-0000-0000-0000000000b1' and execution_location='cloud';
+    select savings_usd into pre_sav from public.analytics_usage_daily
+      where budget_node_id='b0de0000-0000-0000-0000-0000000000b2' and execution_location='local';
+    if coalesce(pre_calls,-1) <> 3 or coalesce(pre_cost,-1) <> 0.03 or coalesce(pre_sav,-1) <> 0.00896 then
+      raise exception 'A4 setup wrong: pre calls=% cost=% sav=%', pre_calls, pre_cost, pre_sav; end if;
+
+    -- reconstructability: zero the rollups → reconcile rebuilds identical figures.
+    delete from public.analytics_usage_daily   where tenant_id='00000000-0000-0000-0000-000000000000' and day='2026-07-27';
+    delete from public.analytics_quality_daily where tenant_id='00000000-0000-0000-0000-000000000000' and day='2026-07-27';
+    perform public.analytics_rollup_reconcile('00000000-0000-0000-0000-000000000000','2026-07-27');
+    if coalesce((select calls    from public.analytics_usage_daily where budget_node_id='b0de0000-0000-0000-0000-0000000000b1' and execution_location='cloud'),-1) <> 3
+       or coalesce((select cost_usd from public.analytics_usage_daily where budget_node_id='b0de0000-0000-0000-0000-0000000000b1'),-1) <> 0.03
+       or coalesce((select savings_usd from public.analytics_usage_daily where budget_node_id='b0de0000-0000-0000-0000-0000000000b2'),-1) <> 0.00896 then
+      raise exception 'FAIL A4 reconstructability: figures not rebuilt from the ledger alone'; end if;
+    -- p95 computed at reconcile: percentile_cont(0.95) over {100,200,300} = 290
+    if coalesce((select latency_ms_p95 from public.analytics_usage_daily
+                  where budget_node_id='b0de0000-0000-0000-0000-0000000000b1'),-1) <> 290 then
+      raise exception 'FAIL A4: latency_ms_p95 not computed at reconcile'; end if;
+    raise notice 'A4 reconstructability + p95 ✓';
+
+    -- drift: corrupt a bucket, reconcile → corrected AND one analytics.reconciled audit row.
+    select count(*) into n0 from public.audit_events
+      where tenant_id='00000000-0000-0000-0000-000000000000' and action='analytics.reconciled';
+    update public.analytics_usage_daily set calls = calls + 100
+      where budget_node_id='b0de0000-0000-0000-0000-0000000000b1';
+    perform public.analytics_rollup_reconcile('00000000-0000-0000-0000-000000000000','2026-07-27');
+    if coalesce((select calls from public.analytics_usage_daily
+                  where budget_node_id='b0de0000-0000-0000-0000-0000000000b1'),-1) <> 3 then
+      raise exception 'FAIL A4 drift: corrupted bucket not corrected'; end if;
+    if (select count(*) from public.audit_events
+          where tenant_id='00000000-0000-0000-0000-000000000000' and action='analytics.reconciled') <> n0 + 1 then
+      raise exception 'FAIL A4 drift: analytics.reconciled audit row not emitted for the drift'; end if;
+    raise notice 'A4 drift correction + audit ✓';
+  end $$;
+rollback;
+\echo 'ANALYTICS A1+A2+A3+A4 TEST PASSED'

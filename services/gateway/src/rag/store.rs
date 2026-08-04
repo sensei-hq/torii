@@ -56,7 +56,7 @@ impl DocStore {
             "insert into documents \
                (tenant_id, id, title, original_filename, content_type, scope, classification, \
                 space_id, collection_id, profile_id, status) \
-             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'uploaded')",
+             values ($1,$2,$3,$4,$5,$6,$7::core.classification_level,$8,$9,$10,'uploaded')",
         )
         .bind(tenant)
         .bind(doc_id)

@@ -7,8 +7,7 @@ create table if not exists spaces (
 , id             uuid    not null default gen_random_uuid()
 , name           varchar(200) not null
 , description    text
-, classification varchar(20) not null default 'confidential'
-    check (classification in ('public', 'internal', 'confidential', 'restricted'))
+, classification core.classification_level not null default 'confidential'
 , owner_id       uuid
 , created_at     timestamptz not null default now()
 , modified_at    timestamptz not null default now()

@@ -24,6 +24,9 @@ grant usage on schema device to authenticated, service_role;
 -- audit: new domain schema (enum home for alert_severity/channel_kind/operation;
 -- alert_rules/alert_events/notification_channels + history.past_* move here in a later phase).
 grant usage on schema audit to authenticated, service_role;
+-- content: new domain schema (enum home for message_role/document_scope/asset_kind/space_role;
+-- messages/documents/document_assets/space_members move here in a later phase).
+grant usage on schema content to authenticated, service_role;
 
 -- (1) Privileged tables — SELECT only. Writes are service_role via the gateway.
 do $$

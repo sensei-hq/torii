@@ -1,12 +1,12 @@
 -- database/ddl/table/public/messages.ddl
-set search_path to public, core, extensions;
+set search_path to public, core, content, extensions;
 
 -- RW5: turns within an Ask conversation.
 create table if not exists messages (
   tenant_id          uuid        not null references core.tenants(id) on delete cascade
 , id                 uuid        not null default gen_random_uuid()
 , conversation_id    uuid        not null
-, role               varchar(12) not null check (role in ('user', 'assistant', 'system'))
+, role               content.message_role not null
 , content            text        not null
 , model              text
 , tier               text

@@ -619,4 +619,67 @@ begin
   raise notice 'AU2 four audit columns are the enums, no leftover CHECK ✓';
 end $$;
 
+-- ═════════════════════════════════════════════════════════════════════════
+-- content enums: message_role (messages) · document_scope (documents) ·
+-- asset_kind (document_assets) · space_role (space_members).
+-- (document_lifecycle SPLIT from documents.status DEFERRED — §7-#5, behavior change.)
+-- ═════════════════════════════════════════════════════════════════════════
+\echo '== enum conversion: content enums =='
+
+do $$
+declare
+  specs text[][] := array[
+    ['message_role','user,assistant,system'],
+    ['document_scope','system,tenant,user'],
+    ['asset_kind','original,ir_json,markdown,table_csv,image,caption,json,text,other'],
+    ['space_role','owner,editor,viewer,member']];
+  i int; nm text; want text; got text;
+begin
+  for i in 1 .. array_length(specs,1) loop
+    nm := specs[i][1]; want := specs[i][2];
+    if not exists (select 1 from pg_type t join pg_namespace n on n.oid=t.typnamespace
+                    where n.nspname='content' and t.typname=nm and t.typtype='e') then
+      raise exception 'FAIL: enum content.% does not exist', nm; end if;
+    select string_agg(e.enumlabel, ',' order by e.enumsortorder) into got
+      from pg_enum e join pg_type t on t.oid=e.enumtypid join pg_namespace n on n.oid=t.typnamespace
+     where n.nspname='content' and t.typname=nm;
+    if got is distinct from want then raise exception 'FAIL: content.% = %, expected %', nm, got, want; end if;
+  end loop;
+  raise notice 'CT1 four content enums exist with expected values ✓';
+end $$;
+
+do $$
+declare
+  cols text[][] := array[
+    ['messages','role','message_role'],
+    ['documents','scope','document_scope'],
+    ['document_assets','kind','asset_kind'],
+    ['space_members','role','space_role']];
+  i int; t text; c text; want text; udt text;
+begin
+  for i in 1 .. array_length(cols,1) loop
+    t := cols[i][1]; c := cols[i][2]; want := cols[i][3];
+    select udt_name into udt from information_schema.columns
+     where table_schema='public' and table_name=t and column_name=c;
+    if udt is distinct from want then
+      raise exception 'FAIL: %.% udt=% (expected %)', t, c, coalesce(udt,'<none>'), want; end if;
+  end loop;
+  if exists (select 1 from pg_constraint where contype='c'
+              and conrelid in ('public.messages'::regclass,'public.documents'::regclass,'public.document_assets'::regclass,'public.space_members'::regclass)
+              and (pg_get_constraintdef(oid) ilike '%role%in%'
+                or pg_get_constraintdef(oid) ilike '%scope%in%'
+                or pg_get_constraintdef(oid) ilike '%kind%in%')) then
+    raise exception 'FAIL: a leftover content CHECK still exists'; end if;
+  raise notice 'CT2 four content columns are the enums, no leftover CHECK ✓';
+end $$;
+
+-- CT3 — the guard_document_classification trigger survives the documents scope retype.
+do $$
+begin
+  if not exists (select 1 from pg_trigger where tgrelid='public.documents'::regclass
+                  and tgname='trg_guard_document_classification' and not tgisinternal) then
+    raise exception 'FAIL: trg_guard_document_classification lost from public.documents'; end if;
+  raise notice 'CT3 guard_document_classification trigger intact ✓';
+end $$;
+
 \echo '== enum conversion tests done =='

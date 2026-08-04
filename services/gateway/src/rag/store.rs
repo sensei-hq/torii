@@ -56,7 +56,7 @@ impl DocStore {
             "insert into documents \
                (tenant_id, id, title, original_filename, content_type, scope, classification, \
                 space_id, collection_id, profile_id, status) \
-             values ($1,$2,$3,$4,$5,$6,$7::core.classification_level,$8,$9,$10,'uploaded')",
+             values ($1,$2,$3,$4,$5,$6::content.document_scope,$7::core.classification_level,$8,$9,$10,'uploaded')",
         )
         .bind(tenant)
         .bind(doc_id)
@@ -144,7 +144,7 @@ impl DocStore {
         sqlx::query(
             "insert into document_assets \
                (tenant_id, document_id, version_id, kind, storage_path, content_hash, label, sequence, page_ref, caption) \
-             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+             values ($1,$2,$3,$4::content.asset_kind,$5,$6,$7,$8,$9,$10)",
         )
         .bind(tenant)
         .bind(doc)

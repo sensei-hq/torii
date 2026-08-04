@@ -514,7 +514,7 @@ async fn insert_message(
     sqlx::query_scalar(
         "insert into public.messages \
            (tenant_id, conversation_id, role, content, model, cost_usd, execution_location) \
-         values ($1, $2, $3, $4, $5, $6, $7::core.execution_location) returning id",
+         values ($1, $2, $3::content.message_role, $4, $5, $6, $7::core.execution_location) returning id",
     )
     .bind(tenant)
     .bind(conversation_id)

@@ -1,12 +1,11 @@
 -- database/ddl/table/public/space_members.ddl
-set search_path to public, core, extensions;
+set search_path to public, core, content, extensions;
 
 create table if not exists space_members (
   tenant_id   uuid not null
 , space_id    uuid not null
 , profile_id  uuid not null
-, role        varchar(20) not null default 'member'
-    check (role in ('owner', 'editor', 'viewer', 'member'))
+, role        content.space_role not null default 'member'
 , added_at    timestamptz not null default now()
 , primary key (tenant_id, space_id, profile_id)
 , foreign key (tenant_id, space_id)

@@ -260,7 +260,7 @@ async fn tenant_connections(pool: &sqlx::PgPool, tenant: Uuid) -> sqlx::Result<V
                   k.modified_at                   as connected_at, \
                   (o.id is not null)              as oauth_connected, \
                   o.modified_at                   as oauth_connected_at \
-             from config.routers r \
+             from catalog.routers r \
              left join public.router_credentials k \
                on k.router_id = r.id and k.tenant_id = $1 \
               and k.is_active = true and k.credential_type = 'api_key' \
@@ -363,17 +363,17 @@ pub async fn get_models(
         Ok(t) => t,
         Err(resp) => return resp,
     };
-    // Catalog is global (config.models); enablement is per-tenant (tenant_model_state,
+    // Catalog is global (catalog.models); enablement is per-tenant (tenant_model_state,
     // absent row = enabled).
     let rows: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.provider, t.display_name), '[]'::json) from ( \
            select m.full_name, m.display_name, m.description, m.context_window, \
                   m.max_output_tokens, m.released_on, m.deprecated_on, \
                   coalesce(p.name, 'unknown') as provider, \
-                  exists(select 1 from config.model_endpoints e where e.model_id = m.id) as reachable, \
+                  exists(select 1 from catalog.model_endpoints e where e.model_id = m.id) as reachable, \
                   coalesce(tms.enabled, true) as enabled \
-             from config.models m \
-             left join config.providers p on p.id = m.provider_id \
+             from catalog.models m \
+             left join catalog.providers p on p.id = m.provider_id \
              left join public.tenant_model_state tms \
                on tms.model_full_name = m.full_name and tms.tenant_id = $1 \
             where m.deprecated_on is null) t",
@@ -406,14 +406,14 @@ pub async fn get_available_models(
         "select coalesce(json_agg(t order by t.provider, t.display_name), '[]'::json) from ( \
            select m.full_name, coalesce(m.display_name, m.full_name) as display_name, \
                   coalesce(p.name, 'unknown') as provider \
-             from config.models m \
-             left join config.providers p on p.id = m.provider_id \
+             from catalog.models m \
+             left join catalog.providers p on p.id = m.provider_id \
              left join public.tenant_model_state tms \
                on tms.model_full_name = m.full_name and tms.tenant_id = $1 \
             where m.deprecated_on is null \
               and coalesce(tms.enabled, true) = true \
-              and exists(select 1 from config.model_endpoints e where e.model_id = m.id) \
-              and exists(select 1 from config.model_capabilities mc \
+              and exists(select 1 from catalog.model_endpoints e where e.model_id = m.id) \
+              and exists(select 1 from catalog.model_capabilities mc \
                            join catalog.capability_types c on c.id = mc.capability_id \
                           where mc.model_id = m.id and c.name = 'chat' \
                             and coalesce(mc.supported, true) = true)) t",
@@ -591,8 +591,8 @@ pub async fn get_routing(
                   coalesce(m.full_name, '—') as model \
              from public.fallback_chain_models fcm \
              join public.fallback_chains fc on fc.id = fcm.fallback_chain_id \
-             left join config.models m on m.id = fcm.model_id \
-             left join config.routers r on r.id = fcm.router_id \
+             left join catalog.models m on m.id = fcm.model_id \
+             left join catalog.routers r on r.id = fcm.router_id \
             where fcm.tenant_id = $1) t",
     )
     .bind(tenant)
@@ -696,7 +696,7 @@ mod connections_view {
         let a = Uuid::new_v4();
         let b = Uuid::new_v4();
         let router_id: Uuid =
-            sqlx::query_scalar("select id from config.routers where name = 'openai'")
+            sqlx::query_scalar("select id from catalog.routers where name = 'openai'")
                 .fetch_one(&pool)
                 .await
                 .expect("openai router seeded");

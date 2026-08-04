@@ -324,7 +324,7 @@ begin
 end $$;
 
 -- ═════════════════════════════════════════════════════════════════════════
--- catalog enums: router_type, auth_type (config.routers) · override_scope
+-- catalog enums: router_type, auth_type (catalog.routers) · override_scope
 -- (model_overrides.scope_type) · breaker_state (provider_health.state).
 -- ═════════════════════════════════════════════════════════════════════════
 \echo '== enum conversion: catalog enums =='
@@ -354,8 +354,8 @@ end $$;
 do $$
 declare
   cols text[][] := array[
-    ['config','routers','router_type','router_type'],
-    ['config','routers','authentication_type','auth_type'],
+    ['catalog','routers','router_type','router_type'],
+    ['catalog','routers','authentication_type','auth_type'],
     ['public','model_overrides','scope_type','override_scope'],
     ['public','provider_health','state','breaker_state']];
   i int; s text; t text; c text; want text; udt text;
@@ -368,7 +368,7 @@ begin
       raise exception 'FAIL: %.%.% udt=% (expected %)', s, t, c, coalesce(udt,'<none>'), want; end if;
   end loop;
   if exists (select 1 from pg_constraint where contype='c'
-              and conrelid in ('config.routers'::regclass,'public.model_overrides'::regclass,'public.provider_health'::regclass)
+              and conrelid in ('catalog.routers'::regclass,'public.model_overrides'::regclass,'public.provider_health'::regclass)
               and (pg_get_constraintdef(oid) ilike '%router_type%in%'
                 or pg_get_constraintdef(oid) ilike '%authentication_type%in%'
                 or pg_get_constraintdef(oid) ilike '%scope_type%in%'

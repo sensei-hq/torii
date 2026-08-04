@@ -4,7 +4,7 @@
 //! `RouterConfig`) to a live key value via `std::env::var` at call time.
 //!
 //! The `GatewayConfig` already carries the env-var name per router
-//! (populated by `config_loader::build_routers` from `config.routers.api_key_env_var`).
+//! (populated by `config_loader::build_routers` from `catalog.routers.api_key_env_var`).
 //! This module bridges that name to the actual secret present in the process
 //! environment so `Gateway::refresh_router_keys` can inject it.
 //!

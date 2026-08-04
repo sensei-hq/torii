@@ -1,5 +1,8 @@
-set search_path to config, extensions;
+-- database/ddl/table/catalog/providers.ddl
+set search_path to catalog, extensions;
 
+-- §D move: catalog.providers → catalog.providers (config→catalog). Model-maker catalog. Global
+-- reference data (no tenant_id, no RLS).
 create table if not exists providers (
   id                       uuid primary key default uuid_generate_v4()
 , name                     varchar(200) not null unique

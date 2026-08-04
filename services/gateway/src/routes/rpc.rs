@@ -1904,7 +1904,7 @@ pub async fn devices_set_sync_policy(
 
 #[derive(Deserialize)]
 pub struct ConnectRouter {
-    /// Router NAME (`config.routers.name`), e.g. "openai".
+    /// Router NAME (`catalog.routers.name`), e.g. "openai".
     pub router: String,
     /// The BYOK provider secret — WRITE-ONLY: sealed at rest, never returned/logged.
     pub key: String,
@@ -1920,7 +1920,7 @@ pub struct RevokeRouter {
 /// Resolve a router NAME to its id (routers are platform config, not tenant-scoped).
 /// 404 if unknown.
 async fn resolve_router_id(state: &SharedState, name: &str) -> Result<Uuid, Response> {
-    sqlx::query_scalar::<_, Uuid>("select id from config.routers where name = $1")
+    sqlx::query_scalar::<_, Uuid>("select id from catalog.routers where name = $1")
         .bind(name)
         .fetch_optional(&state.pool)
         .await
@@ -2027,7 +2027,7 @@ pub async fn connections_revoke(
 
 #[derive(Deserialize)]
 pub struct OAuthConnect {
-    /// Router NAME (`config.routers.name`) — Anthropic in v1 (the only OAuth-capable adapter).
+    /// Router NAME (`catalog.routers.name`) — Anthropic in v1 (the only OAuth-capable adapter).
     pub router: String,
     /// The OAuth bearer / `setup-token` — WRITE-ONLY: sealed at rest, never returned/logged.
     pub token: String,

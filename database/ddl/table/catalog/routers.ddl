@@ -1,5 +1,8 @@
-set search_path to config, catalog, extensions;
+-- database/ddl/table/catalog/routers.ddl
+set search_path to catalog, extensions;
 
+-- §D move: catalog.routers → catalog.routers (config→catalog, db-redesign.md §37). Router/adapter
+-- catalog; router_type/auth_type are catalog enums. Global reference data (no tenant_id, no RLS).
 create table if not exists routers (
   id                       uuid primary key default uuid_generate_v4()
 , name                     varchar(100) not null unique

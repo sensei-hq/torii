@@ -1,7 +1,7 @@
 //! Load [`GatewayConfig`] from the Postgres config tables.
 //!
-//! The torii schema stores routing configuration in `config.routers`,
-//! `config.models`, `config.model_capabilities`, `config.model_endpoints`,
+//! The torii schema stores routing configuration in `catalog.routers`,
+//! `catalog.models`, `catalog.model_capabilities`, `catalog.model_endpoints`,
 //! and `public.fallback_chains` / `public.fallback_chain_models` (tenant-scoped
 //! to the platform tenant: `core.tenants WHERE is_platform = true`).
 //!
@@ -121,7 +121,7 @@ pub(crate) struct ChainModelRow {
 
 // ─── Pure builder functions ───────────────────────────────────────────────────
 
-/// Build the `routers` map from `config.routers` rows.
+/// Build the `routers` map from `catalog.routers` rows.
 pub(crate) fn build_routers(rows: &[RouterRow]) -> HashMap<String, RouterConfig> {
     rows.iter()
         .map(|r| {
@@ -133,7 +133,7 @@ pub(crate) fn build_routers(rows: &[RouterRow]) -> HashMap<String, RouterConfig>
                     // Literal key is resolved from secrets at request time (Task 5).
                     api_key: None,
                     enabled: r.is_active,
-                    // config.routers has no config jsonb; timeout deferred to Task 5.
+                    // catalog.routers has no config jsonb; timeout deferred to Task 5.
                     timeout_ms: None,
                     headers: parse_headers(&r.default_headers_json),
                 },
@@ -142,7 +142,7 @@ pub(crate) fn build_routers(rows: &[RouterRow]) -> HashMap<String, RouterConfig>
         .collect()
 }
 
-/// Build the `models` map from `config.models` rows (+ primary endpoint).
+/// Build the `models` map from `catalog.models` rows (+ primary endpoint).
 ///
 /// Models with no DB capability that maps to a gateway [`Capability`] are
 /// skipped — they could never be selected by the engine anyway.
@@ -244,8 +244,8 @@ pub(crate) fn build_chains(
 /// Load the full [`GatewayConfig`] from the Postgres config tables.
 ///
 /// Reads:
-/// - `config.routers` (active only)
-/// - `config.models` joined to `model_capabilities` + primary `model_endpoints`
+/// - `catalog.routers` (active only)
+/// - `catalog.models` joined to `model_capabilities` + primary `model_endpoints`
 /// - `public.fallback_chains` + `fallback_chain_models` for the platform tenant
 ///
 /// Uses runtime `sqlx::query` (no compile-time `query!` macro). After loading,
@@ -258,7 +258,7 @@ pub async fn load_gateway_config(pool: &sqlx::PgPool) -> anyhow::Result<GatewayC
                 api_key_env_var,
                 is_active,
                 COALESCE(default_headers::text, 'null') AS default_headers
-         FROM config.routers
+         FROM catalog.routers
          WHERE is_active = true",
     )
     .fetch_all(pool)
@@ -285,7 +285,7 @@ pub async fn load_gateway_config(pool: &sqlx::PgPool) -> anyhow::Result<GatewayC
         "SELECT m.full_name,
                 ARRAY(
                     SELECT DISTINCT c.name
-                    FROM config.model_capabilities mc
+                    FROM catalog.model_capabilities mc
                     JOIN catalog.capability_types c ON c.id = mc.capability_id
                     WHERE mc.model_id = m.id AND mc.supported = true
                 )::text[] AS capabilities,
@@ -296,15 +296,15 @@ pub async fn load_gateway_config(pool: &sqlx::PgPool) -> anyhow::Result<GatewayC
                 (pe.cost_per_input_token * 1000.0)::double precision AS cost_input_per_1k,
                 (pe.cost_per_output_token * 1000.0)::double precision AS cost_output_per_1k,
                 pe.cost_per_request::double precision AS cost_per_request
-         FROM config.models m
+         FROM catalog.models m
          JOIN LATERAL (
              SELECT r.name              AS router_name,
                     me.router_model_id,
                     me.cost_per_input_token,
                     me.cost_per_output_token,
                     me.cost_per_request
-             FROM config.model_endpoints me
-             JOIN config.routers r ON r.id = me.router_id
+             FROM catalog.model_endpoints me
+             JOIN catalog.routers r ON r.id = me.router_id
              WHERE me.model_id = m.id AND me.is_active = true
              ORDER BY me.is_default DESC, me.priority ASC
              LIMIT 1
@@ -367,11 +367,11 @@ pub async fn load_gateway_config(pool: &sqlx::PgPool) -> anyhow::Result<GatewayC
          FROM public.fallback_chain_models fcm
          JOIN public.fallback_chains fc
               ON fc.tenant_id = fcm.tenant_id AND fc.id = fcm.fallback_chain_id
-         JOIN config.routers r ON r.id = fcm.router_id
-         JOIN config.models  m ON m.id = fcm.model_id
+         JOIN catalog.routers r ON r.id = fcm.router_id
+         JOIN catalog.models  m ON m.id = fcm.model_id
          LEFT JOIN LATERAL (
              SELECT me2.router_model_id
-             FROM config.model_endpoints me2
+             FROM catalog.model_endpoints me2
              WHERE me2.model_id  = fcm.model_id
                AND me2.router_id = fcm.router_id
                AND me2.is_active = true

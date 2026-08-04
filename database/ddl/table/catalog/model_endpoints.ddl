@@ -1,5 +1,5 @@
--- database/ddl/table/config/model_endpoints.ddl
-set search_path to config, extensions;
+-- database/ddl/table/catalog/model_endpoints.ddl
+set search_path to catalog, extensions;
 
 create table if not exists model_endpoints (
   id                             uuid primary key default uuid_generate_v4()

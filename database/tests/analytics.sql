@@ -4,11 +4,11 @@
 -- MVs cannot carry RLS, so they are service_role-read-through-gateway only),
 -- and the CONCURRENTLY-required unique indexes. Then the batch rollup logic.
 \set ON_ERROR_STOP on
--- Fresh-build robustness: config.routers/capabilities are name-keyed seeds whose ids are
+-- Fresh-build robustness: catalog.routers/capabilities are name-keyed seeds whose ids are
 -- assigned at import (random per build), so fixtures must DERIVE ids, never hardcode them.
 -- rid/cid back the A3+A4 cloud-equivalent-pricing fixtures (client-side vars persist across
 -- the begin/rollback blocks). A hardcoded id passes only on a stale DB — never a fresh build.
-select id as rid from config.routers      order by id limit 1 \gset
+select id as rid from catalog.routers      order by id limit 1 \gset
 select id as cid from catalog.capability_types order by id limit 1 \gset
 \echo '== O2 analytics: A1 schema shape =='
 
@@ -189,14 +189,14 @@ rollback;
 -- ─────────────────────────────────────────────────────────────────────────
 \echo '== O2 analytics: A3 cloud-equivalent savings baseline =='
 begin;
-  -- fixture models (config.models: name+version required; id defaulted → set explicit)
-  insert into config.models (id, name, version) values
+  -- fixture models (catalog.models: name+version required; id defaulted → set explicit)
+  insert into catalog.models (id, name, version) values
     ('a3300000-0000-0000-0000-000000000001','sav-cloud-cheap','1'),
     ('a3300000-0000-0000-0000-000000000002','sav-cloud-dear','1'),
     ('a3300000-0000-0000-0000-000000000003','sav-cloud-unpriced','1'),
     ('a3300000-0000-0000-0000-000000000004','sav-local-only','1');
   -- endpoints price the cloud counterfactual (reuse the derived seed router :rid + capability :cid)
-  insert into config.model_endpoints
+  insert into catalog.model_endpoints
     (id, model_id, router_id, capability_id, endpoint_url, cost_per_input_token, cost_per_output_token, is_active) values
     ('a3310000-0000-0000-0000-000000000001','a3300000-0000-0000-0000-000000000001',:'rid',:'cid','http://t',0.00001,0.00003,true),
     ('a3310000-0000-0000-0000-000000000002','a3300000-0000-0000-0000-000000000002',:'rid',:'cid','http://t',0.00002,0.00006,true);
@@ -274,9 +274,9 @@ select public.analytics_refresh_mviews();
 
 begin;
   -- minimal priced cloud chain so savings reconstructability is exercised
-  insert into config.models (id, name, version) values
+  insert into catalog.models (id, name, version) values
     ('a4400000-0000-0000-0000-000000000001','recon-cloud','1');
-  insert into config.model_endpoints
+  insert into catalog.model_endpoints
     (id, model_id, router_id, capability_id, endpoint_url, cost_per_input_token, cost_per_output_token, is_active)
     values ('a4410000-0000-0000-0000-000000000001','a4400000-0000-0000-0000-000000000001',
             :'rid',:'cid','http://t',0.00001,0.00003,true);

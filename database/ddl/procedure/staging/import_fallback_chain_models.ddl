@@ -27,9 +27,9 @@ begin
    inner join public.fallback_chains fcc
       on fcc.tenant_id = v_platform_id
      and fcc.name      = trim(stg.chain_name)
-   inner join config.routers rtr
+   inner join catalog.routers rtr
       on rtr.name = trim(stg.router_name)
-   inner join config.models mdl
+   inner join catalog.models mdl
       on mdl.full_name = lower(trim(stg.model_full_name))
    where not exists (
      select 1

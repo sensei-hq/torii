@@ -9,7 +9,7 @@ set search_path to public, config, core, extensions;
 --   is_unpriced     — chain HAS a cloud step but none has a priced endpoint → excluded,
 --                     surfaced as a data-quality count, NEVER guessed
 -- Chain resolution mirrors effective_chain_models (tenant override → platform inherit);
--- pricing comes from config.model_endpoints for the step's (model, router, capability).
+-- pricing comes from catalog.model_endpoints for the step's (model, router, capability).
 -- Called at rollup time so the figure is snapshotted (a later price edit → A4 reconcile).
 create or replace function public.analytics_cloud_equiv(
   p_tenant uuid,
@@ -33,7 +33,7 @@ as $$
     select min( coalesce(p_in, 0)  * me.cost_per_input_token
               + coalesce(p_out, 0) * me.cost_per_output_token ) as step_cost
       from cloud_steps cs
-      join config.model_endpoints me
+      join catalog.model_endpoints me
         on  me.model_id  = cs.model_id
         and me.router_id = cs.router_id
         and (me.capability_id = cs.capability_id or cs.capability_id is null)

@@ -243,14 +243,44 @@ begin
   -- all three capability_id FKs must target catalog.capability_types (constraint identity survived).
   if (select count(*) from pg_constraint
         where confrelid='catalog.capability_types'::regclass and contype='f'
-          and conrelid in ('config.model_capabilities'::regclass,
-                           'config.model_endpoints'::regclass,
+          and conrelid in ('catalog.model_capabilities'::regclass,
+                           'catalog.model_endpoints'::regclass,
                            'public.fallback_chains'::regclass)) <> 3 then
     raise exception 'FAIL: not all 3 capability_id FKs resolve to catalog.capability_types'; end if;
   -- authenticated keeps SELECT on the reference catalog (carried by SET SCHEMA + grants.sql parity).
   if not has_table_privilege('authenticated','catalog.capability_types','select') then
     raise exception 'FAIL: authenticated lost SELECT on catalog.capability_types'; end if;
   raise notice 'M-catalog-1 config.capabilities→catalog.capability_types moved+renamed, 3 FKs + grant intact ✓';
+end $$;
+
+\echo '== §D catalog moves: model catalog cluster (routers/providers/models/model_capabilities/model_endpoints) =='
+
+-- M-catalog-2 — the 5 model-catalog tables MOVED config→catalog (db-redesign.md §37). Names unchanged;
+-- global reference data (no tenant_id, RLS off). Intra-cluster + inbound FKs still resolve, and
+-- authenticated keeps SELECT (carried by SET SCHEMA + rework.sql catalog bulk grant).
+do $$
+declare t text;
+begin
+  foreach t in array array['routers','providers','models','model_capabilities','model_endpoints'] loop
+    if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                    where n.nspname='catalog' and c.relname=t and c.relkind='r') then
+      raise exception 'FAIL: catalog.% table missing', t; end if;
+    if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                where n.nspname='config' and c.relname=t) then
+      raise exception 'FAIL: config.% still exists (move incomplete)', t; end if;
+    if not has_table_privilege('authenticated', ('catalog.'||t)::regclass, 'select') then
+      raise exception 'FAIL: authenticated lost SELECT on catalog.%', t; end if;
+  end loop;
+  if not exists (select 1 from pg_constraint where conrelid='catalog.models'::regclass
+                  and confrelid='catalog.providers'::regclass and contype='f') then
+    raise exception 'FAIL: catalog.models→catalog.providers FK lost'; end if;
+  if not exists (select 1 from pg_constraint where conrelid='catalog.model_endpoints'::regclass
+                  and confrelid='catalog.routers'::regclass and contype='f') then
+    raise exception 'FAIL: catalog.model_endpoints→catalog.routers FK lost'; end if;
+  if not exists (select 1 from pg_constraint where conrelid='public.fallback_chain_models'::regclass
+                  and confrelid='catalog.models'::regclass and contype='f') then
+    raise exception 'FAIL: public.fallback_chain_models→catalog.models FK lost'; end if;
+  raise notice 'M-catalog-2 model catalog (routers/providers/models/model_capabilities/model_endpoints) moved config→catalog, FKs + grants intact ✓';
 end $$;
 
 \echo '== §D moves tests done =='

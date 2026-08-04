@@ -17,7 +17,7 @@ begin
        , coalesce(stg.modified_at, now())
        , coalesce(stg.modified_by, current_user)
     from staging.router_credentials stg
-   inner join config.routers rtr
+   inner join catalog.routers rtr
       on rtr.name = trim(stg.router_name)
    inner join core.tenants t
       on t.id = stg.tenant_id        -- skip rows when tenant not yet imported

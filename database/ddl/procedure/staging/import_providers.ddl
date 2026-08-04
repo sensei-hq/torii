@@ -5,7 +5,7 @@ language plpgsql
 as
 $$
 begin
-  insert into config.providers(
+  insert into catalog.providers(
      name, description, website_url, founded_year, headquarters
    , specialization, is_active, is_open_source, sequence
    , modified_at, modified_by)
@@ -18,7 +18,7 @@ begin
        , coalesce(stg.modified_by, current_user)
     from staging.providers stg
    where not exists (select 1
-                       from config.providers p
+                       from catalog.providers p
                       where p.name = trim(stg.name)
                         and p.modified_at > stg.modified_at)
       on conflict(name)

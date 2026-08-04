@@ -104,4 +104,24 @@ begin
   raise notice 'M-device-2 devices_for_tenant shield view + fleet contract ✓';
 end $$;
 
+-- M-device-3 — the 4 MCP registry tables relocated public→device; RLS + tool_allowed intact.
+do $$
+declare t text;
+begin
+  foreach t in array array['mcp_servers','mcp_server_tools','tenant_mcp_servers','tool_allow_lists'] loop
+    if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                    where n.nspname='device' and c.relname=t and c.relkind='r') then
+      raise exception 'FAIL: device.% table missing', t; end if;
+    if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                where n.nspname='public' and c.relname=t) then
+      raise exception 'FAIL: public.% still exists (move incomplete)', t; end if;
+    if not exists (select 1 from pg_policies where schemaname='device' and tablename=t) then
+      raise exception 'FAIL: device.% lost its RLS policy', t; end if;
+  end loop;
+  -- the X1 default-deny fn now resolves against device.tool_allow_lists.
+  if pg_get_functiondef('public.tool_allowed'::regproc) !~ 'device\.tool_allow_lists' then
+    raise exception 'FAIL: tool_allowed() not repointed to device.tool_allow_lists'; end if;
+  raise notice 'M-device-3 4 MCP tables relocated public→device, RLS + tool_allowed intact ✓';
+end $$;
+
 \echo '== §D moves tests done =='

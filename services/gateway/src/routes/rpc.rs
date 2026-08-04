@@ -1661,7 +1661,7 @@ pub async fn mcp_set_enabled(
         Err(resp) => return resp,
     };
     let visible: bool = sqlx::query_scalar(
-        "select exists(select 1 from public.mcp_servers \
+        "select exists(select 1 from device.mcp_servers \
            where id = $1 and (scope = 'platform' or tenant_id = $2))",
     )
     .bind(body.mcp_server_id)
@@ -1673,7 +1673,7 @@ pub async fn mcp_set_enabled(
         return (StatusCode::NOT_FOUND, "mcp server not found").into_response();
     }
     let write = sqlx::query(
-        "insert into public.tenant_mcp_servers (tenant_id, mcp_server_id, enabled) \
+        "insert into device.tenant_mcp_servers (tenant_id, mcp_server_id, enabled) \
          values ($1,$2,$3) \
          on conflict (tenant_id, mcp_server_id) do update set enabled = excluded.enabled",
     )
@@ -1735,8 +1735,8 @@ pub async fn mcp_set_tool_grant(
         return (StatusCode::NOT_FOUND, "role not found in tenant").into_response();
     }
     let tool_ok: bool = sqlx::query_scalar(
-        "select exists(select 1 from public.mcp_server_tools mt \
-           join public.mcp_servers s on s.id = mt.mcp_server_id \
+        "select exists(select 1 from device.mcp_server_tools mt \
+           join device.mcp_servers s on s.id = mt.mcp_server_id \
           where mt.mcp_server_id = $1 and mt.tool_name = $2 \
             and (s.scope = 'platform' or s.tenant_id = $3))",
     )
@@ -1752,15 +1752,15 @@ pub async fn mcp_set_tool_grant(
     // No natural-key unique constraint on tool_allow_lists → conditional insert / delete.
     let write = if body.allowed {
         sqlx::query(
-            "insert into public.tool_allow_lists (tenant_id, role_id, space_id, mcp_server_id, tool_name) \
+            "insert into device.tool_allow_lists (tenant_id, role_id, space_id, mcp_server_id, tool_name) \
              select $1,$2,null,$3,$4 where not exists ( \
-               select 1 from public.tool_allow_lists \
+               select 1 from device.tool_allow_lists \
                 where tenant_id=$1 and role_id=$2 and space_id is null \
                   and mcp_server_id=$3 and tool_name=$4)",
         )
     } else {
         sqlx::query(
-            "delete from public.tool_allow_lists \
+            "delete from device.tool_allow_lists \
               where tenant_id=$1 and role_id=$2 and space_id is null \
                 and mcp_server_id=$3 and tool_name=$4",
         )

@@ -1,5 +1,5 @@
--- database/ddl/table/public/tool_allow_lists.ddl
-set search_path to public, core, extensions;
+-- database/ddl/table/device/tool_allow_lists.ddl
+set search_path to device, core, extensions;   -- §D Phase 1 MOVE: public→device
 
 -- RW3: per-(role × space) tool allow-list grant (default-deny — absent ⇒ blocked).
 -- The gateway resolves this at tool-call time (X1). space_id null ⇒ all spaces for

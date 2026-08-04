@@ -448,8 +448,8 @@ pub async fn get_tools(
             "select coalesce(json_agg(t order by t.scope, t.name), '[]'::json) from ( \
                select s.id, s.name, s.label, s.transport, s.scope, \
                       coalesce(tms.enabled, s.enabled) as enabled \
-                 from public.mcp_servers s \
-                 left join public.tenant_mcp_servers tms \
+                 from device.mcp_servers s \
+                 left join device.tenant_mcp_servers tms \
                    on tms.mcp_server_id = s.id and tms.tenant_id = $1 \
                 where s.scope = 'platform' or s.tenant_id = $1) t",
         )
@@ -459,8 +459,8 @@ pub async fn get_tools(
         let tools: Value = sqlx::query_scalar(
             "select coalesce(json_agg(t order by t.tool_name), '[]'::json) from ( \
                select mt.id, mt.mcp_server_id, mt.tool_name \
-                 from public.mcp_server_tools mt \
-                 join public.mcp_servers s on s.id = mt.mcp_server_id \
+                 from device.mcp_server_tools mt \
+                 join device.mcp_servers s on s.id = mt.mcp_server_id \
                 where mt.is_active and (s.scope = 'platform' or s.tenant_id = $1)) t",
         )
         .bind(tenant)
@@ -477,7 +477,7 @@ pub async fn get_tools(
         let grants: Value = sqlx::query_scalar(
             "select coalesce(json_agg(t), '[]'::json) from ( \
                select role_id, mcp_server_id, tool_name \
-                 from public.tool_allow_lists where tenant_id = $1 and space_id is null) t",
+                 from device.tool_allow_lists where tenant_id = $1 and space_id is null) t",
         )
         .bind(tenant)
         .fetch_one(&state.pool)

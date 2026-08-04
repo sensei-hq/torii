@@ -96,16 +96,16 @@ mod db {
     const QUERY: &str = "\
         select distinct s.id as server_id, s.name as server_name, s.transport::text as transport, \
                t.tool_name as tool_name, t.json_schema as json_schema \
-          from public.tool_allow_lists tal \
-          join public.mcp_servers s on s.id = tal.mcp_server_id \
-          join public.mcp_server_tools t \
+          from device.tool_allow_lists tal \
+          join device.mcp_servers s on s.id = tal.mcp_server_id \
+          join device.mcp_server_tools t \
                 on t.mcp_server_id = tal.mcp_server_id and t.is_active \
                and (tal.tool_name is null or tal.tool_name = t.tool_name) \
          where tal.tenant_id = $1 \
            and tal.role_id = any($2) \
            and (tal.space_id is null or tal.space_id = $3) \
            and (s.tenant_id is null or s.tenant_id = $1) \
-           and coalesce((select tms.enabled from public.tenant_mcp_servers tms \
+           and coalesce((select tms.enabled from device.tenant_mcp_servers tms \
                           where tms.tenant_id = $1 and tms.mcp_server_id = s.id), s.enabled) = true";
 
     /// Resolves the default-deny allow-list against Postgres (service_role / RLS-bypassing;
@@ -248,7 +248,7 @@ mod db_tests {
         tool: Option<&str>,
     ) {
         sqlx::query(
-            "insert into public.tool_allow_lists \
+            "insert into device.tool_allow_lists \
                (tenant_id, role_id, space_id, mcp_server_id, tool_name) \
              values ($1, $2, $3, $4, $5)",
         )
@@ -323,7 +323,7 @@ mod db_tests {
             .unwrap();
         }
         let web: Uuid = sqlx::query_scalar(
-            "insert into public.mcp_servers (tenant_id, name, transport) \
+            "insert into device.mcp_servers (tenant_id, name, transport) \
              values ($1, 'web', 'http') returning id",
         )
         .bind(a)
@@ -331,7 +331,7 @@ mod db_tests {
         .await
         .unwrap();
         let fs: Uuid = sqlx::query_scalar(
-            "insert into public.mcp_servers (tenant_id, name, transport) \
+            "insert into device.mcp_servers (tenant_id, name, transport) \
              values ($1, 'fs', 'stdio') returning id",
         )
         .bind(a)
@@ -340,7 +340,7 @@ mod db_tests {
         .unwrap();
         for (server, tool) in [(web, "read"), (web, "write"), (fs, "read_file")] {
             sqlx::query(
-                "insert into public.mcp_server_tools (mcp_server_id, tool_name) values ($1, $2)",
+                "insert into device.mcp_server_tools (mcp_server_id, tool_name) values ($1, $2)",
             )
             .bind(server)
             .bind(tool)
@@ -359,7 +359,7 @@ mod db_tests {
         let clear = |p: &sqlx::PgPool| {
             let p = p.clone();
             async move {
-                sqlx::query("delete from public.tool_allow_lists where tenant_id = $1")
+                sqlx::query("delete from device.tool_allow_lists where tenant_id = $1")
                     .bind(a)
                     .execute(&p)
                     .await
@@ -391,7 +391,7 @@ mod db_tests {
 
         // 5. a tenant-disabled server drops its tools.
         sqlx::query(
-            "insert into public.tenant_mcp_servers (tenant_id, mcp_server_id, enabled) \
+            "insert into device.tenant_mcp_servers (tenant_id, mcp_server_id, enabled) \
              values ($1, $2, false)",
         )
         .bind(a)
@@ -400,7 +400,7 @@ mod db_tests {
         .await
         .unwrap();
         assert!(r.resolve(&cloud, Some(space)).await.unwrap().is_empty());
-        sqlx::query("delete from public.tenant_mcp_servers where tenant_id = $1")
+        sqlx::query("delete from device.tenant_mcp_servers where tenant_id = $1")
             .bind(a)
             .execute(&pool)
             .await
@@ -443,7 +443,7 @@ mod db_tests {
 
         // cleanup — delete servers (cascades tools + grants) then tenants (cascades the rest).
         for srv in [web, fs] {
-            sqlx::query("delete from public.mcp_servers where id = $1")
+            sqlx::query("delete from device.mcp_servers where id = $1")
                 .bind(srv)
                 .execute(&pool)
                 .await

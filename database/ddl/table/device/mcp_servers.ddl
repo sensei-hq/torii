@@ -1,5 +1,5 @@
--- database/ddl/table/public/mcp_servers.ddl
-set search_path to public, core, device, extensions;
+-- database/ddl/table/device/mcp_servers.ddl
+set search_path to device, core, extensions;   -- §D Phase 1 MOVE: public→device
 
 -- RW3 (decision #1, MCP in v1): registered MCP servers. scope=platform (tenant_id
 -- null, shared) or tenant (tenant-owned). stdio = device-registrable only (X1 §5).

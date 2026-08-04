@@ -1,5 +1,5 @@
--- database/ddl/table/public/mcp_server_tools.ddl
-set search_path to public, core, extensions;
+-- database/ddl/table/device/mcp_server_tools.ddl
+set search_path to device, core, extensions;   -- §D Phase 1 MOVE: public→device
 
 -- RW3/RW15: discovered-tool cache per MCP server (from tools/list). The allow-list
 -- references these by (server, tool_name).

@@ -22,7 +22,7 @@ pub async fn discover_and_cache(
 
     for t in &tools {
         sqlx::query(
-            "insert into public.mcp_server_tools \
+            "insert into device.mcp_server_tools \
                (mcp_server_id, tool_name, json_schema, is_active, discovered_at) \
              values ($1, $2, $3, true, now()) \
              on conflict (mcp_server_id, tool_name) do update \
@@ -39,7 +39,7 @@ pub async fn discover_and_cache(
     // existing grant references it, and the audit trail matters). An empty discovery deactivates
     // every cached tool for the server.
     sqlx::query(
-        "update public.mcp_server_tools set is_active = false \
+        "update device.mcp_server_tools set is_active = false \
          where mcp_server_id = $1 and tool_name <> all($2)",
     )
     .bind(server_id)
@@ -100,7 +100,7 @@ mod tests {
             .await
             .unwrap();
         let server: Uuid = sqlx::query_scalar(
-            "insert into public.mcp_servers (tenant_id, name, transport) values ($1,'web','http') returning id",
+            "insert into device.mcp_servers (tenant_id, name, transport) values ($1,'web','http') returning id",
         )
         .bind(tenant)
         .fetch_one(&pool)
@@ -113,7 +113,7 @@ mod tests {
             .unwrap();
         assert_eq!(n, 2);
         let active: i64 = sqlx::query(
-            "select count(*) from public.mcp_server_tools where mcp_server_id=$1 and is_active",
+            "select count(*) from device.mcp_server_tools where mcp_server_id=$1 and is_active",
         )
         .bind(server)
         .fetch_one(&pool)
@@ -127,7 +127,7 @@ mod tests {
             .await
             .unwrap();
         let write_active: bool = sqlx::query_scalar(
-            "select is_active from public.mcp_server_tools where mcp_server_id=$1 and tool_name='write'",
+            "select is_active from device.mcp_server_tools where mcp_server_id=$1 and tool_name='write'",
         )
         .bind(server)
         .fetch_one(&pool)
@@ -135,7 +135,7 @@ mod tests {
         .unwrap();
         assert!(!write_active, "removed tool is deactivated, not deleted");
         let read_active: bool = sqlx::query_scalar(
-            "select is_active from public.mcp_server_tools where mcp_server_id=$1 and tool_name='read'",
+            "select is_active from device.mcp_server_tools where mcp_server_id=$1 and tool_name='read'",
         )
         .bind(server)
         .fetch_one(&pool)
@@ -144,7 +144,7 @@ mod tests {
         assert!(read_active);
 
         // cleanup — delete the server (cascades tools) + the tenant.
-        sqlx::query("delete from public.mcp_servers where id=$1")
+        sqlx::query("delete from device.mcp_servers where id=$1")
             .bind(server)
             .execute(&pool)
             .await

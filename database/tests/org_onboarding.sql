@@ -5,7 +5,7 @@ do $$
 declare
   owner_id uuid := (select id from core.roles where tenant_id is null and key = 'owner');
   admin_id uuid := (select id from core.roles where tenant_id is null and key = 'admin');
-  n_caps int := (select count(*) from core.capabilities);
+  n_caps int := (select count(*) from core.permissions);
   n_owner int := (select count(*) from core.role_permissions where role_id = owner_id and tenant_id is null);
   n_admin int := (select count(*) from core.role_permissions where role_id = admin_id and tenant_id is null);
 begin

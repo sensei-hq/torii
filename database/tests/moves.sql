@@ -198,4 +198,33 @@ begin
   raise notice 'M-core-3 profile_tenants→core.memberships renamed, enum+RLS intact, no orphan policy ✓';
 end $$;
 
+\echo '== §D core rename: core.permissions =='
+
+-- M-core-4 — capabilities renamed → core.permissions (name-only, stays in core); role_permissions
+-- FK still resolves + no orphan capabilities_read policy lingers (only permissions_read). Column
+-- names (role_permissions.capability, the has_capability fn) are intentionally UNCHANGED per design.
+do $$
+begin
+  if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                  where n.nspname='core' and c.relname='permissions' and c.relkind='r') then
+    raise exception 'FAIL: core.permissions table missing'; end if;
+  if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+              where n.nspname='core' and c.relname='capabilities') then
+    raise exception 'FAIL: core.capabilities still exists (rename incomplete)'; end if;
+  if not (select relrowsecurity from pg_class where oid='core.permissions'::regclass) then
+    raise exception 'FAIL: RLS disabled on core.permissions after rename'; end if;
+  -- role_permissions.capability FK must still point at core.permissions (constraint identity survived).
+  if not exists (select 1 from pg_constraint where conrelid='core.role_permissions'::regclass
+                  and confrelid='core.permissions'::regclass and contype='f') then
+    raise exception 'FAIL: role_permissions→permissions FK lost/mis-targeted'; end if;
+  -- policy: permissions_read present, the carried-over capabilities_read orphan gone.
+  if exists (select 1 from pg_policies where schemaname='core' and tablename='permissions'
+              and policyname='capabilities_read') then
+    raise exception 'FAIL: orphan capabilities_read policy lingers on core.permissions'; end if;
+  if not exists (select 1 from pg_policies where schemaname='core' and tablename='permissions'
+                  and policyname='permissions_read') then
+    raise exception 'FAIL: permissions_read policy missing'; end if;
+  raise notice 'M-core-4 capabilities→core.permissions renamed, role_permissions FK + RLS intact, no orphan policy ✓';
+end $$;
+
 \echo '== §D moves tests done =='

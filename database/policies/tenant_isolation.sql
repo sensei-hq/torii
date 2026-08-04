@@ -72,8 +72,8 @@ drop policy if exists profiles_self on core.profiles;
 create policy profiles_self on core.profiles for select to authenticated
   using (id = auth.uid());
 
--- (4) core.capabilities — global reference catalog, readable by all authenticated.
-alter table core.capabilities enable row level security;
-drop policy if exists capabilities_read on core.capabilities;
-create policy capabilities_read on core.capabilities for select to authenticated
+-- (4) core.permissions — global reference catalog, readable by all authenticated.
+alter table core.permissions enable row level security;
+drop policy if exists permissions_read on core.permissions;
+create policy permissions_read on core.permissions for select to authenticated
   using (true);

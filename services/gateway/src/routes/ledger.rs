@@ -336,7 +336,7 @@ pub async fn get_org(
     .await;
     let capabilities: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.domain, t.key), '[]'::json) from ( \
-           select key, domain, description from core.capabilities) t",
+           select key, domain, description from core.permissions) t",
     )
     .fetch_one(&state.pool)
     .await;

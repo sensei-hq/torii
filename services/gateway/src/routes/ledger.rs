@@ -530,10 +530,8 @@ pub async fn get_devices(
         "select coalesce(json_agg(t order by t.last_seen_at desc nulls last), '[]'::json) from ( \
            select d.id, d.name, d.platform, d.app_version, d.config_version, d.status, \
                   d.enrolled_at, d.last_seen_at, d.sync_policy, d.buffer_health, \
-                  p.display_name as owner, cv.version as tenant_config_version \
-             from public.devices d \
-             left join core.profiles p on p.id = d.profile_id \
-             left join config.config_versions cv on cv.tenant_id = d.tenant_id \
+                  d.owner, d.tenant_config_version \
+             from device.devices_for_tenant d \
             where d.tenant_id = $1 and ($2::uuid is null or d.profile_id = $2)) t",
     )
     .bind(tenant)

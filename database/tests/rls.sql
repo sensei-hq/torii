@@ -15,7 +15,7 @@ begin
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
     where c.relkind = 'r'
-      and n.nspname in ('core', 'public', 'audit')
+      and n.nspname in ('core', 'public', 'audit', 'device')
       and exists (
         select 1 from pg_attribute a
         where a.attrelid = c.oid and a.attname = 'tenant_id' and not a.attisdropped

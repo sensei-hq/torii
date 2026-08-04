@@ -1811,7 +1811,7 @@ pub async fn devices_revoke(
         Err(resp) => return resp,
     };
     let exists: bool = sqlx::query_scalar(
-        "select exists(select 1 from public.devices where id = $1 and tenant_id = $2)",
+        "select exists(select 1 from device.devices where id = $1 and tenant_id = $2)",
     )
     .bind(body.id)
     .bind(tenant)
@@ -1822,7 +1822,7 @@ pub async fn devices_revoke(
         return (StatusCode::NOT_FOUND, "device not found in tenant").into_response();
     }
     let write = sqlx::query(
-        "update public.devices set status = 'revoked' where id = $1 and tenant_id = $2",
+        "update device.devices set status = 'revoked' where id = $1 and tenant_id = $2",
     )
     .bind(body.id)
     .bind(tenant)
@@ -1873,7 +1873,7 @@ pub async fn devices_set_sync_policy(
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": reason }))).into_response();
     }
     let write = sqlx::query(
-        "update public.devices set sync_policy = $3 where id = $1 and tenant_id = $2",
+        "update device.devices set sync_policy = $3 where id = $1 and tenant_id = $2",
     )
     .bind(body.id)
     .bind(tenant)

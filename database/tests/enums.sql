@@ -323,4 +323,73 @@ begin
   raise notice 'G3 request_status write contract (denied valid, rejected invalid) ✓';
 end $$;
 
+-- ═════════════════════════════════════════════════════════════════════════
+-- catalog enums: router_type, auth_type (config.routers) · override_scope
+-- (model_overrides.scope_type) · breaker_state (provider_health.state).
+-- ═════════════════════════════════════════════════════════════════════════
+\echo '== enum conversion: catalog enums =='
+
+do $$
+declare
+  specs text[][] := array[
+    ['router_type','direct,aggregator,local'],
+    ['auth_type','api_key,aws_signature,oauth2,bearer_token,custom,none'],
+    ['override_scope','tenant,space,role'],
+    ['breaker_state','closed,open,half-open']];
+  i int; nm text; want text; got text;
+begin
+  for i in 1 .. array_length(specs,1) loop
+    nm := specs[i][1]; want := specs[i][2];
+    if not exists (select 1 from pg_type t join pg_namespace n on n.oid=t.typnamespace
+                    where n.nspname='catalog' and t.typname=nm and t.typtype='e') then
+      raise exception 'FAIL: enum catalog.% does not exist', nm; end if;
+    select string_agg(e.enumlabel, ',' order by e.enumsortorder) into got
+      from pg_enum e join pg_type t on t.oid=e.enumtypid join pg_namespace n on n.oid=t.typnamespace
+     where n.nspname='catalog' and t.typname=nm;
+    if got is distinct from want then raise exception 'FAIL: catalog.% = %, expected %', nm, got, want; end if;
+  end loop;
+  raise notice 'K1 four catalog enums exist with expected values ✓';
+end $$;
+
+do $$
+declare
+  cols text[][] := array[
+    ['config','routers','router_type','router_type'],
+    ['config','routers','authentication_type','auth_type'],
+    ['public','model_overrides','scope_type','override_scope'],
+    ['public','provider_health','state','breaker_state']];
+  i int; s text; t text; c text; want text; udt text;
+begin
+  for i in 1 .. array_length(cols,1) loop
+    s := cols[i][1]; t := cols[i][2]; c := cols[i][3]; want := cols[i][4];
+    select udt_name into udt from information_schema.columns
+     where table_schema=s and table_name=t and column_name=c;
+    if udt is distinct from want then
+      raise exception 'FAIL: %.%.% udt=% (expected %)', s, t, c, coalesce(udt,'<none>'), want; end if;
+  end loop;
+  if exists (select 1 from pg_constraint where contype='c'
+              and conrelid in ('config.routers'::regclass,'public.model_overrides'::regclass,'public.provider_health'::regclass)
+              and (pg_get_constraintdef(oid) ilike '%router_type%in%'
+                or pg_get_constraintdef(oid) ilike '%authentication_type%in%'
+                or pg_get_constraintdef(oid) ilike '%scope_type%in%'
+                or pg_get_constraintdef(oid) ilike '%state%in%')) then
+    raise exception 'FAIL: a leftover catalog CHECK still exists'; end if;
+  raise notice 'K2 four catalog columns are the enums, no leftover CHECK ✓';
+end $$;
+
+do $$
+declare bad boolean := false;
+begin
+  create temp table _cat_probe (rt catalog.router_type) on commit drop;
+  begin execute 'insert into _cat_probe(rt) values ($1)' using 'direct'::text; bad := true;
+  exception when others then null; end;
+  if bad then raise exception 'FAIL: un-cast text accepted into catalog.router_type'; end if;
+  execute 'insert into _cat_probe(rt) values ($1::catalog.router_type)' using 'aggregator'::text;
+  bad := false;
+  begin execute 'insert into _cat_probe(rt) values ($1::catalog.router_type)' using 'proxy'::text; bad := true;
+  exception when others then null; end;
+  if bad then raise exception 'FAIL: invalid router_type "proxy" accepted'; end if;
+  raise notice 'K3 catalog write contract (cast succeeds, bad label rejected) ✓';
+end $$;
+
 \echo '== enum conversion tests done =='

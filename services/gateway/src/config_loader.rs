@@ -27,7 +27,7 @@ use sqlx::Row;
 
 // ─── Capability mapping ───────────────────────────────────────────────────────
 
-/// Map a DB `config.capabilities.name` value to a gateway [`Capability`].
+/// Map a DB `catalog.capability_types.name` value to a gateway [`Capability`].
 ///
 /// DB values: `chat`, `embedding`, `image`, `vision`, `audio`, `agent`, `video`.
 /// Returns `None` for unrecognised values so callers can skip them gracefully.
@@ -86,7 +86,7 @@ pub(crate) struct RouterRow {
 #[derive(Debug, Clone)]
 pub(crate) struct ModelRow {
     pub full_name: String,
-    /// DB `config.capabilities.name` values aggregated from `model_capabilities`.
+    /// DB `catalog.capability_types.name` values aggregated from `model_capabilities`.
     pub capabilities: Vec<String>,
     pub context_window: Option<i32>,
     pub max_output_tokens: Option<i32>,
@@ -105,7 +105,7 @@ pub(crate) struct ModelRow {
 #[derive(Debug, Clone)]
 pub(crate) struct ChainRow {
     pub name: String,
-    /// DB `config.capabilities.name` value resolved from the FK.
+    /// DB `catalog.capability_types.name` value resolved from the FK.
     pub capability_name: String,
 }
 
@@ -286,7 +286,7 @@ pub async fn load_gateway_config(pool: &sqlx::PgPool) -> anyhow::Result<GatewayC
                 ARRAY(
                     SELECT DISTINCT c.name
                     FROM config.model_capabilities mc
-                    JOIN config.capabilities c ON c.id = mc.capability_id
+                    JOIN catalog.capability_types c ON c.id = mc.capability_id
                     WHERE mc.model_id = m.id AND mc.supported = true
                 )::text[] AS capabilities,
                 m.context_window,
@@ -336,7 +336,7 @@ pub async fn load_gateway_config(pool: &sqlx::PgPool) -> anyhow::Result<GatewayC
     let chain_pg_rows = sqlx::query(
         "SELECT fc.name, cap.name AS capability_name
          FROM public.fallback_chains fc
-         JOIN config.capabilities cap ON cap.id = fc.capability_id
+         JOIN catalog.capability_types cap ON cap.id = fc.capability_id
          WHERE fc.tenant_id = (
                    SELECT id FROM core.tenants WHERE is_platform = true LIMIT 1
                )

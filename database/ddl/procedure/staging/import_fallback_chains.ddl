@@ -22,7 +22,7 @@ begin
        , coalesce(stg.modified_at, now())
        , coalesce(stg.modified_by, current_user)
     from staging.fallback_chains stg
-   inner join config.capabilities cap
+   inner join catalog.capability_types cap
       on cap.name = trim(stg.capability_name)
    where not exists (
      select 1

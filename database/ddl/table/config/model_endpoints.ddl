@@ -5,7 +5,7 @@ create table if not exists model_endpoints (
   id                             uuid primary key default uuid_generate_v4()
 , model_id                       uuid not null references models(id)
 , router_id                      uuid not null references routers(id)
-, capability_id                  uuid references capabilities(id)
+, capability_id                  uuid references catalog.capability_types(id)
 , region                         varchar(100)
 , endpoint_url                   text not null
 , router_model_id                varchar(200)

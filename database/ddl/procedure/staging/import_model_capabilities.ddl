@@ -22,7 +22,7 @@ begin
     from staging.model_capabilities stg
    inner join config.models mdl
       on mdl.full_name = lower(trim(stg.model_full_name))
-   inner join config.capabilities cap
+   inner join catalog.capability_types cap
       on cap.name = trim(stg.capability_name)
    where not exists (select 1
                        from config.model_capabilities mc

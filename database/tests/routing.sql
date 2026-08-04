@@ -5,8 +5,8 @@ begin;
   -- two chains + bindings: a tenant default and a space-specific one for space S.
   insert into public.fallback_chains(tenant_id, id, name, capability_id, max_fallback_attempts,
       circuit_breaker_threshold, circuit_breaker_window_minutes, is_active, priority, modified_by) values
-    ('00000000-0000-0000-0000-000000000000','c8a10000-0000-0000-0000-0000000000d1','default-chat',(select id from config.capabilities limit 1),3,5,10,true,1,'t'),
-    ('00000000-0000-0000-0000-000000000000','c8a10000-0000-0000-0000-0000000000d2','space-chat',(select id from config.capabilities limit 1),3,5,10,true,1,'t')
+    ('00000000-0000-0000-0000-000000000000','c8a10000-0000-0000-0000-0000000000d1','default-chat',(select id from catalog.capability_types limit 1),3,5,10,true,1,'t'),
+    ('00000000-0000-0000-0000-000000000000','c8a10000-0000-0000-0000-0000000000d2','space-chat',(select id from catalog.capability_types limit 1),3,5,10,true,1,'t')
     on conflict do nothing;
   insert into public.chain_bindings(tenant_id, capability, chain_id, space_id, role_id) values
     ('00000000-0000-0000-0000-000000000000','text_chat','c8a10000-0000-0000-0000-0000000000d1',null,null),

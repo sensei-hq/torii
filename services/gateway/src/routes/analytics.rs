@@ -718,7 +718,7 @@ mod gate {
         let team = Uuid::new_v4();
         let model = Uuid::new_v4();
         let chain = Uuid::new_v4();
-        let cap_id: Uuid = sqlx::query_scalar("select id from config.capabilities limit 1")
+        let cap_id: Uuid = sqlx::query_scalar("select id from catalog.capability_types limit 1")
             .fetch_one(&pool).await.expect("a seeded capability");
         let router_id: Uuid = sqlx::query_scalar("select id from config.routers limit 1")
             .fetch_one(&pool).await.expect("a seeded router");

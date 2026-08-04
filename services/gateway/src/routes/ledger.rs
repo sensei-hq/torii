@@ -414,7 +414,7 @@ pub async fn get_available_models(
               and coalesce(tms.enabled, true) = true \
               and exists(select 1 from config.model_endpoints e where e.model_id = m.id) \
               and exists(select 1 from config.model_capabilities mc \
-                           join config.capabilities c on c.id = mc.capability_id \
+                           join catalog.capability_types c on c.id = mc.capability_id \
                           where mc.model_id = m.id and c.name = 'chat' \
                             and coalesce(mc.supported, true) = true)) t",
     )

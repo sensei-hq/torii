@@ -309,4 +309,41 @@ begin;
   end $$;
 rollback;
 
+-- 14. has_capability() resolves SHARED-DEFAULT grants (RW2 live-bug regression). Default-role
+-- permissions are shared rows (tenant_id NULL) exposed per-tenant via effective_role_permissions;
+-- has_capability MUST read that view, else a direct `role_permissions.tenant_id = tenant` join
+-- never matches the NULL defaults and every capability resolves false (owner included).
+begin;
+  do $$
+  declare
+    t         uuid := '00000000-0000-0000-0000-000000000000';
+    owner_p   uuid := 'e0e0e0e0-0000-0000-0000-0000000000a1';
+    member_p  uuid := 'e0e0e0e0-0000-0000-0000-0000000000a2';
+    owner_r   uuid := (select role_id from core.effective_roles where tenant_id = t and key = 'owner');
+    member_r  uuid := (select role_id from core.effective_roles where tenant_id = t and key = 'member');
+  begin
+    insert into core.profiles(id) values (owner_p),(member_p) on conflict do nothing;
+    insert into core.profile_tenants(profile_id, tenant_id, status, active, assigned_by)
+      values (owner_p,t,'active',true,'authz'),(member_p,t,'active',true,'authz') on conflict do nothing;
+    insert into core.profile_roles(tenant_id, profile_id, role_id, assigned_by)
+      values (t,owner_p,owner_r,'authz'),(t,member_p,member_r,'authz') on conflict do nothing;
+
+    set local role authenticated;
+    -- owner: holds device.manage via the shared-default owner role.
+    set local request.jwt.claims = '{"sub":"e0e0e0e0-0000-0000-0000-0000000000a1","tenant_id":"00000000-0000-0000-0000-000000000000"}';
+    if not core.has_capability('device.manage') then
+      raise exception 'FAIL RW2: owner does NOT resolve device.manage — has_capability reads role_permissions not effective_role_permissions (shared-default bug reopened)'; end if;
+    if core.has_capability('totally.bogus') then
+      raise exception 'FAIL RW2: has_capability returned true for a nonexistent capability'; end if;
+    reset role;
+    -- member: does NOT hold device.manage (own-vs-manage must discriminate).
+    set local role authenticated;
+    set local request.jwt.claims = '{"sub":"e0e0e0e0-0000-0000-0000-0000000000a2","tenant_id":"00000000-0000-0000-0000-000000000000"}';
+    if core.has_capability('device.manage') then
+      raise exception 'FAIL RW2: member wrongly resolves device.manage (own-vs-manage broken)'; end if;
+    reset role;
+    raise notice 'RW2 has_capability resolves shared-default grants (owner=device.manage ✓, member=✗, bogus=✗)';
+  end $$;
+rollback;
+
 \echo 'ALL RW12 ADVERSARIAL AUTHZ TESTS PASSED'

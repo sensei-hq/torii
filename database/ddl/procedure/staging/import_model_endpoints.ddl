@@ -53,7 +53,7 @@ begin
    inner join config.models m
       on m.provider_id = p.id
      and m.full_name = lower(trim(stg.model_full_name))
-   inner join config.capabilities c
+   inner join catalog.capability_types c
       on c.name = trim(stg.capability_name)
    where not exists (select 1
                        from config.model_endpoints me

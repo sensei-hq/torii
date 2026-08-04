@@ -7,7 +7,7 @@ create table if not exists fallback_chains (
 , id                           uuid        not null default gen_random_uuid()
 , name                         varchar(100) not null
 , capability_id                uuid        not null
-    references config.capabilities(id)
+    references catalog.capability_types(id)
 , max_fallback_attempts        integer     not null default 3
 , circuit_breaker_threshold    integer     not null default 5
 , circuit_breaker_window_minutes integer   not null default 15

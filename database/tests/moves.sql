@@ -227,4 +227,30 @@ begin
   raise notice 'M-core-4 capabilities→core.permissions renamed, role_permissions FK + RLS intact, no orphan policy ✓';
 end $$;
 
+\echo '== §D catalog rename+move: catalog.capability_types =='
+
+-- M-catalog-1 — config.capabilities MOVED+RENAMED → catalog.capability_types (model-capability
+-- lookup). The model_capabilities/model_endpoints/fallback_chains capability_id FKs still resolve
+-- to it, and authenticated keeps SELECT (global reference catalog). Column names kept.
+do $$
+begin
+  if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                  where n.nspname='catalog' and c.relname='capability_types' and c.relkind='r') then
+    raise exception 'FAIL: catalog.capability_types table missing'; end if;
+  if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+              where n.nspname='config' and c.relname='capabilities') then
+    raise exception 'FAIL: config.capabilities still exists (move incomplete)'; end if;
+  -- all three capability_id FKs must target catalog.capability_types (constraint identity survived).
+  if (select count(*) from pg_constraint
+        where confrelid='catalog.capability_types'::regclass and contype='f'
+          and conrelid in ('config.model_capabilities'::regclass,
+                           'config.model_endpoints'::regclass,
+                           'public.fallback_chains'::regclass)) <> 3 then
+    raise exception 'FAIL: not all 3 capability_id FKs resolve to catalog.capability_types'; end if;
+  -- authenticated keeps SELECT on the reference catalog (carried by SET SCHEMA + grants.sql parity).
+  if not has_table_privilege('authenticated','catalog.capability_types','select') then
+    raise exception 'FAIL: authenticated lost SELECT on catalog.capability_types'; end if;
+  raise notice 'M-catalog-1 config.capabilities→catalog.capability_types moved+renamed, 3 FKs + grant intact ✓';
+end $$;
+
 \echo '== §D moves tests done =='

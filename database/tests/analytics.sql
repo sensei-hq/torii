@@ -9,7 +9,7 @@
 -- rid/cid back the A3+A4 cloud-equivalent-pricing fixtures (client-side vars persist across
 -- the begin/rollback blocks). A hardcoded id passes only on a stale DB — never a fresh build.
 select id as rid from config.routers      order by id limit 1 \gset
-select id as cid from config.capabilities order by id limit 1 \gset
+select id as cid from catalog.capability_types order by id limit 1 \gset
 \echo '== O2 analytics: A1 schema shape =='
 
 -- ─────────────────────────────────────────────────────────────────────────

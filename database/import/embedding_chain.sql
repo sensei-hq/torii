@@ -15,7 +15,7 @@ where not exists (select 1 from config.models where full_name = 'mxbai-embed-lar
 -- 2. capability link: this model does embedding.
 insert into config.model_capabilities (model_id, capability_id, supported, modified_by)
 select m.id, c.id, true, 'seed:c5'
-from config.models m, config.capabilities c
+from config.models m, catalog.capability_types c
 where m.full_name = 'mxbai-embed-large' and c.name = 'embedding'
   and not exists (
     select 1 from config.model_capabilities mc where mc.model_id = m.id and mc.capability_id = c.id);
@@ -26,7 +26,7 @@ insert into config.model_endpoints
    is_active, is_default, local_capable, supports_streaming, modified_by)
 select m.id, r.id, c.id, 'local', 'http://localhost:11434/v1/embeddings', 'mxbai-embed-large', 10,
        true, true, false, false, 'seed:c5'
-from config.models m, config.routers r, config.capabilities c
+from config.models m, config.routers r, catalog.capability_types c
 where m.full_name = 'mxbai-embed-large' and r.name = 'ollama' and c.name = 'embedding'
   and not exists (
     select 1 from config.model_endpoints e
@@ -37,7 +37,7 @@ insert into public.fallback_chains
   (tenant_id, name, capability_id, max_fallback_attempts, is_active, priority, description, modified_by)
 select '00000000-0000-0000-0000-000000000000', 'embedding', c.id, 3, true, 1,
        'C5 embedding chain — Ollama mxbai-embed-large (1024d)', 'seed:c5'
-from config.capabilities c
+from catalog.capability_types c
 where c.name = 'embedding'
   and not exists (
     select 1 from public.fallback_chains

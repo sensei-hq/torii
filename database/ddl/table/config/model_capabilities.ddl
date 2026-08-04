@@ -4,7 +4,7 @@ set search_path to config, extensions;
 create table if not exists model_capabilities (
   id                       uuid primary key default uuid_generate_v4()
 , model_id                 uuid not null references models(id)
-, capability_id            uuid not null references capabilities(id)
+, capability_id            uuid not null references catalog.capability_types(id)
 , capability_details       jsonb
 , performance_metrics      jsonb
 , limitations              jsonb

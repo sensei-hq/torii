@@ -1,5 +1,5 @@
 -- database/ddl/table/public/router_credentials.ddl
-set search_path to public, core, config, extensions;
+set search_path to public, core, config, keyvault, extensions;
 
 -- Encrypted per-tenant provider credentials — api_key AND OAuth (RW13 / #18: renamed from
 -- `router_keys`; the viable_chain_models view + secrets.sql track this name). All columns are
@@ -19,20 +19,19 @@ create table if not exists router_credentials (
 , modified_at       timestamptz not null default now()
 , modified_by       varchar     not null
 -- Credential kind + OAuth columns (RW13). OAuth tokens are encrypted like keys, service_role-only.
-, credential_type   varchar(10) not null default 'api_key'
-    check (credential_type in ('api_key', 'oauth'))
+, credential_type   keyvault.credential_type not null default 'api_key'
 , encrypted_oauth   bytea                              -- [IV][tag][access+refresh JSON ct]
 , oauth_expires_at  timestamptz
 , oauth_scopes      text
 , oauth_client_id   text                               -- O-7: PKCE client_id (paste-token: NULL)
 , token_url         text
-, refresh_status    varchar(16)
+, refresh_status    keyvault.refresh_status
 , last_refreshed_at timestamptz
 , primary key (tenant_id, id)
 -- O-7: an api_key row carries encrypted_api_key; an oauth row carries encrypted_oauth.
 , constraint router_credentials_blob_by_type
-    check ((credential_type = 'api_key' and encrypted_api_key is not null)
-        or (credential_type = 'oauth'   and encrypted_oauth   is not null))
+    check ((credential_type = 'api_key'::keyvault.credential_type and encrypted_api_key is not null)
+        or (credential_type = 'oauth'::keyvault.credential_type   and encrypted_oauth   is not null))
 );
 
 -- V4 + O-7: at most one ACTIVE credential per (tenant, router, credential_type) — so ONE api_key

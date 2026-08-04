@@ -27,6 +27,10 @@ grant usage on schema audit to authenticated, service_role;
 -- content: new domain schema (enum home for message_role/document_scope/asset_kind/space_role;
 -- messages/documents/document_assets/space_members move here in a later phase).
 grant usage on schema content to authenticated, service_role;
+-- keyvault: new domain schema (enum home for credential_type/refresh_status; RENAMED from the
+-- design's `vault` to avoid colliding with Supabase's built-in vault schema). router_credentials
+-- moves here in a later phase. `authenticated` usage is for the future masked read view.
+grant usage on schema keyvault to authenticated, service_role;
 
 -- (1) Privileged tables — SELECT only. Writes are service_role via the gateway.
 do $$

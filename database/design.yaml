@@ -19,6 +19,7 @@ schemas:
   - device
   - audit
   - content
+  - keyvault
   - extensions
   - history
   - public

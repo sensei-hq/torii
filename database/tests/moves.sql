@@ -124,4 +124,44 @@ begin
   raise notice 'M-device-3 4 MCP tables relocated public→device, RLS + tool_allowed intact ✓';
 end $$;
 
+\echo '== §D moves: core.{api_keys,service_accounts} (access fold) =='
+
+-- M-core-1 — api_keys + service_accounts relocated public→core (§8 access fold); FK + RLS intact.
+do $$
+declare t text;
+begin
+  foreach t in array array['api_keys','service_accounts'] loop
+    if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                    where n.nspname='core' and c.relname=t and c.relkind='r') then
+      raise exception 'FAIL: core.% table missing', t; end if;
+    if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                where n.nspname='public' and c.relname=t) then
+      raise exception 'FAIL: public.% still exists (move incomplete)', t; end if;
+    if not exists (select 1 from pg_policies where schemaname='core' and tablename=t) then
+      raise exception 'FAIL: core.% lost its RLS policy', t; end if;
+  end loop;
+  -- the api_keys→service_accounts FK must survive the co-move.
+  if not exists (select 1 from pg_constraint where conrelid='core.api_keys'::regclass
+                  and confrelid='core.service_accounts'::regclass and contype='f') then
+    raise exception 'FAIL: api_keys→service_accounts FK lost'; end if;
+  raise notice 'M-core-1 api_keys + service_accounts relocated public→core, FK + RLS intact ✓';
+end $$;
+
+-- M-core-2 — apikeys_for_tenant shield view exists and NEVER exposes the secret.
+do $$
+declare missing text;
+begin
+  if not exists (select 1 from pg_views where schemaname='core' and viewname='apikeys_for_tenant') then
+    raise exception 'FAIL: core.apikeys_for_tenant view missing'; end if;
+  if exists (select 1 from information_schema.columns
+              where table_schema='core' and table_name='apikeys_for_tenant' and column_name='hashed_secret') then
+    raise exception 'FAIL: apikeys_for_tenant LEAKS hashed_secret'; end if;
+  select string_agg(c, ', ') into missing from unnest(array[
+    'tenant_id','id','prefix','profile_id','service_account_id','scope','status','last_used_at','created_at']) as c
+   where not exists (select 1 from information_schema.columns
+                      where table_schema='core' and table_name='apikeys_for_tenant' and column_name=c);
+  if missing is not null then raise exception 'FAIL: apikeys_for_tenant missing columns: %', missing; end if;
+  raise notice 'M-core-2 apikeys_for_tenant shield view (no secret) + contract ✓';
+end $$;
+
 \echo '== §D moves tests done =='

@@ -306,7 +306,7 @@ async fn authenticate_api_key(pool: &sqlx::PgPool, token: &str) -> Result<Claims
     type ApiKeyRow = (Uuid, String, Option<Uuid>, Option<Uuid>, Uuid, String);
     let row: Option<ApiKeyRow> = sqlx::query_as(
         "select id, hashed_secret, profile_id, service_account_id, tenant_id, status::text as status \
-           from public.api_keys where prefix = $1",
+           from core.api_keys where prefix = $1",
     )
     .bind(prefix)
     .fetch_optional(pool)
@@ -381,7 +381,7 @@ async fn authenticate_api_key(pool: &sqlx::PgPool, token: &str) -> Result<Claims
     };
 
     // f. Best-effort last-used stamp — never gate auth on it.
-    let _ = sqlx::query("update public.api_keys set last_used_at = now() where id = $1")
+    let _ = sqlx::query("update core.api_keys set last_used_at = now() where id = $1")
         .bind(id)
         .execute(pool)
         .await;

@@ -66,7 +66,7 @@ begin;
     -- 6. API keys are not client-writable (issuance is a service_role gateway
     -- action; only a hash+prefix is ever stored, never the raw key).
     begin
-      insert into public.api_keys(tenant_id, profile_id, hashed_secret, prefix)
+      insert into core.api_keys(tenant_id, profile_id, hashed_secret, prefix)
         values ('00000000-0000-0000-0000-000000000000','11111111-1111-1111-1111-111111111111','h','sk_x');
       raise exception 'FAIL apikey: member could INSERT api_keys';
     exception when insufficient_privilege then null; end;

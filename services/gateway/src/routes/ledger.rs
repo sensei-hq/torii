@@ -231,7 +231,7 @@ pub async fn get_apikeys(
         "select coalesce(json_agg(t order by t.created_at desc), '[]'::json) from ( \
            select id, prefix, profile_id, service_account_id, scope, status, \
                   last_used_at, created_at \
-             from public.api_keys where tenant_id = $1) t",
+             from core.apikeys_for_tenant where tenant_id = $1) t",
     )
     .bind(tenant)
     .fetch_one(&state.pool)

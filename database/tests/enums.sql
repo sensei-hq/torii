@@ -547,9 +547,9 @@ end $$;
 do $$
 declare
   cols text[][] := array[
-    ['public','mcp_servers','transport','mcp_transport'],
-    ['public','mcp_servers','scope','mcp_scope'],
-    ['device','devices','status','device_status']];   -- devices moved public→device (§D)
+    ['device','mcp_servers','transport','mcp_transport'],
+    ['device','mcp_servers','scope','mcp_scope'],
+    ['device','devices','status','device_status']];   -- mcp_servers + devices moved public→device (§D)
   i int; s text; t text; c text; want text; udt text;
 begin
   for i in 1 .. array_length(cols,1) loop
@@ -560,7 +560,7 @@ begin
       raise exception 'FAIL: %.%.% udt=% (expected %)', s, t, c, coalesce(udt,'<none>'), want; end if;
   end loop;
   if exists (select 1 from pg_constraint where contype='c'
-              and conrelid in ('public.mcp_servers'::regclass,'device.devices'::regclass)
+              and conrelid in ('device.mcp_servers'::regclass,'device.devices'::regclass)
               and (pg_get_constraintdef(oid) ilike '%transport%in%'
                 or pg_get_constraintdef(oid) ilike '%scope%in%'
                 or pg_get_constraintdef(oid) ilike '%status%in%')) then

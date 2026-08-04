@@ -3,13 +3,13 @@
 \echo '== X1 tool_allowed: default-deny + grant matching =='
 begin;
   -- a server + a role that gets one tool granted
-  insert into public.mcp_servers(id, scope, name, transport)
+  insert into device.mcp_servers(id, scope, name, transport)
     values ('5e5e5e00-0000-0000-0000-0000000000a1','tenant','warehouse','http');
   insert into core.roles(id, tenant_id, key, name)
     values ('501e0000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-000000000000','ops','Ops')
     on conflict do nothing;
   -- grant: role Ops may use tool 'query' on the server, in any space
-  insert into public.tool_allow_lists(tenant_id, role_id, space_id, mcp_server_id, tool_name)
+  insert into device.tool_allow_lists(tenant_id, role_id, space_id, mcp_server_id, tool_name)
     values ('00000000-0000-0000-0000-000000000000','501e0000-0000-0000-0000-0000000000a1',null,'5e5e5e00-0000-0000-0000-0000000000a1','query');
 
   do $$

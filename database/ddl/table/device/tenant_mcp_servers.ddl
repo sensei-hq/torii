@@ -1,5 +1,5 @@
--- database/ddl/table/public/tenant_mcp_servers.ddl
-set search_path to public, core, extensions;
+-- database/ddl/table/device/tenant_mcp_servers.ddl
+set search_path to device, core, extensions;   -- §D Phase 1 MOVE: public→device
 
 -- RW3: a tenant opting a platform (or its own) MCP server in/out + config override.
 create table if not exists tenant_mcp_servers (

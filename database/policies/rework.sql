@@ -24,8 +24,8 @@ begin
     ('public', 'quality_signals'),
     ('public', 'structured_datasets'),
     ('public', 'dataset_columns'),
-    ('public', 'tenant_mcp_servers'),
-    ('public', 'tool_allow_lists'),
+    ('device', 'tenant_mcp_servers'),
+    ('device', 'tool_allow_lists'),
     ('public', 'analytics_usage_daily'),
     ('public', 'analytics_quality_daily'),
     ('config', 'config_versions')
@@ -117,21 +117,21 @@ create policy message_citations_owner on public.message_citations for all to aut
                    and c.owner_id = auth.uid()));
 
 -- ── (C) MCP registry — platform + own-tenant readable (nullable/absent tenant_id)
-alter table public.mcp_servers enable row level security;
-revoke all on public.mcp_servers from anon, authenticated, public;
-grant select on public.mcp_servers to authenticated;
-grant select, insert, update, delete on public.mcp_servers to service_role;
-drop policy if exists mcp_servers_read on public.mcp_servers;
-create policy mcp_servers_read on public.mcp_servers for select to authenticated
+alter table device.mcp_servers enable row level security;
+revoke all on device.mcp_servers from anon, authenticated, public;
+grant select on device.mcp_servers to authenticated;
+grant select, insert, update, delete on device.mcp_servers to service_role;
+drop policy if exists mcp_servers_read on device.mcp_servers;
+create policy mcp_servers_read on device.mcp_servers for select to authenticated
   using (tenant_id is null or tenant_id = (auth.jwt() ->> 'tenant_id')::uuid);
 
-alter table public.mcp_server_tools enable row level security;
-revoke all on public.mcp_server_tools from anon, authenticated, public;
-grant select on public.mcp_server_tools to authenticated;
-grant select, insert, update, delete on public.mcp_server_tools to service_role;
-drop policy if exists mcp_server_tools_read on public.mcp_server_tools;
-create policy mcp_server_tools_read on public.mcp_server_tools for select to authenticated
-  using (exists (select 1 from public.mcp_servers s
+alter table device.mcp_server_tools enable row level security;
+revoke all on device.mcp_server_tools from anon, authenticated, public;
+grant select on device.mcp_server_tools to authenticated;
+grant select, insert, update, delete on device.mcp_server_tools to service_role;
+drop policy if exists mcp_server_tools_read on device.mcp_server_tools;
+create policy mcp_server_tools_read on device.mcp_server_tools for select to authenticated
+  using (exists (select 1 from device.mcp_servers s
                  where s.id = mcp_server_tools.mcp_server_id
                    and (s.tenant_id is null or s.tenant_id = (auth.jwt() ->> 'tenant_id')::uuid)));
 

@@ -1,4 +1,4 @@
-set search_path to public, core, extensions;
+set search_path to public, core, device, extensions;
 
 -- X1 (DECISIONS §1): resolve whether a caller may invoke a tool on an MCP server.
 -- DEFAULT-DENY — a tool is allowed only if a tool_allow_lists grant exists for one
@@ -18,7 +18,7 @@ stable
 as $$
   select exists (
     select 1
-      from public.tool_allow_lists tal
+      from device.tool_allow_lists tal
      where tal.tenant_id     = p_tenant
        and tal.role_id       = any(p_role_ids)
        and tal.mcp_server_id = p_server

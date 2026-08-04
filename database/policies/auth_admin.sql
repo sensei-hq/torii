@@ -1,18 +1,18 @@
 -- RLS · auth-admin read access for the access-token hook
 -- custom_access_token_hook runs as supabase_auth_admin (does NOT bypass RLS), so
 -- it needs explicit read access to the tables it consults during token issuance.
--- RW2: it now reads profile_tenants (active membership) + profile_roles (role_ids)
+-- RW2: it now reads memberships (active membership) + profile_roles (role_ids)
 -- + profiles (claims_version). The group-ACL (profile_groups) is retired (RW9).
 
 grant usage on schema core to supabase_auth_admin;
-grant select on core.profile_tenants, core.profile_roles, core.profiles
+grant select on core.memberships, core.profile_roles, core.profiles
   to supabase_auth_admin;
 
 do $$
 declare r record;
 begin
   for r in select * from (values
-    ('core', 'profile_tenants'),
+    ('core', 'memberships'),
     ('core', 'profile_roles'),
     ('core', 'profiles')
   ) as x(sch, tbl)

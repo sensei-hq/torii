@@ -21,7 +21,7 @@ set search_path = core, extensions
 as $$
   select exists (
     select 1
-      from core.profile_tenants          pt
+      from core.memberships              pt
       join core.profile_roles            pr  on pr.profile_id = pt.profile_id
                                             and pr.tenant_id  = pt.tenant_id
       join core.effective_role_permissions erp on erp.role_id   = pr.role_id

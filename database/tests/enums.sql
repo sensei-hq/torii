@@ -417,7 +417,7 @@ end $$;
 
 -- ═════════════════════════════════════════════════════════════════════════
 -- core+access enums: tenant_status (core.tenants) · membership_status
--- (core.profile_tenants) · api_key_status (api_keys) · service_account_status
+-- (core.memberships) · api_key_status (api_keys) · service_account_status
 -- (service_accounts). idp_kind DEFERRED (identity_providers table not built).
 -- ═════════════════════════════════════════════════════════════════════════
 \echo '== enum conversion: core+access enums =='
@@ -448,7 +448,7 @@ do $$
 declare
   cols text[][] := array[
     ['core','tenants','status','tenant_status'],
-    ['core','profile_tenants','status','membership_status'],
+    ['core','memberships','status','membership_status'],
     ['core','api_keys','status','api_key_status'],              -- moved public→core (§D)
     ['core','service_accounts','status','service_account_status']];
   i int; s text; t text; c text; want text; udt text;
@@ -461,7 +461,7 @@ begin
       raise exception 'FAIL: %.%.% udt=% (expected %)', s, t, c, coalesce(udt,'<none>'), want; end if;
   end loop;
   if exists (select 1 from pg_constraint where contype='c'
-              and conrelid in ('core.tenants'::regclass,'core.profile_tenants'::regclass,'core.api_keys'::regclass,'core.service_accounts'::regclass)
+              and conrelid in ('core.tenants'::regclass,'core.memberships'::regclass,'core.api_keys'::regclass,'core.service_accounts'::regclass)
               and pg_get_constraintdef(oid) ilike '%status%in%') then
     raise exception 'FAIL: a leftover core+access status CHECK still exists'; end if;
   raise notice 'A2 four core+access columns are the enums, no leftover CHECK ✓';

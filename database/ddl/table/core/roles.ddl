@@ -23,4 +23,4 @@ comment on table roles is
 'RBAC roles (decision #4 / RW2). System defaults (owner/admin/editor/viewer/member/service) are
 SHARED: one row per key with tenant_id NULL, is_system=true — undeletable, name renamable only.
 Custom roles are tenant-scoped. Resolution goes through core.effective_roles (defaults expanded
-per tenant + customs). Replaces the built profile_tenants.role enum.';
+per tenant + customs). Replaces the built memberships.role enum (formerly profile_tenants).';

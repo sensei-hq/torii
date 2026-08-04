@@ -37,7 +37,7 @@ do $$
 declare r record;
 begin
   for r in select * from (values
-    ('core',   'profile_tenants'),
+    ('core',   'memberships'),
     ('core',   'roles'),
     ('core',   'role_permissions'),
     ('core',   'profile_roles'),

@@ -2,7 +2,7 @@
 set search_path to core, extensions;
 
 -- RW2: on new auth.users, (1) ALWAYS create the core.profiles identity anchor
--- (so the profile_roles/profile_tenants FKs + claims_version gate work), then
+-- (so the profile_roles/memberships FKs + claims_version gate work), then
 -- (2) if the email domain matches an active tenant, assign membership + the
 -- default 'member' role. SECURITY DEFINER so it can write as the owner regardless
 -- of the GoTrue role's grants (mirrors Supabase's own hooks). Must never raise —
@@ -21,7 +21,7 @@ begin
   insert into core.profiles (id) values (NEW.id) on conflict (id) do nothing;
 
   -- skip if already assigned to a tenant.
-  if exists (select 1 from core.profile_tenants where profile_id = NEW.id) then
+  if exists (select 1 from core.memberships where profile_id = NEW.id) then
     return NEW;
   end if;
 
@@ -32,7 +32,7 @@ begin
    limit 1;
 
   if v_tenant_id is not null then
-    insert into core.profile_tenants (profile_id, tenant_id, assigned_by)
+    insert into core.memberships (profile_id, tenant_id, assigned_by)
       values (NEW.id, v_tenant_id, 'domain_trigger')
       on conflict (profile_id) do nothing;
 

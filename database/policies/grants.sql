@@ -8,6 +8,10 @@
 -- are never granted here (secrets.sql: service_role only).
 
 grant usage on schema public, core to authenticated;
+-- metering: new domain schema (enum home for call_status; tables land in a later phase).
+-- service_role (the gateway in prod) writes metering.inference_calls.status via the enum;
+-- authenticated only reads it as text (json_agg), but usage keeps qualified refs resolvable.
+grant usage on schema metering to authenticated, service_role;
 
 -- (1) Privileged tables — SELECT only. Writes are service_role via the gateway.
 do $$

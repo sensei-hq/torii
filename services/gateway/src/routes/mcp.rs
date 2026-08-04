@@ -185,7 +185,7 @@ pub async fn register_server(
 
     let server_id: Result<Uuid, _> = sqlx::query_scalar(
         "insert into public.mcp_servers (tenant_id, scope, name, label, transport, url, created_by) \
-         values ($1, 'tenant', $2, $3, $4, $5, $6) returning id",
+         values ($1, 'tenant', $2, $3, $4::device.mcp_transport, $5, $6) returning id",
     )
     .bind(tenant)
     .bind(&body.name)
@@ -244,7 +244,7 @@ pub async fn refresh_tools(
     };
     // The server must be visible to the caller's tenant (platform or own).
     let row = sqlx::query(
-        "select transport, url from public.mcp_servers \
+        "select transport::text as transport, url from public.mcp_servers \
          where id = $1 and (tenant_id is null or tenant_id = $2)",
     )
     .bind(body.server_id)

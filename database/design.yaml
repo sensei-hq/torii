@@ -16,6 +16,7 @@ schemas:
   - catalog
   - metering
   - governance
+  - device
   - extensions
   - history
   - public

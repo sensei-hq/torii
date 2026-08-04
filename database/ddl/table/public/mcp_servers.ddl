@@ -1,17 +1,15 @@
 -- database/ddl/table/public/mcp_servers.ddl
-set search_path to public, core, extensions;
+set search_path to public, core, device, extensions;
 
 -- RW3 (decision #1, MCP in v1): registered MCP servers. scope=platform (tenant_id
 -- null, shared) or tenant (tenant-owned). stdio = device-registrable only (X1 §5).
 create table if not exists mcp_servers (
   tenant_id        uuid                                  -- null ⇒ platform-scoped
 , id               uuid        not null default gen_random_uuid()
-, scope            varchar(10) not null default 'tenant'
-    check (scope in ('platform', 'tenant'))
+, scope            device.mcp_scope not null default 'tenant'
 , name             varchar(120) not null
 , label            varchar(200)
-, transport        varchar(10) not null
-    check (transport in ('stdio', 'http', 'sse'))
+, transport        device.mcp_transport not null
 , command          text                                  -- stdio
 , args             jsonb       not null default '[]'
 , url              text                                  -- http/sse

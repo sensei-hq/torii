@@ -94,7 +94,7 @@ mod db {
     /// role-wide (`space_id IS NULL`) grants match. Servers must be visible (platform or own)
     /// and effectively enabled for the tenant.
     const QUERY: &str = "\
-        select distinct s.id as server_id, s.name as server_name, s.transport as transport, \
+        select distinct s.id as server_id, s.name as server_name, s.transport::text as transport, \
                t.tool_name as tool_name, t.json_schema as json_schema \
           from public.tool_allow_lists tal \
           join public.mcp_servers s on s.id = tal.mcp_server_id \

@@ -518,4 +518,54 @@ begin
   raise notice 'GV2 three governance columns are the enums, no leftover CHECK ✓';
 end $$;
 
+-- ═════════════════════════════════════════════════════════════════════════
+-- device enums: mcp_transport + mcp_scope (mcp_servers) · device_status (devices).
+-- ═════════════════════════════════════════════════════════════════════════
+\echo '== enum conversion: device enums =='
+
+do $$
+declare
+  specs text[][] := array[
+    ['mcp_transport','stdio,http,sse'],
+    ['mcp_scope','platform,tenant'],
+    ['device_status','active,revoked']];
+  i int; nm text; want text; got text;
+begin
+  for i in 1 .. array_length(specs,1) loop
+    nm := specs[i][1]; want := specs[i][2];
+    if not exists (select 1 from pg_type t join pg_namespace n on n.oid=t.typnamespace
+                    where n.nspname='device' and t.typname=nm and t.typtype='e') then
+      raise exception 'FAIL: enum device.% does not exist', nm; end if;
+    select string_agg(e.enumlabel, ',' order by e.enumsortorder) into got
+      from pg_enum e join pg_type t on t.oid=e.enumtypid join pg_namespace n on n.oid=t.typnamespace
+     where n.nspname='device' and t.typname=nm;
+    if got is distinct from want then raise exception 'FAIL: device.% = %, expected %', nm, got, want; end if;
+  end loop;
+  raise notice 'D1 three device enums exist with expected values ✓';
+end $$;
+
+do $$
+declare
+  cols text[][] := array[
+    ['mcp_servers','transport','mcp_transport'],
+    ['mcp_servers','scope','mcp_scope'],
+    ['devices','status','device_status']];
+  i int; t text; c text; want text; udt text;
+begin
+  for i in 1 .. array_length(cols,1) loop
+    t := cols[i][1]; c := cols[i][2]; want := cols[i][3];
+    select udt_name into udt from information_schema.columns
+     where table_schema='public' and table_name=t and column_name=c;
+    if udt is distinct from want then
+      raise exception 'FAIL: %.% udt=% (expected %)', t, c, coalesce(udt,'<none>'), want; end if;
+  end loop;
+  if exists (select 1 from pg_constraint where contype='c'
+              and conrelid in ('public.mcp_servers'::regclass,'public.devices'::regclass)
+              and (pg_get_constraintdef(oid) ilike '%transport%in%'
+                or pg_get_constraintdef(oid) ilike '%scope%in%'
+                or pg_get_constraintdef(oid) ilike '%status%in%')) then
+    raise exception 'FAIL: a leftover device CHECK still exists'; end if;
+  raise notice 'D2 three device columns are the enums, no leftover CHECK ✓';
+end $$;
+
 \echo '== enum conversion tests done =='

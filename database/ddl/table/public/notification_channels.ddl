@@ -1,10 +1,10 @@
 -- database/ddl/table/public/notification_channels.ddl
-set search_path to public, core, extensions;
+set search_path to public, core, audit, extensions;
 -- RW8: alert delivery channels (email/slack/webhook/siem). Also the SIEM sink (D4/O1).
 create table if not exists notification_channels (
   tenant_id  uuid        not null references core.tenants(id) on delete cascade
 , id         uuid        not null default gen_random_uuid()
-, kind       varchar(12) not null check (kind in ('email','slack','webhook','siem'))
+, kind       audit.channel_kind not null
 , target     text        not null
 , config     jsonb       not null default '{}'
 , enabled    boolean     not null default true

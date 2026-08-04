@@ -17,6 +17,7 @@ schemas:
   - metering
   - governance
   - device
+  - audit
   - extensions
   - history
   - public

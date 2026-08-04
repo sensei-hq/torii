@@ -1,4 +1,4 @@
-set search_path to history, extensions;
+set search_path to history, audit, extensions;
 
 create table if not exists past_feature_states (
   id               uuid primary key default uuid_generate_v4()
@@ -10,7 +10,7 @@ create table if not exists past_feature_states (
 , modified_by      varchar
 , effective_from   timestamptz
 , effective_to     timestamptz
-, operation        varchar(10)
+, operation        audit.operation
 , modified_at      timestamptz not null default now()
 );
 

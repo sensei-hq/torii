@@ -1,5 +1,5 @@
 -- database/ddl/table/public/quality_signals.ddl
-set search_path to public, core, extensions;
+set search_path to public, core, metering, extensions;
 -- RW15/RW8 (C6 §3.1): explicit + implicit quality signals keyed to a call or message.
 create table if not exists quality_signals (
   tenant_id         uuid        not null references core.tenants(id) on delete cascade
@@ -8,7 +8,7 @@ create table if not exists quality_signals (
 , message_id        uuid
 , conversation_id   uuid
 , signal_key        varchar(60) not null
-, signal_class      varchar(16) not null check (signal_class in ('explicit','implicit','system'))
+, signal_class      metering.signal_class not null
 , value_num         numeric(12,6)
 , value_text        text
 , value_json        jsonb

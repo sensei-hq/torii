@@ -4,6 +4,12 @@
 -- MVs cannot carry RLS, so they are service_role-read-through-gateway only),
 -- and the CONCURRENTLY-required unique indexes. Then the batch rollup logic.
 \set ON_ERROR_STOP on
+-- Fresh-build robustness: config.routers/capabilities are name-keyed seeds whose ids are
+-- assigned at import (random per build), so fixtures must DERIVE ids, never hardcode them.
+-- rid/cid back the A3+A4 cloud-equivalent-pricing fixtures (client-side vars persist across
+-- the begin/rollback blocks). A hardcoded id passes only on a stale DB — never a fresh build.
+select id as rid from config.routers      order by id limit 1 \gset
+select id as cid from config.capabilities order by id limit 1 \gset
 \echo '== O2 analytics: A1 schema shape =='
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -189,30 +195,30 @@ begin;
     ('a3300000-0000-0000-0000-000000000002','sav-cloud-dear','1'),
     ('a3300000-0000-0000-0000-000000000003','sav-cloud-unpriced','1'),
     ('a3300000-0000-0000-0000-000000000004','sav-local-only','1');
-  -- endpoints price the cloud counterfactual (reuse router b3fb5f18…, capability cc536ed2…)
+  -- endpoints price the cloud counterfactual (reuse the derived seed router :rid + capability :cid)
   insert into config.model_endpoints
     (id, model_id, router_id, capability_id, endpoint_url, cost_per_input_token, cost_per_output_token, is_active) values
-    ('a3310000-0000-0000-0000-000000000001','a3300000-0000-0000-0000-000000000001','b3fb5f18-cfe9-4793-a1f5-8ae7ef524377','cc536ed2-41b5-424a-af84-bd7152027380','http://t',0.00001,0.00003,true),
-    ('a3310000-0000-0000-0000-000000000002','a3300000-0000-0000-0000-000000000002','b3fb5f18-cfe9-4793-a1f5-8ae7ef524377','cc536ed2-41b5-424a-af84-bd7152027380','http://t',0.00002,0.00006,true);
+    ('a3310000-0000-0000-0000-000000000001','a3300000-0000-0000-0000-000000000001',:'rid',:'cid','http://t',0.00001,0.00003,true),
+    ('a3310000-0000-0000-0000-000000000002','a3300000-0000-0000-0000-000000000002',:'rid',:'cid','http://t',0.00002,0.00006,true);
   -- NB: model sav-cloud-unpriced (…003) intentionally has NO endpoint → its cloud
   -- step is unpriced (no ModelPricing), which the baseline must surface, not guess.
   -- four chains (tenant 0 owns them → effective_chain_models first branch)
   insert into public.fallback_chains (id, tenant_id, name, capability_id, is_active, modified_by) values
-    ('a3320000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000000','sav-cloud','cc536ed2-41b5-424a-af84-bd7152027380',true,'test'),
-    ('a3320000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000000','sav-local','cc536ed2-41b5-424a-af84-bd7152027380',true,'test'),
-    ('a3320000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000000','sav-unpriced','cc536ed2-41b5-424a-af84-bd7152027380',true,'test'),
-    ('a3320000-0000-0000-0000-000000000004','00000000-0000-0000-0000-000000000000','sav-two','cc536ed2-41b5-424a-af84-bd7152027380',true,'test');
+    ('a3320000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000000','sav-cloud',:'cid',true,'test'),
+    ('a3320000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000000','sav-local',:'cid',true,'test'),
+    ('a3320000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000000','sav-unpriced',:'cid',true,'test'),
+    ('a3320000-0000-0000-0000-000000000004','00000000-0000-0000-0000-000000000000','sav-two',:'cid',true,'test');
   insert into public.fallback_chain_models
     (id, tenant_id, fallback_chain_id, router_id, model_id, sequence_order, plane, is_active, modified_by) values
     -- sav-cloud: one cheap cloud step
-    ('a3330000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000000','a3320000-0000-0000-0000-000000000001','b3fb5f18-cfe9-4793-a1f5-8ae7ef524377','a3300000-0000-0000-0000-000000000001',1,'cloud',true,'test'),
+    ('a3330000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000000','a3320000-0000-0000-0000-000000000001',:'rid','a3300000-0000-0000-0000-000000000001',1,'cloud',true,'test'),
     -- sav-local: only a LOCAL step (no cloud counterfactual)
-    ('a3330000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000000','a3320000-0000-0000-0000-000000000002','b3fb5f18-cfe9-4793-a1f5-8ae7ef524377','a3300000-0000-0000-0000-000000000004',1,'local',true,'test'),
+    ('a3330000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000000','a3320000-0000-0000-0000-000000000002',:'rid','a3300000-0000-0000-0000-000000000004',1,'local',true,'test'),
     -- sav-unpriced: a cloud step whose endpoint has NULL pricing
-    ('a3330000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000000','a3320000-0000-0000-0000-000000000003','b3fb5f18-cfe9-4793-a1f5-8ae7ef524377','a3300000-0000-0000-0000-000000000003',1,'cloud',true,'test'),
+    ('a3330000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000000','a3320000-0000-0000-0000-000000000003',:'rid','a3300000-0000-0000-0000-000000000003',1,'cloud',true,'test'),
     -- sav-two: cheap + dear cloud steps → cheapest must win
-    ('a3330000-0000-0000-0000-000000000004','00000000-0000-0000-0000-000000000000','a3320000-0000-0000-0000-000000000004','b3fb5f18-cfe9-4793-a1f5-8ae7ef524377','a3300000-0000-0000-0000-000000000001',1,'cloud',true,'test'),
-    ('a3330000-0000-0000-0000-000000000005','00000000-0000-0000-0000-000000000000','a3320000-0000-0000-0000-000000000004','b3fb5f18-cfe9-4793-a1f5-8ae7ef524377','a3300000-0000-0000-0000-000000000002',2,'cloud',true,'test');
+    ('a3330000-0000-0000-0000-000000000004','00000000-0000-0000-0000-000000000000','a3320000-0000-0000-0000-000000000004',:'rid','a3300000-0000-0000-0000-000000000001',1,'cloud',true,'test'),
+    ('a3330000-0000-0000-0000-000000000005','00000000-0000-0000-0000-000000000000','a3320000-0000-0000-0000-000000000004',:'rid','a3300000-0000-0000-0000-000000000002',2,'cloud',true,'test');
 
   -- four LOCAL calls (cost 0, in=512 out=128), one per chain, distinct budget nodes.
   insert into public.inference_calls
@@ -273,14 +279,14 @@ begin;
   insert into config.model_endpoints
     (id, model_id, router_id, capability_id, endpoint_url, cost_per_input_token, cost_per_output_token, is_active)
     values ('a4410000-0000-0000-0000-000000000001','a4400000-0000-0000-0000-000000000001',
-            'b3fb5f18-cfe9-4793-a1f5-8ae7ef524377','cc536ed2-41b5-424a-af84-bd7152027380','http://t',0.00001,0.00003,true);
+            :'rid',:'cid','http://t',0.00001,0.00003,true);
   insert into public.fallback_chains (id, tenant_id, name, capability_id, is_active, modified_by)
     values ('a4420000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000000',
-            'recon-chain','cc536ed2-41b5-424a-af84-bd7152027380',true,'test');
+            'recon-chain',:'cid',true,'test');
   insert into public.fallback_chain_models
     (id, tenant_id, fallback_chain_id, router_id, model_id, sequence_order, plane, is_active, modified_by)
     values ('a4430000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000000',
-            'a4420000-0000-0000-0000-000000000001','b3fb5f18-cfe9-4793-a1f5-8ae7ef524377',
+            'a4420000-0000-0000-0000-000000000001',:'rid',
             'a4400000-0000-0000-0000-000000000001',1,'cloud',true,'test');
 
   -- 3 cloud calls (one bucket; latencies 100/200/300) + 1 local call (savings bucket)

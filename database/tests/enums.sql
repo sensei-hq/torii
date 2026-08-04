@@ -190,4 +190,66 @@ begin
   raise notice 'C3 write contract: un-cast fails, cast succeeds, bad label rejected ✓';
 end $$;
 
+-- ═════════════════════════════════════════════════════════════════════════
+-- metering.call_status {success,failed} — inference_calls.status (the ledger call
+-- outcome). NOT gateway_tasks.status: that table is LEGACY/retiring (§7) and keeps
+-- its varchar+CHECK {running,success,failed} until dropped.
+-- ═════════════════════════════════════════════════════════════════════════
+\echo '== enum conversion: metering.call_status =='
+
+-- M1 — enum type exists in metering with exactly {success,failed}.
+do $$
+declare vals text;
+begin
+  if not exists (select 1 from pg_type t join pg_namespace n on n.oid=t.typnamespace
+                  where n.nspname='metering' and t.typname='call_status' and t.typtype='e')
+  then raise exception 'FAIL: enum type metering.call_status does not exist'; end if;
+  select string_agg(e.enumlabel, ',' order by e.enumsortorder) into vals
+    from pg_enum e join pg_type t on t.oid=e.enumtypid
+    join pg_namespace n on n.oid=t.typnamespace
+   where n.nspname='metering' and t.typname='call_status';
+  if vals is distinct from 'success,failed' then
+    raise exception 'FAIL: metering.call_status values = %, expected success,failed', vals; end if;
+  raise notice 'M1 metering.call_status enum {success,failed} ✓';
+end $$;
+
+-- M2 — inference_calls.status IS the enum, with no leftover CHECK on that column.
+--      (gateway_tasks.status intentionally keeps its varchar CHECK — legacy table.)
+do $$
+declare udt text;
+begin
+  select udt_name into udt from information_schema.columns
+   where table_schema='public' and table_name='inference_calls' and column_name='status';
+  if udt is distinct from 'call_status' then
+    raise exception 'FAIL: inference_calls.status udt=% (expected call_status enum)', coalesce(udt,'<none>'); end if;
+  if exists (select 1 from pg_constraint
+              where conrelid='public.inference_calls'::regclass and contype='c'
+                and pg_get_constraintdef(oid) ilike '%status%in%') then
+    raise exception 'FAIL: inference_calls still has a status CHECK constraint'; end if;
+  raise notice 'M2 inference_calls.status is metering.call_status, no leftover CHECK ✓';
+end $$;
+
+-- M3 — write contract: un-cast text param fails, cast succeeds, bad label rejected.
+do $$
+declare bad boolean := false;
+begin
+  create temp table _cs_probe (st metering.call_status) on commit drop;
+  begin
+    execute 'insert into _cs_probe(st) values ($1)' using 'success'::text;
+    bad := true;
+  exception when others then null; end;
+  if bad then raise exception 'FAIL: un-cast text param accepted into call_status column'; end if;
+
+  execute 'insert into _cs_probe(st) values ($1::metering.call_status)' using 'success'::text;
+  execute 'insert into _cs_probe(st) values ($1::metering.call_status)' using 'failed'::text;
+
+  bad := false;
+  begin
+    execute 'insert into _cs_probe(st) values ($1::metering.call_status)' using 'running'::text;
+    bad := true;
+  exception when others then null; end;
+  if bad then raise exception 'FAIL: invalid call_status label "running" accepted'; end if;
+  raise notice 'M3 write contract: un-cast fails, cast succeeds, bad label rejected ✓';
+end $$;
+
 \echo '== enum conversion tests done =='

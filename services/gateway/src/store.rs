@@ -114,7 +114,7 @@ impl GatewayStore for PgGatewayStore {
                 $1, $2, $3, $4, $5, $6,
                 $7, $8, $9,
                 $10, $11, $12, $13,
-                $14, $15, $16, $17,
+                $14::metering.call_status, $15, $16, $17,
                 $18,
                 (SELECT id FROM anc WHERE kind = 'org'  LIMIT 1),
                 (SELECT id FROM anc WHERE kind = 'dept' LIMIT 1),
@@ -159,7 +159,7 @@ impl GatewayStore for PgGatewayStore {
                    adapter, model, api_model_id,
                    input_tokens, output_tokens,
                    cost_usd::float8 AS cost_usd,
-                   duration_ms, status, error_type,
+                   duration_ms, status::text AS status, error_type,
                    fallback_sequence, recorded_at
             FROM public.inference_calls
             WHERE tenant_id = $1 AND session_id = $2

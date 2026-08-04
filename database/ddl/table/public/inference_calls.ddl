@@ -1,5 +1,5 @@
 -- database/ddl/table/public/inference_calls.ddl
-set search_path to public, core, extensions;
+set search_path to public, core, metering, extensions;
 
 create table if not exists inference_calls (
   tenant_id          uuid         not null
@@ -16,8 +16,7 @@ create table if not exists inference_calls (
 , output_tokens      integer                                           -- nullable; Option<u32>
 , cost_usd           numeric(12,6) not null default 0                 -- f64 mapped to numeric for precision
 , duration_ms        bigint       not null                             -- u64; bigint avoids overflow for long calls
-, status             varchar(20)  not null
-    check (status in ('success', 'failed'))                           -- CallStatus (snake_case serde)
+, status             metering.call_status not null                     -- CallStatus {success,failed}
 , error_type         text                                              -- nullable; Option<String>
 , fallback_sequence  smallint     not null default 0                  -- u8 (0-255); which attempt in the chain
 , recorded_at        timestamptz  not null default now()

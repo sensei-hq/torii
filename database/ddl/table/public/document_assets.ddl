@@ -1,12 +1,11 @@
 -- database/ddl/table/public/document_assets.ddl
-set search_path to public, extensions;
+set search_path to public, content, extensions;
 
 create table if not exists document_assets (
   tenant_id    uuid not null
 , id           uuid not null default gen_random_uuid()
 , document_id  uuid not null
-, kind         varchar(20) not null
-    check (kind in ('original','ir_json','markdown','table_csv','image','caption','json','text','other'))
+, kind         content.asset_kind not null
 , storage_path varchar(1000)
 , label        varchar(255)
 , sequence     integer

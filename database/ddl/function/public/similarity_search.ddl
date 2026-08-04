@@ -38,7 +38,7 @@ language sql stable as $$
     on d.tenant_id = de.tenant_id
    and d.id        = de.document_id
   where d.status = 'completed'
-    and (scope_filter is null or d.scope = any(scope_filter))
+    and (scope_filter is null or d.scope::text = any(scope_filter))
     and (doc_ids is null or d.id = any(doc_ids))
     and (p_tenant_id is null or d.tenant_id = p_tenant_id or d.scope = 'system')
     and (

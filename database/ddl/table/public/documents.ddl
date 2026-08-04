@@ -1,5 +1,5 @@
 -- database/ddl/table/public/documents.ddl
-set search_path to public, core, extensions;
+set search_path to public, core, content, extensions;
 
 create table if not exists documents (
   tenant_id          uuid
@@ -9,8 +9,7 @@ create table if not exists documents (
 , storage_path       varchar(1000)
 , file_size          integer
 , content_type       varchar(100) not null
-, scope              varchar(20)  not null default 'user'
-    check (scope in ('system', 'tenant', 'user'))
+, scope              content.document_scope not null default 'user'
 , profile_id         uuid
 , space_id           uuid
 , collection_id      uuid

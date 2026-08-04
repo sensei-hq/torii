@@ -377,7 +377,7 @@ pub async fn get_assets(
 
     let assets: Vec<(Uuid, String, Option<String>, Option<String>, Option<i32>, Option<i32>, Option<String>)> =
         match sqlx::query_as(
-            "select id, kind, storage_path, label, sequence, page_ref, caption \
+            "select id, kind::text, storage_path, label, sequence, page_ref, caption \
                from public.document_assets \
               where tenant_id = $1 and document_id = $2 \
               order by kind, sequence",

@@ -1,4 +1,4 @@
--- database/ddl/view/public/analytics_model_mix_daily.ddl
+-- database/ddl/materialized_view/public/analytics_model_mix_daily.ddl
 set search_path to public, core, extensions;
 
 -- O2 §3.2: "Most-used models" panel. Per (tenant, day, model, provider, plane):
@@ -6,9 +6,10 @@ set search_path to public, core, extensions;
 -- usage rollup for cheap dashboard reads; refreshed CONCURRENTLY (A4), which
 -- requires the unique index below. MVs cannot carry RLS → never granted to
 -- authenticated (read through the gateway as service_role; see policies/analytics.sql).
--- drop+create so re-apply picks up definition changes (MVs have no CREATE OR REPLACE).
-drop materialized view if exists analytics_model_mix_daily cascade;
-create materialized view analytics_model_mix_daily as
+-- `if not exists` so re-apply is a NO-OP that preserves the matview + its rollup data. MVs have no
+-- CREATE OR REPLACE; to change THIS definition, DROP it manually then re-apply (dbd reconcile only
+-- warns on matview drift, never auto-drops — see the dbd skill).
+create materialized view if not exists analytics_model_mix_daily as
   select
     tenant_id, day, served_model, provider, execution_location,
     sum(calls)                                                                as calls,

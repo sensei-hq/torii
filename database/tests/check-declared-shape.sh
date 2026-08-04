@@ -11,19 +11,30 @@
 # instance, then assert a clean diff) needs a live DB and is `fresh-build-check.sh`.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-ddl_dir="$here/../ddl/table"
+table_dir="$here/../ddl/table"
+mv_dir="$here/../ddl/materialized_view"
 
 fail=0
-# `add column` (with or without `if not exists`) at the start of an alter statement in a table DDL.
+# Check 1 — trailing `add column` (with or without `if not exists`) in a table DDL. dbd's differ
+# ignores it → reconcile would DROP the column (the GH-5/RAG landmine, db-redesign.md §7).
 while IFS= read -r hit; do
-  echo "  ✗ $hit"
+  echo "  ✗ trailing ALTER-add: $hit"
   fail=1
-done < <(grep -rniE "^[[:space:]]*alter table[[:space:]]+.*[[:space:]]add column" "$ddl_dir" 2>/dev/null || true)
+done < <(grep -rniE "^[[:space:]]*alter table[[:space:]]+.*[[:space:]]add column" "$table_dir" 2>/dev/null || true)
+
+# Check 2 — self-DROP in versioned table/matview DDL. A `drop … cascade;` before `create …` is
+# non-idempotent: any re-apply/reconcile DROPs+rebuilds and WIPES live data (the O2 analytics-rollup
+# landmine). Declarative DDL must be idempotent via `create … if not exists`.
+while IFS= read -r hit; do
+  echo "  ✗ non-idempotent self-DROP: $hit"
+  fail=1
+done < <(grep -rniE "^[[:space:]]*drop[[:space:]]+(table|materialized[[:space:]]+view)[[:space:]]" "$table_dir" "$mv_dir" 2>/dev/null || true)
 
 if [ "$fail" -ne 0 ]; then
-  echo "❌ DDL drift-guard FAILED: table column declared via a trailing ALTER (fold it INLINE into CREATE TABLE)."
-  echo "   Why: dbd's differ ignores trailing ALTER-add, so reconcile would DROP the column. See db-redesign.md §7."
+  echo "❌ DDL drift-guard FAILED:"
+  echo "   • trailing ALTER-add → fold the column INLINE into CREATE TABLE (dbd's differ ignores it, so reconcile DROPs it; db-redesign.md §7)."
+  echo "   • self-DROP → use 'create … if not exists'; a drop+create in versioned DDL wipes live data on re-apply."
   exit 1
 fi
 
-echo "✅ DDL drift-guard: every table column is declared inline in CREATE TABLE (no trailing ALTER-add)"
+echo "✅ DDL drift-guard: columns inline (no trailing ALTER-add) + no non-idempotent self-DROP in table/matview DDL"

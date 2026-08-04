@@ -392,4 +392,27 @@ begin
   raise notice 'K3 catalog write contract (cast succeeds, bad label rejected) ✓';
 end $$;
 
+-- ═════════════════════════════════════════════════════════════════════════
+-- metering.signal_class {explicit,implicit,system} — quality_signals.signal_class.
+-- (signal_subject deferred: its column is design-only, needs the §7-#6 subject rework.)
+-- ═════════════════════════════════════════════════════════════════════════
+\echo '== enum conversion: metering.signal_class =='
+do $$
+declare vals text; udt text;
+begin
+  select string_agg(e.enumlabel, ',' order by e.enumsortorder) into vals
+    from pg_enum e join pg_type t on t.oid=e.enumtypid join pg_namespace n on n.oid=t.typnamespace
+   where n.nspname='metering' and t.typname='signal_class';
+  if vals is distinct from 'explicit,implicit,system' then
+    raise exception 'FAIL: metering.signal_class = %, expected explicit,implicit,system', coalesce(vals,'<none>'); end if;
+  select udt_name into udt from information_schema.columns
+   where table_schema='public' and table_name='quality_signals' and column_name='signal_class';
+  if udt is distinct from 'signal_class' then
+    raise exception 'FAIL: quality_signals.signal_class udt=% (expected signal_class enum)', coalesce(udt,'<none>'); end if;
+  if exists (select 1 from pg_constraint where conrelid='public.quality_signals'::regclass and contype='c'
+              and pg_get_constraintdef(oid) ilike '%signal_class%in%') then
+    raise exception 'FAIL: quality_signals still has a signal_class CHECK'; end if;
+  raise notice 'S1 metering.signal_class enum + column, no leftover CHECK ✓';
+end $$;
+
 \echo '== enum conversion tests done =='

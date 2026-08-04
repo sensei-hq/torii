@@ -1,5 +1,5 @@
 -- database/ddl/table/public/budget_holds.ddl
-set search_path to public, core, extensions;
+set search_path to public, core, governance, extensions;
 
 -- RW7 (DECISIONS §2 W2): the hard-reserve ledger. The gateway takes a row-locked
 -- reserve on a node path before a call (available = cap - spent - reserved at every
@@ -11,8 +11,7 @@ create table if not exists budget_holds (
 , budget_node_id  uuid         not null            -- the leaf node the caller maps to
 , path_node_ids   uuid[]       not null            -- every ancestor (incl. leaf) held
 , amount          numeric(12,6) not null           -- estimated reserve (worst-case tokens)
-, status          varchar(12)  not null default 'active'
-    check (status in ('active', 'committed', 'released', 'expired'))
+, status          governance.hold_status not null default 'active'
 , idempotency_key text                             -- dedupes retried reserves
 , created_at      timestamptz  not null default now()
 , expires_at      timestamptz  not null            -- TTL reaper releases stale holds

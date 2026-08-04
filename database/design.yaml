@@ -14,6 +14,7 @@ schemas:
   - core
   - config
   - metering
+  - governance
   - extensions
   - history
   - public

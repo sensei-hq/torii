@@ -1,10 +1,11 @@
--- database/ddl/table/core/profile_tenants.ddl
+-- database/ddl/table/core/memberships.ddl
 set search_path to core, extensions;
 
--- RW2: the built `role` enum is REMOVED (no authz reads it). This survives only
--- as the user↔tenant membership row; RBAC now lives in roles/role_permissions/
--- profile_roles. `active` flags the caller's active tenant for the JWT claim.
-create table if not exists profile_tenants (
+-- §D core rename: profile_tenants → memberships (name-only; stays in core). The built
+-- `role` enum is REMOVED (no authz reads it). This survives only as the user↔tenant
+-- membership row; RBAC now lives in roles/role_permissions/profile_roles. `active` flags
+-- the caller's active tenant for the JWT claim.
+create table if not exists memberships (
   profile_id   uuid        primary key references profiles(id) on delete cascade
 , tenant_id    uuid        not null references tenants(id) on delete restrict
 , status       core.membership_status not null default 'active'
@@ -13,10 +14,10 @@ create table if not exists profile_tenants (
 , assigned_by  varchar     not null
 );
 
-create index if not exists idx_profile_tenants_tenant
-  on profile_tenants(tenant_id);
+create index if not exists idx_memberships_tenant
+  on memberships(tenant_id);
 
-comment on table profile_tenants is
+comment on table memberships is
 'Maps user profiles to their tenant (one row per profile). RW2: the role enum is
 REMOVED — RBAC is the roles/role_permissions/profile_roles matrix (decision #4).
 - profile_id: FK core.profiles(id) (= auth.users.id)

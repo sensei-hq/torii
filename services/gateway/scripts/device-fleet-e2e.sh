@@ -29,7 +29,7 @@ SVC="${SERVICE_ROLE_KEY:-$(sbkey SERVICE_ROLE_KEY)}"
 
 # Resolve the seed owner's tenant + a non-`device.manage` role from the live DB (no hardcoded ids).
 OW=$(psql "$DB" -tAc "select id from auth.users where email='$EMAIL'")
-T=$(psql "$DB" -tAc "select tenant_id from core.profile_tenants where profile_id='$OW' and status='active' limit 1")
+T=$(psql "$DB" -tAc "select tenant_id from core.memberships where profile_id='$OW' and status='active' limit 1")
 MR=$(psql "$DB" -tAc "select role_id from core.effective_roles er where er.tenant_id='$T' and er.key='member' limit 1")
 [ -n "$OW" ] && [ -n "$T" ] && [ -n "$MR" ] || { echo "FAIL: could not resolve owner/tenant/member-role (is the owner seeded?)"; exit 1; }
 
@@ -58,7 +58,7 @@ OLD2H=$(date -u -v-2H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '-2 hours' +
 NEW30=$(date -u -v-30S +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '-30 seconds' +%Y-%m-%dT%H:%M:%SZ)
 psql "$DB" -v ON_ERROR_STOP=1 -q <<SQL || { echo "FAIL: fixture setup"; exit 1; }
 insert into core.profiles(id) values ('$MEMBER') on conflict do nothing;
-insert into core.profile_tenants(profile_id, tenant_id, status, active, assigned_by)
+insert into core.memberships(profile_id, tenant_id, status, active, assigned_by)
   values ('$MEMBER','$T','active', true, 'device-fleet-e2e') on conflict do nothing;
 insert into core.profile_roles(tenant_id, profile_id, role_id, assigned_by)
   values ('$T','$MEMBER','$MR','device-fleet-e2e') on conflict do nothing;

@@ -562,7 +562,7 @@ pub async fn rbac_assign_role(
     // caller's tenant, else 404 — no cross-tenant `profile_roles` insert and (with
     // the bump below now gated on this) no cross-tenant claims_version DoS (#9).
     let member: bool = sqlx::query_scalar(
-        "select exists(select 1 from core.profile_tenants \
+        "select exists(select 1 from core.memberships \
            where profile_id = $1 and tenant_id = $2 and status = 'active')",
     )
     .bind(body.profile_id)
@@ -680,7 +680,7 @@ pub async fn rbac_unassign_role(
     // target must be an ACTIVE member of the caller's tenant (else 404 — no
     // cross-tenant delete + no cross-tenant claims_version DoS).
     let member: bool = sqlx::query_scalar(
-        "select exists(select 1 from core.profile_tenants \
+        "select exists(select 1 from core.memberships \
            where profile_id = $1 and tenant_id = $2 and status = 'active')",
     )
     .bind(body.profile_id)
@@ -1344,7 +1344,7 @@ pub async fn orgs_create(
     }
 
     let has_tenant: bool = sqlx::query_scalar(
-        "select exists(select 1 from core.profile_tenants where profile_id = $1)",
+        "select exists(select 1 from core.memberships where profile_id = $1)",
     )
     .bind(actor)
     .fetch_one(&state.pool)
@@ -1387,7 +1387,7 @@ pub async fn orgs_create(
 
     let steps: Result<(), sqlx::Error> = async {
         sqlx::query(
-            "insert into core.profile_tenants (profile_id, tenant_id, assigned_by) \
+            "insert into core.memberships (profile_id, tenant_id, assigned_by) \
              values ($1, $2, 'self_create')",
         )
         .bind(actor)
@@ -1481,7 +1481,7 @@ pub async fn orgs_transfer_ownership(
         return (StatusCode::BAD_REQUEST, "you are already the owner").into_response();
     }
     let target_member: bool = sqlx::query_scalar(
-        "select exists(select 1 from core.profile_tenants \
+        "select exists(select 1 from core.memberships \
            where profile_id = $1 and tenant_id = $2 and status = 'active')",
     )
     .bind(body.profile_id)
@@ -2443,7 +2443,7 @@ mod tests {
         let name = "Acme, Inc.";
         assert_eq!(super::slugify(name), "acme-inc"); // base slug under test
 
-        // Caller profile (FK target for profile_tenants + the claims_version bump).
+        // Caller profile (FK target for memberships + the claims_version bump).
         sqlx::query("insert into core.profiles (id) values ($1)")
             .bind(actor).execute(&pool).await.unwrap();
         // A pre-existing org already owns the 'acme-inc' slug → forces a collision.
@@ -2460,7 +2460,7 @@ mod tests {
         let tenant = super::insert_tenant_dedup_slug(&mut tx, name, &actor.to_string()).await
             .expect("slug collision must dedup, not error (savepoint must un-poison the tx)");
         // The rest of the seeding must still succeed on the SAME (un-poisoned) outer tx.
-        sqlx::query("insert into core.profile_tenants (profile_id,tenant_id,assigned_by) values ($1,$2,'self_create')")
+        sqlx::query("insert into core.memberships (profile_id,tenant_id,assigned_by) values ($1,$2,'self_create')")
             .bind(actor).bind(tenant).execute(&mut *tx).await.unwrap();
         sqlx::query("insert into core.profile_roles (tenant_id,profile_id,role_id,assigned_by) values ($1,$2,$3,'self_create')")
             .bind(tenant).bind(actor).bind(owner_role).execute(&mut *tx).await.unwrap();
@@ -2489,7 +2489,7 @@ mod tests {
         assert_eq!(cv, 1, "claims_version must be bumped");
         // (c) the already-has-tenant guard (the 409 condition) now trips.
         let has_tenant: bool = sqlx::query_scalar(
-            "select exists(select 1 from core.profile_tenants where profile_id=$1)")
+            "select exists(select 1 from core.memberships where profile_id=$1)")
             .bind(actor).fetch_one(&pool).await.unwrap();
         assert!(has_tenant, "caller now belongs to an org (a re-create would 409)");
 
@@ -2510,7 +2510,7 @@ mod tests {
             "an aborted tx poisons the retry — the bug the savepoint fixes");
         let _ = bad.rollback().await;
 
-        // cleanup: delete the profile first (cascades memberships + role grants — profile_tenants
+        // cleanup: delete the profile first (cascades memberships + role grants — memberships
         // FKs tenants ON DELETE RESTRICT), then the tenants (cascades budget_nodes).
         sqlx::query("delete from core.profiles where id=$1").bind(actor).execute(&pool).await.unwrap();
         sqlx::query("delete from core.tenants where id = any($1)")

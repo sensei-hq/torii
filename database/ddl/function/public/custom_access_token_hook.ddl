@@ -21,7 +21,7 @@ begin
   -- Active-tenant membership (single-valued tenant_id claim keeps RLS simple).
   select pt.tenant_id
     into v_tenant
-    from core.profile_tenants pt
+    from core.memberships pt
    where pt.profile_id = v_user
      and pt.active = true
      and pt.status = 'active';

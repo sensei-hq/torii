@@ -31,7 +31,7 @@ begin;
   insert into core.profiles (id) values
     ('aaaaaaaa-0000-0000-0000-000000000001'),
     ('aaaaaaaa-0000-0000-0000-000000000002') on conflict do nothing;
-  insert into core.profile_tenants (profile_id, tenant_id, assigned_by) values
+  insert into core.memberships (profile_id, tenant_id, assigned_by) values
     ('aaaaaaaa-0000-0000-0000-000000000001', 'bbbbbbbb-0000-0000-0000-000000000000', 't'),
     ('aaaaaaaa-0000-0000-0000-000000000002', 'bbbbbbbb-0000-0000-0000-000000000000', 't')
     on conflict (profile_id) do nothing;

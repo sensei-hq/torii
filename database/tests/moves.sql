@@ -164,4 +164,38 @@ begin
   raise notice 'M-core-2 apikeys_for_tenant shield view (no secret) + contract ✓';
 end $$;
 
+\echo '== §D core rename: core.memberships =='
+
+-- M-core-3 — profile_tenants renamed → core.memberships (name-only, stays in core); the
+-- membership_status enum + RLS survived, and NO orphan old-name policy lingers. No shield view:
+-- memberships has zero external readers (auth fns + service_role gateway only), so nothing to shield.
+do $$
+begin
+  if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                  where n.nspname='core' and c.relname='memberships' and c.relkind='r') then
+    raise exception 'FAIL: core.memberships table missing'; end if;
+  if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+              where n.nspname='core' and c.relname='profile_tenants') then
+    raise exception 'FAIL: core.profile_tenants still exists (rename incomplete)'; end if;
+  if not (select relrowsecurity from pg_class where oid='core.memberships'::regclass) then
+    raise exception 'FAIL: RLS disabled on core.memberships after rename'; end if;
+  -- status is still the membership_status enum — the JWT hook + has_capability `= 'active'` depend on it.
+  if (select udt_name from information_schema.columns
+        where table_schema='core' and table_name='memberships' and column_name='status')
+     is distinct from 'membership_status' then
+    raise exception 'FAIL: core.memberships.status is not the membership_status enum'; end if;
+  -- the carried-over old-name policies must be gone; only the memberships_* policies remain. A lingering
+  -- profile_tenants_read/_auth_admin would double-cover the table (the rename orphan-policy footgun).
+  if exists (select 1 from pg_policies where schemaname='core' and tablename='memberships'
+              and policyname in ('profile_tenants_read','profile_tenants_auth_admin')) then
+    raise exception 'FAIL: orphan profile_tenants_* policy lingers on core.memberships'; end if;
+  if not exists (select 1 from pg_policies where schemaname='core' and tablename='memberships'
+                  and policyname='memberships_read') then
+    raise exception 'FAIL: memberships_read policy missing'; end if;
+  if not exists (select 1 from pg_policies where schemaname='core' and tablename='memberships'
+                  and policyname='memberships_auth_admin') then
+    raise exception 'FAIL: memberships_auth_admin policy missing'; end if;
+  raise notice 'M-core-3 profile_tenants→core.memberships renamed, enum+RLS intact, no orphan policy ✓';
+end $$;
+
 \echo '== §D moves tests done =='

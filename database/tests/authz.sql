@@ -323,7 +323,7 @@ begin;
     member_r  uuid := (select role_id from core.effective_roles where tenant_id = t and key = 'member');
   begin
     insert into core.profiles(id) values (owner_p),(member_p) on conflict do nothing;
-    insert into core.profile_tenants(profile_id, tenant_id, status, active, assigned_by)
+    insert into core.memberships(profile_id, tenant_id, status, active, assigned_by)
       values (owner_p,t,'active',true,'authz'),(member_p,t,'active',true,'authz') on conflict do nothing;
     insert into core.profile_roles(tenant_id, profile_id, role_id, assigned_by)
       values (t,owner_p,owner_r,'authz'),(t,member_p,member_r,'authz') on conflict do nothing;

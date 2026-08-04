@@ -5,7 +5,7 @@ language plpgsql
 as
 $$
 begin
-  insert into config.routers(
+  insert into catalog.routers(
      name, display_name, description, router_type
    , website_url, documentation_url, api_base_url, api_key_env_var
    , authentication_type, default_headers, supported_auth_methods
@@ -26,7 +26,7 @@ begin
        , coalesce(stg.modified_by, current_user)
     from staging.routers stg
    where not exists (select 1
-                       from config.routers r
+                       from catalog.routers r
                       where r.name        = trim(stg.name)
                         and r.modified_at > stg.modified_at)
       on conflict(name)

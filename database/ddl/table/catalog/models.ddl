@@ -1,5 +1,8 @@
-set search_path to config, public, extensions;
+-- database/ddl/table/catalog/models.ddl
+set search_path to catalog, extensions;
 
+-- §D move: catalog.models → catalog.models (config→catalog). Model catalog; provider_id FK →
+-- catalog.providers (intra-schema). Global reference data (no tenant_id, no RLS).
 create table if not exists models (
   id                       uuid primary key default uuid_generate_v4()
 , provider_id              uuid

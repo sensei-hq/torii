@@ -138,6 +138,11 @@ create policy mcp_server_tools_read on device.mcp_server_tools for select to aut
 -- ── (D) config catalog + tenant read grants (RW10 fix: UIs were permission-denied)
 grant usage on schema config to authenticated;
 grant select on all tables in schema config to authenticated;
+-- catalog: the model/router/provider catalog moved config→catalog (§D). Bulk-grant like config so the
+-- reference tables (routers/providers/models/model_endpoints/model_capabilities/capability_types) stay
+-- readable by authenticated on a FRESH build (the config bulk grant above no longer reaches them).
+grant usage on schema catalog to authenticated;
+grant select on all tables in schema catalog to authenticated;
 grant select on core.tenants to authenticated;
 alter table core.tenants enable row level security;
 drop policy if exists tenants_self on core.tenants;

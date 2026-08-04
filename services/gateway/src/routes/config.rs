@@ -147,8 +147,8 @@ async fn assemble_snapshot(pool: &sqlx::PgPool, tenant: Uuid) -> sqlx::Result<Va
                   coalesce(r.name, '—') as router, coalesce(m.full_name, '—') as model \
              from public.fallback_chain_models fcm \
              join public.fallback_chains fc on fc.id = fcm.fallback_chain_id \
-             left join config.models m on m.id = fcm.model_id \
-             left join config.routers r on r.id = fcm.router_id \
+             left join catalog.models m on m.id = fcm.model_id \
+             left join catalog.routers r on r.id = fcm.router_id \
             where fcm.tenant_id = $1) t",
     )
     .bind(tenant)
@@ -158,7 +158,7 @@ async fn assemble_snapshot(pool: &sqlx::PgPool, tenant: Uuid) -> sqlx::Result<Va
     let catalog: Value = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.full_name), '[]'::json) from ( \
            select m.full_name, coalesce(tms.enabled, true) as enabled \
-             from config.models m \
+             from catalog.models m \
              left join public.tenant_model_state tms \
                on tms.model_full_name = m.full_name and tms.tenant_id = $1 \
             where m.deprecated_on is null) t",

@@ -1,5 +1,5 @@
--- database/ddl/table/config/model_capabilities.ddl
-set search_path to config, extensions;
+-- database/ddl/table/catalog/model_capabilities.ddl
+set search_path to catalog, extensions;
 
 create table if not exists model_capabilities (
   id                       uuid primary key default uuid_generate_v4()

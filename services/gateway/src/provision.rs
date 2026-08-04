@@ -1,7 +1,7 @@
 //! DB auto-provision on startup via the `dbd-core` library (mirrors how the sensei daemon
 //! provisions): fetch the schema from a GitHub ref → `apply` (DDL) → `import` (seed) → apply
 //! RLS `policies`. Runs before the config loader queries the DB, so a fresh/empty prod Supabase
-//! becomes usable on first boot instead of crash-looping on "relation config.routers not found".
+//! becomes usable on first boot instead of crash-looping on "relation catalog.routers not found".
 //!
 //! Enabled by `TORII_DB_SCHEMA_SOURCE` — a dbd source string `owner/repo/path[@ref]`
 //! (e.g. `sensei-hq/torii/database@main`) or an absolute local directory. **Unset ⇒ skipped**
@@ -67,19 +67,19 @@ pub async fn maybe_provision(pool: &PgPool, db_url: &str) -> anyhow::Result<()> 
     result
 }
 
-/// True once the catalog is **seeded** — `config.routers` exists AND has rows. dbd runs apply
+/// True once the catalog is **seeded** — `catalog.routers` exists AND has rows. dbd runs apply
 /// (schema) and import (seed) as SEPARATE transactions, so a created-but-empty table (apply
 /// committed, import didn't) must NOT count as provisioned — else a failed import would be
 /// skipped forever. Absent table OR zero rows ⇒ (re)provision (deploy is idempotent).
 async fn catalog_seeded(pool: &PgPool) -> anyhow::Result<bool> {
-    let exists: Option<String> = sqlx::query_scalar("select to_regclass('config.routers')::text")
+    let exists: Option<String> = sqlx::query_scalar("select to_regclass('catalog.routers')::text")
         .fetch_one(pool)
         .await
         .context("db provision: catalog existence check")?;
     if exists.is_none() {
         return Ok(false);
     }
-    let rows: i64 = sqlx::query_scalar("select count(*) from config.routers")
+    let rows: i64 = sqlx::query_scalar("select count(*) from catalog.routers")
         .fetch_one(pool)
         .await
         .context("db provision: catalog seed check")?;

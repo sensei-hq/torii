@@ -15,8 +15,9 @@ grant usage on schema metering to authenticated, service_role;
 -- governance: new domain schema (enum home for budget_period/enforcement/hold_status/
 -- request_status; policy tables land in a later phase).
 grant usage on schema governance to authenticated, service_role;
--- catalog: new domain schema (enum home for router_type/auth_type/override_scope/breaker_state;
--- config.routers + model_overrides + provider_health move here in a later phase).
+-- catalog: model/router/provider catalog + capability lookups. routers/providers/models/
+-- model_endpoints/model_capabilities/capability_types moved here (§D); chains/overrides/provider_health
+-- land in later catalog slices. Table SELECT grants for authenticated are bulk-granted in rework.sql.
 grant usage on schema catalog to authenticated, service_role;
 -- device: new domain schema (enum home for mcp_transport/mcp_scope/device_status;
 -- mcp_servers + devices move here in a later phase).

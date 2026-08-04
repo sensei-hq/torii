@@ -6,8 +6,8 @@ create table if not exists fallback_chain_models (
     references core.tenants(id) on delete cascade
 , id                 uuid    not null default gen_random_uuid()
 , fallback_chain_id  uuid    not null
-, router_id          uuid    not null references config.routers(id)
-, model_id           uuid    not null references config.models(id)
+, router_id          uuid    not null references catalog.routers(id)
+, model_id           uuid    not null references catalog.models(id)
 , sequence_order     integer not null
 , max_retries        integer not null default 1
 , is_active          boolean not null default true

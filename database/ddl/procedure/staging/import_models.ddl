@@ -5,7 +5,7 @@ language plpgsql
 as
 $$
 begin
-  insert into config.models(
+  insert into catalog.models(
      provider_id, name, version, variant, full_name
    , display_name, description, context_window, max_output_tokens
    , training_data_cutoff, parameters_count, license_type
@@ -24,10 +24,10 @@ begin
        , coalesce(stg.modified_at, now())
        , coalesce(stg.modified_by, current_user)
     from staging.models stg
-   inner join config.providers p
+   inner join catalog.providers p
       on p.name = trim(stg.provider_name)
    where not exists (select 1
-                       from config.models m
+                       from catalog.models m
                       where m.provider_id = p.id
                         and m.name        = lower(trim(stg.name))
                         and m.version     = lower(trim(stg.version))

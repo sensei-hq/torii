@@ -720,7 +720,7 @@ mod gate {
         let chain = Uuid::new_v4();
         let cap_id: Uuid = sqlx::query_scalar("select id from catalog.capability_types limit 1")
             .fetch_one(&pool).await.expect("a seeded capability");
-        let router_id: Uuid = sqlx::query_scalar("select id from config.routers limit 1")
+        let router_id: Uuid = sqlx::query_scalar("select id from catalog.routers limit 1")
             .fetch_one(&pool).await.expect("a seeded router");
 
         sqlx::query("insert into core.tenants (id, name, slug, modified_by) values ($1,'gate','gate-'||$1,'test')")
@@ -729,9 +729,9 @@ mod gate {
                      values ($1,$2,'team','Gate Team',100,'test')")
             .bind(t).bind(team).execute(&pool).await.unwrap();
         // priced cloud chain owned by the tenant → the local call's counterfactual
-        sqlx::query("insert into config.models (id,name,version) values ($1,'gate-cloud','1')")
+        sqlx::query("insert into catalog.models (id,name,version) values ($1,'gate-cloud','1')")
             .bind(model).execute(&pool).await.unwrap();
-        sqlx::query("insert into config.model_endpoints (id,model_id,router_id,capability_id,endpoint_url,cost_per_input_token,cost_per_output_token,is_active) \
+        sqlx::query("insert into catalog.model_endpoints (id,model_id,router_id,capability_id,endpoint_url,cost_per_input_token,cost_per_output_token,is_active) \
                      values (gen_random_uuid(),$1,$2,$3,'http://t',0.00001,0.00003,true)")
             .bind(model).bind(router_id).bind(cap_id).execute(&pool).await.unwrap();
         sqlx::query("insert into public.fallback_chains (id,tenant_id,name,capability_id,is_active,modified_by) \
@@ -815,8 +815,8 @@ mod gate {
             "delete from public.fallback_chain_models where tenant_id=$1",
             "delete from public.fallback_chains where tenant_id=$1",
         ] { sqlx::query(q).bind(t).execute(&pool).await.unwrap(); }
-        sqlx::query("delete from config.model_endpoints where model_id=$1").bind(model).execute(&pool).await.unwrap();
-        sqlx::query("delete from config.models where id=$1").bind(model).execute(&pool).await.unwrap();
+        sqlx::query("delete from catalog.model_endpoints where model_id=$1").bind(model).execute(&pool).await.unwrap();
+        sqlx::query("delete from catalog.models where id=$1").bind(model).execute(&pool).await.unwrap();
         sqlx::query("delete from core.tenants where id=$1").bind(t).execute(&pool).await.unwrap();
     }
 }

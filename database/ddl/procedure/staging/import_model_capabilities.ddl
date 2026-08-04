@@ -5,7 +5,7 @@ language plpgsql
 as
 $$
 begin
-  insert into config.model_capabilities(
+  insert into catalog.model_capabilities(
      model_id, capability_id
    , capability_details, performance_metrics, limitations
    , supported, verified_by
@@ -20,12 +20,12 @@ begin
        , coalesce(stg.modified_at, now())
        , coalesce(stg.modified_by, current_user)
     from staging.model_capabilities stg
-   inner join config.models mdl
+   inner join catalog.models mdl
       on mdl.full_name = lower(trim(stg.model_full_name))
    inner join catalog.capability_types cap
       on cap.name = trim(stg.capability_name)
    where not exists (select 1
-                       from config.model_capabilities mc
+                       from catalog.model_capabilities mc
                       where mc.model_id      = mdl.id
                         and mc.capability_id = cap.id
                         and mc.modified_at  > stg.modified_at)

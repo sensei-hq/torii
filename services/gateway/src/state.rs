@@ -152,7 +152,7 @@ mod integration {
         // End-to-end: a cache built on the prod KEK stores + resolves a BYOK key.
         let cache = TenantKeyCache::new(Some(Vault::new(kek, PostgresVaultStore::new(pool.clone()))));
         let tenant = Uuid::new_v4();
-        let router: Uuid = sqlx::query_scalar("select id from config.routers where name = 'openai'")
+        let router: Uuid = sqlx::query_scalar("select id from catalog.routers where name = 'openai'")
             .fetch_one(&pool)
             .await
             .unwrap();

@@ -9,7 +9,7 @@ create table if not exists router_credentials (
   tenant_id         uuid        not null
     references core.tenants(id) on delete cascade
 , id                uuid        not null default gen_random_uuid()
-, router_id         uuid        not null references config.routers(id)
+, router_id         uuid        not null references catalog.routers(id)
 , encrypted_api_key bytea
     -- [12B IV][16B tag][ct], encrypted with the tenant DEK (core.tenant_keys). NULL for an
     -- oauth row (which carries encrypted_oauth instead) — enforced by the blob-by-type CHECK.

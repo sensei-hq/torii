@@ -164,7 +164,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Load the real GatewayConfig from the Postgres config tables (Task 4).
-    // Reads config.routers, config.models, and public.fallback_chains for the
+    // Reads catalog.routers, catalog.models, and public.fallback_chains for the
     // platform tenant; logs router/model/chain counts on success.
     let config = config_loader::load_gateway_config(&pool).await?;
 

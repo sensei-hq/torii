@@ -5,7 +5,7 @@ language plpgsql
 as
 $$
 begin
-  insert into config.model_endpoints(
+  insert into catalog.model_endpoints(
      model_id, router_id, capability_id
    , region, endpoint_url, router_model_id, priority
    , cost_per_input_token, cost_per_output_token, cost_per_request
@@ -46,17 +46,17 @@ begin
        , coalesce(stg.modified_at, now())
        , coalesce(stg.modified_by, current_user)
     from staging.model_endpoints stg
-   inner join config.routers r
+   inner join catalog.routers r
       on r.name = trim(stg.router_name)
-   inner join config.providers p
+   inner join catalog.providers p
       on p.name = trim(stg.provider_name)
-   inner join config.models m
+   inner join catalog.models m
       on m.provider_id = p.id
      and m.full_name = lower(trim(stg.model_full_name))
    inner join catalog.capability_types c
       on c.name = trim(stg.capability_name)
    where not exists (select 1
-                       from config.model_endpoints me
+                       from catalog.model_endpoints me
                       where me.router_id = r.id
                         and me.model_id = m.id
                         and me.capability_id = c.id

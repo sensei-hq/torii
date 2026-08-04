@@ -94,7 +94,7 @@ pub async fn get_audit(
     let rows: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.created_at desc), '[]'::json) from ( \
            select id, actor_id, action, target_type, target_id, created_at \
-             from public.audit_events where tenant_id = $1 \
+             from audit.audit_events_for_tenant where tenant_id = $1 \
             order by created_at desc limit $2) t",
     )
     .bind(tenant)

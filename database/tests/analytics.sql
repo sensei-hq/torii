@@ -324,7 +324,7 @@ begin;
     raise notice 'A4 reconstructability + p95 ✓';
 
     -- drift: corrupt a bucket, reconcile → corrected AND one analytics.reconciled audit row.
-    select count(*) into n0 from public.audit_events
+    select count(*) into n0 from audit.audit_events
       where tenant_id='00000000-0000-0000-0000-000000000000' and action='analytics.reconciled';
     update public.analytics_usage_daily set calls = calls + 100
       where budget_node_id='b0de0000-0000-0000-0000-0000000000b1';
@@ -332,7 +332,7 @@ begin;
     if coalesce((select calls from public.analytics_usage_daily
                   where budget_node_id='b0de0000-0000-0000-0000-0000000000b1'),-1) <> 3 then
       raise exception 'FAIL A4 drift: corrupted bucket not corrected'; end if;
-    if (select count(*) from public.audit_events
+    if (select count(*) from audit.audit_events
           where tenant_id='00000000-0000-0000-0000-000000000000' and action='analytics.reconciled') <> n0 + 1 then
       raise exception 'FAIL A4 drift: analytics.reconciled audit row not emitted for the drift'; end if;
     raise notice 'A4 drift correction + audit ✓';

@@ -1,6 +1,9 @@
--- database/ddl/table/public/audit_events.ddl
-set search_path to public, core, extensions;
+-- database/ddl/table/audit/audit_events.ddl
+set search_path to audit, core, extensions;
 
+-- §D Phase 1 MOVE: relocated public.audit_events → audit.audit_events (mechanical schema move,
+-- shielded by the audit_events_for_tenant read-view). Append-only ledger; the audit_events_append_only
+-- trigger (forbid_mutation) + RLS live in policies/governance.sql + ddl/function/forbid_mutation.
 create table if not exists audit_events (
   tenant_id    uuid not null
     references core.tenants(id) on delete cascade
@@ -19,6 +22,6 @@ create index if not exists idx_audit_events_created on audit_events(tenant_id, c
 create index if not exists idx_audit_events_action  on audit_events(tenant_id, action);
 
 comment on table audit_events is
-'Append-only audit ledger. Clients may INSERT + SELECT within their tenant — no
-UPDATE/DELETE (enforced by grants + RLS in policies/governance.sql). service_role
-handles retention; O1 streams events to SIEM.';
+'Append-only audit ledger (audit domain). Clients INSERT + SELECT within their tenant — no
+UPDATE/DELETE (grants + RLS in policies/governance.sql + the append-only trigger). service_role
+handles retention; O1 streams events to SIEM. Read by the gateway via audit_events_for_tenant.';

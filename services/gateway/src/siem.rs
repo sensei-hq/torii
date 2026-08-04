@@ -82,7 +82,7 @@ async fn stream_channel(
     // 2. Next batch strictly after the cursor, in monotonic order.
     let events = sqlx::query(
         "select id, actor_id, action, target_type, target_id, created_at \
-           from public.audit_events \
+           from audit.audit_events \
           where tenant_id = $1 and (created_at, id) > ($2, $3) \
           order by created_at asc, id asc limit $4",
     )

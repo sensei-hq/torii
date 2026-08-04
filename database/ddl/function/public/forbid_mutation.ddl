@@ -1,5 +1,5 @@
 -- database/ddl/function/public/forbid_mutation.ddl
-set search_path to public, extensions;
+set search_path to public, audit, extensions;
 
 -- O1 (P6): append-only audit ledger. A BEFORE UPDATE/DELETE trigger raises, so
 -- `audit_events` is immutable even to `service_role` / the gateway superuser role —
@@ -21,9 +21,9 @@ begin
 end;
 $$;
 
-drop trigger if exists audit_events_append_only on public.audit_events;
+drop trigger if exists audit_events_append_only on audit.audit_events;
 create trigger audit_events_append_only
-  before update or delete on public.audit_events
+  before update or delete on audit.audit_events
   for each row execute function public.forbid_mutation();
 
 comment on function public.forbid_mutation() is

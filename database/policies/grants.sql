@@ -84,5 +84,5 @@ grant select on core.capabilities to authenticated;   -- global capability catal
 
 -- (4) audit_events: append-only — SELECT + INSERT (actor-bound, governance.sql);
 -- UPDATE/DELETE are never granted to authenticated.
-grant select, insert on public.audit_events to authenticated;
-revoke update, delete on public.audit_events from authenticated;
+grant select, insert on audit.audit_events to authenticated;
+revoke update, delete on audit.audit_events from authenticated;

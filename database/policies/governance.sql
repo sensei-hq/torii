@@ -4,19 +4,19 @@
 -- audit_events: append-only for clients — SELECT + INSERT within tenant, never
 -- UPDATE/DELETE. RW8: INSERT binds actor_id = auth.uid() so a client CANNOT forge
 -- another user's actor. service_role (the gateway) may write system events freely.
-alter table public.audit_events enable row level security;
-drop policy if exists audit_events_select on public.audit_events;
-create policy audit_events_select on public.audit_events for select to authenticated
+alter table audit.audit_events enable row level security;
+drop policy if exists audit_events_select on audit.audit_events;
+create policy audit_events_select on audit.audit_events for select to authenticated
   using (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid);
-drop policy if exists audit_events_insert on public.audit_events;
-create policy audit_events_insert on public.audit_events for insert to authenticated
+drop policy if exists audit_events_insert on audit.audit_events;
+create policy audit_events_insert on audit.audit_events for insert to authenticated
   with check (
     tenant_id = (auth.jwt() ->> 'tenant_id')::uuid
     and actor_id = auth.uid()            -- RW8: no forged attribution
   );
-revoke all on public.audit_events from anon, authenticated, public;
-grant select, insert on public.audit_events to authenticated;
-grant select, insert, update, delete on public.audit_events to service_role;
+revoke all on audit.audit_events from anon, authenticated, public;
+grant select, insert on audit.audit_events to authenticated;
+grant select, insert, update, delete on audit.audit_events to service_role;
 
 -- devices: a user sees own devices; device.manage capability sees all in-tenant.
 -- RW2: resolve via core.has_capability (the `role` JWT claim is gone).

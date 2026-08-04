@@ -5,6 +5,10 @@ set -euo pipefail
 : "${DATABASE_URL:?set DATABASE_URL, e.g. postgresql://postgres:postgres@127.0.0.1:55322/postgres}"
 here="$(cd "$(dirname "$0")" && pwd)"
 
+# Static DDL drift-guard first (no DB needed) — fails fast if a column was declared via a
+# trailing ALTER (dbd-invisible → reconcile would drop it). See check-declared-shape.sh.
+bash "$here/check-declared-shape.sh"
+
 # Each harness raises on any failed assertion (ON_ERROR_STOP) → non-zero exit.
 suite=(
   rls.sql       # F1: RLS coverage + cross-tenant/confidential/secrets isolation

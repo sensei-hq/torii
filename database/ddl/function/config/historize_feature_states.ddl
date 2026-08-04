@@ -46,7 +46,7 @@ begin
   , new.modified_by
   , new.modified_at
   , null
-  , tg_op
+  , tg_op::audit.operation
   , new.modified_at)
   on conflict (state_id, effective_from, effective_to)
   do nothing;

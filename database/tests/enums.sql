@@ -568,4 +568,55 @@ begin
   raise notice 'D2 three device columns are the enums, no leftover CHECK ✓';
 end $$;
 
+-- ═════════════════════════════════════════════════════════════════════════
+-- audit enums: alert_severity (alert_rules + alert_events) · channel_kind
+-- (notification_channels) · operation (history.past_feature_states, UPPERCASE).
+-- alert_kind DEFERRED (no CHECK/data/code; value set unratified).
+-- ═════════════════════════════════════════════════════════════════════════
+\echo '== enum conversion: audit enums =='
+
+do $$
+declare
+  specs text[][] := array[
+    ['alert_severity','info,warning,critical'],
+    ['channel_kind','email,slack,webhook,siem'],
+    ['operation','INSERT,UPDATE,DELETE']];
+  i int; nm text; want text; got text;
+begin
+  for i in 1 .. array_length(specs,1) loop
+    nm := specs[i][1]; want := specs[i][2];
+    if not exists (select 1 from pg_type t join pg_namespace n on n.oid=t.typnamespace
+                    where n.nspname='audit' and t.typname=nm and t.typtype='e') then
+      raise exception 'FAIL: enum audit.% does not exist', nm; end if;
+    select string_agg(e.enumlabel, ',' order by e.enumsortorder) into got
+      from pg_enum e join pg_type t on t.oid=e.enumtypid join pg_namespace n on n.oid=t.typnamespace
+     where n.nspname='audit' and t.typname=nm;
+    if got is distinct from want then raise exception 'FAIL: audit.% = %, expected %', nm, got, want; end if;
+  end loop;
+  raise notice 'AU1 three audit enums exist with expected values ✓';
+end $$;
+
+do $$
+declare
+  cols text[][] := array[
+    ['public','alert_rules','severity','alert_severity'],
+    ['public','alert_events','severity','alert_severity'],
+    ['public','notification_channels','kind','channel_kind'],
+    ['history','past_feature_states','operation','operation']];
+  i int; s text; t text; c text; want text; udt text;
+begin
+  for i in 1 .. array_length(cols,1) loop
+    s := cols[i][1]; t := cols[i][2]; c := cols[i][3]; want := cols[i][4];
+    select udt_name into udt from information_schema.columns
+     where table_schema=s and table_name=t and column_name=c;
+    if udt is distinct from want then
+      raise exception 'FAIL: %.%.% udt=% (expected %)', s, t, c, coalesce(udt,'<none>'), want; end if;
+  end loop;
+  if exists (select 1 from pg_constraint where contype='c'
+              and conrelid in ('public.alert_rules'::regclass,'public.notification_channels'::regclass)
+              and (pg_get_constraintdef(oid) ilike '%severity%in%' or pg_get_constraintdef(oid) ilike '%kind%in%')) then
+    raise exception 'FAIL: a leftover audit CHECK still exists'; end if;
+  raise notice 'AU2 four audit columns are the enums, no leftover CHECK ✓';
+end $$;
+
 \echo '== enum conversion tests done =='

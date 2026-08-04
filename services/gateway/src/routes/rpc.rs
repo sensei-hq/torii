@@ -999,7 +999,7 @@ pub async fn governance_set_feature(
         let mut tx = state.pool.begin().await?;
         sqlx::query(
             "delete from public.feature_policies \
-              where tenant_id = $1 and feature_key = $2 and scope_type = $3 \
+              where tenant_id = $1 and feature_key = $2 and scope_type = $3::governance.feature_scope \
                 and scope_id is not distinct from $4",
         )
         .bind(tenant)
@@ -1011,7 +1011,7 @@ pub async fn governance_set_feature(
         sqlx::query(
             "insert into public.feature_policies \
                (tenant_id, feature_key, scope_type, scope_id, state, modified_by) \
-             values ($1,$2,$3,$4,$5,$6)",
+             values ($1,$2,$3::governance.feature_scope,$4,$5::governance.feature_state,$6)",
         )
         .bind(tenant)
         .bind(&body.feature_key)
@@ -1066,7 +1066,7 @@ pub async fn governance_clear_feature(
     }
     let deleted = sqlx::query(
         "delete from public.feature_policies \
-          where tenant_id = $1 and feature_key = $2 and scope_type = $3 \
+          where tenant_id = $1 and feature_key = $2 and scope_type = $3::governance.feature_scope \
             and scope_id is not distinct from $4",
     )
     .bind(tenant)

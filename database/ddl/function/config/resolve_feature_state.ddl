@@ -56,7 +56,7 @@ begin
 
   -- 3. NON-LOCKED most-specific-wins: role > space > workspace; on a same-scope tie the more
   --    restrictive (default-off) wins.
-  select fp.state, fp.scope_type into v_state, v_scope
+  select fp.state::text, fp.scope_type::text into v_state, v_scope
     from public.feature_policies fp
    where fp.tenant_id = p_tenant and fp.feature_key = p_feature and fp.state <> 'locked'
      and ( (fp.scope_type = 'role' and fp.scope_id = any(p_role_ids))

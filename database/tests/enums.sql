@@ -467,4 +467,55 @@ begin
   raise notice 'A2 four core+access columns are the enums, no leftover CHECK ✓';
 end $$;
 
+-- ═════════════════════════════════════════════════════════════════════════
+-- governance enums: feature_scope + feature_state (feature_policies) · config_scope
+-- (settings.scope). redaction_action + enforcement_outcome DEFERRED (greenfield tables).
+-- ═════════════════════════════════════════════════════════════════════════
+\echo '== enum conversion: governance enums =='
+
+do $$
+declare
+  specs text[][] := array[
+    ['feature_scope','workspace,space,role'],
+    ['feature_state','locked,default-on,default-off,user-overridable'],
+    ['config_scope','workspace,space']];
+  i int; nm text; want text; got text;
+begin
+  for i in 1 .. array_length(specs,1) loop
+    nm := specs[i][1]; want := specs[i][2];
+    if not exists (select 1 from pg_type t join pg_namespace n on n.oid=t.typnamespace
+                    where n.nspname='governance' and t.typname=nm and t.typtype='e') then
+      raise exception 'FAIL: enum governance.% does not exist', nm; end if;
+    select string_agg(e.enumlabel, ',' order by e.enumsortorder) into got
+      from pg_enum e join pg_type t on t.oid=e.enumtypid join pg_namespace n on n.oid=t.typnamespace
+     where n.nspname='governance' and t.typname=nm;
+    if got is distinct from want then raise exception 'FAIL: governance.% = %, expected %', nm, got, want; end if;
+  end loop;
+  raise notice 'GV1 three governance enums exist with expected values ✓';
+end $$;
+
+do $$
+declare
+  cols text[][] := array[
+    ['feature_policies','scope_type','feature_scope'],
+    ['feature_policies','state','feature_state'],
+    ['settings','scope','config_scope']];
+  i int; t text; c text; want text; udt text;
+begin
+  for i in 1 .. array_length(cols,1) loop
+    t := cols[i][1]; c := cols[i][2]; want := cols[i][3];
+    select udt_name into udt from information_schema.columns
+     where table_schema='public' and table_name=t and column_name=c;
+    if udt is distinct from want then
+      raise exception 'FAIL: %.% udt=% (expected %)', t, c, coalesce(udt,'<none>'), want; end if;
+  end loop;
+  if exists (select 1 from pg_constraint where contype='c'
+              and conrelid in ('public.feature_policies'::regclass,'public.settings'::regclass)
+              and (pg_get_constraintdef(oid) ilike '%scope_type%in%'
+                or pg_get_constraintdef(oid) ilike '%state%in%'
+                or pg_get_constraintdef(oid) ilike '%scope%in%')) then
+    raise exception 'FAIL: a leftover governance CHECK still exists'; end if;
+  raise notice 'GV2 three governance columns are the enums, no leftover CHECK ✓';
+end $$;
+
 \echo '== enum conversion tests done =='

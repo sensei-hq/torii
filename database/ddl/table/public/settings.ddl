@@ -1,12 +1,11 @@
 -- database/ddl/table/public/settings.ddl
-set search_path to public, core, extensions;
+set search_path to public, core, governance, extensions;
 
 create table if not exists settings (
   tenant_id   uuid not null
     references core.tenants(id) on delete cascade
 , id          uuid not null default gen_random_uuid()
-, scope       varchar(20) not null default 'workspace'
-    check (scope in ('workspace', 'space'))
+, scope       governance.config_scope not null default 'workspace'
 , space_id    uuid                       -- required when scope = 'space'
 , key         varchar(100) not null
 , value       jsonb not null default '{}'

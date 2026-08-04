@@ -55,8 +55,8 @@ impl DocStore {
         sqlx::query(
             "insert into documents \
                (tenant_id, id, title, original_filename, content_type, scope, classification, \
-                space_id, collection_id, profile_id, status) \
-             values ($1,$2,$3,$4,$5,$6::content.document_scope,$7::core.classification_level,$8,$9,$10,'uploaded')",
+                space_id, collection_id, profile_id, lifecycle, stage) \
+             values ($1,$2,$3,$4,$5,$6::content.document_scope,$7::core.classification_level,$8,$9,$10,'pending','uploaded')",
         )
         .bind(tenant)
         .bind(doc_id)
@@ -235,20 +235,32 @@ impl DocStore {
         Ok(())
     }
 
+    /// Advance a document's pipeline state (§7-#5 split). `step` is the caller's fine-grained
+    /// stage ("parsing"/"redacting"/"chunking"/"embedding"/"indexing"/"queued"/"failed"); it is
+    /// mapped onto the stable `lifecycle` enum + the free-form `stage` column so the enum never
+    /// churns on a pipeline change. Terminal `completed` is set by `finalize`.
     pub async fn set_status(
         &self,
         tenant: Uuid,
         doc: Uuid,
-        status: &str,
+        step: &str,
         reason: Option<&str>,
     ) -> Result<(), RagError> {
+        let (lifecycle, stage): (&str, Option<&str>) = match step {
+            "failed" => ("failed", None),
+            "completed" => ("completed", None),
+            "queued" | "uploaded" | "pending" => ("pending", Some(step)),
+            other => ("processing", Some(other)),
+        };
         sqlx::query(
-            "update documents set status=$3, status_reason=$4, modified_at=now() \
+            "update documents set lifecycle=$3::content.document_lifecycle, stage=$4, \
+                    status_reason=$5, modified_at=now() \
              where tenant_id=$1 and id=$2",
         )
         .bind(tenant)
         .bind(doc)
-        .bind(status)
+        .bind(lifecycle)
+        .bind(stage)
         .bind(reason)
         .execute(&self.pool)
         .await?;
@@ -265,8 +277,8 @@ impl DocStore {
         embedding_model: &str,
     ) -> Result<(), RagError> {
         sqlx::query(
-            "update documents set status='completed', current_version_id=$3, chunk_count=$4, \
-                    embedding_model=$5, completed_at=now(), status_reason=null \
+            "update documents set lifecycle='completed', stage=null, current_version_id=$3, \
+                    chunk_count=$4, embedding_model=$5, completed_at=now(), status_reason=null \
              where tenant_id=$1 and id=$2",
         )
         .bind(tenant)

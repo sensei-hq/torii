@@ -15,7 +15,7 @@ declare
   hit boolean;
 begin
   select ('[' || string_agg('0.03', ',') || ']')::vector(1024) into v from generate_series(1,1024);
-  insert into documents(tenant_id, id, original_filename, content_type, classification, status)
+  insert into documents(tenant_id, id, original_filename, content_type, classification, lifecycle)
     values (t, d, 'a.md', 'text/markdown', 'internal', 'completed');
   -- insert content ONLY; tsv is a GENERATED column → written in the SAME row automatically
   insert into document_embeddings(tenant_id, id, document_id, version_id, chunk_sequence, content, embedding)
@@ -54,7 +54,7 @@ declare
 begin
   select ('[' || string_agg('0.05', ',') || ']')::vector(1024) into v from generate_series(1,1024);
   -- tenant A and tenant B each hold an IDENTICAL chunk (same vector + same content)
-  insert into documents(tenant_id, id, original_filename, content_type, classification, status) values
+  insert into documents(tenant_id, id, original_filename, content_type, classification, lifecycle) values
     (ta, da, 'a.md', 'text/markdown', 'internal', 'completed'),
     (tb, db, 'b.md', 'text/markdown', 'internal', 'completed');
   insert into document_embeddings(tenant_id, id, document_id, version_id, chunk_sequence, content, embedding) values
@@ -96,7 +96,7 @@ begin
     on conflict (id) do nothing;
   insert into spaces(tenant_id, id, name, owner_id, modified_by) values (t, sp, 'S', owner_u, 'test');
   insert into space_members(tenant_id, space_id, profile_id) values (t, sp, member_u);
-  insert into documents(tenant_id, id, original_filename, content_type, classification, status, space_id, profile_id) values
+  insert into documents(tenant_id, id, original_filename, content_type, classification, lifecycle, space_id, profile_id) values
     (t, d_pub,  'p.md', 'text/markdown', 'public',       'completed', sp, uploader),
     (t, d_conf, 'c.md', 'text/markdown', 'confidential', 'completed', sp, uploader),
     (t, d_rest, 'r.md', 'text/markdown', 'restricted',   'completed', sp, uploader);
@@ -148,7 +148,7 @@ declare
   saw_old boolean := false;
 begin
   select ('[' || string_agg('0.09', ',') || ']')::vector(1024) into v from generate_series(1,1024);
-  insert into documents(tenant_id, id, original_filename, content_type, classification, status)
+  insert into documents(tenant_id, id, original_filename, content_type, classification, lifecycle)
     values (t, d, 'v.md', 'text/markdown', 'internal', 'completed');
   insert into document_embeddings(tenant_id, id, document_id, version_id, chunk_sequence, content, embedding, superseded_at) values
     (t, live_chunk, d, gen_random_uuid(), 0, 'migration guide for the widget service', v, null),

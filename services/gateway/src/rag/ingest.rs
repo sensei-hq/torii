@@ -284,7 +284,7 @@ mod tests {
         ingestor.run(tenant, doc, owner).await.unwrap();
 
         // status = completed
-        let status: String = sqlx::query_scalar("select status from documents where tenant_id=$1 and id=$2")
+        let status: String = sqlx::query_scalar("select lifecycle::text from documents where tenant_id=$1 and id=$2")
             .bind(tenant).bind(doc).fetch_one(&pool).await.unwrap();
         assert_eq!(status, "completed");
 
@@ -316,7 +316,7 @@ mod tests {
         // re-ingest is idempotent: same version → chunks replaced (no version-scoped unique
         // collision), doc stays completed (regression guard for the re-ingest-collision finding).
         ingestor.run(tenant, doc, owner).await.unwrap();
-        let status2: String = sqlx::query_scalar("select status from documents where tenant_id=$1 and id=$2")
+        let status2: String = sqlx::query_scalar("select lifecycle::text from documents where tenant_id=$1 and id=$2")
             .bind(tenant).bind(doc).fetch_one(&pool).await.unwrap();
         assert_eq!(status2, "completed", "re-ingest did not stay completed (unique collision?)");
 

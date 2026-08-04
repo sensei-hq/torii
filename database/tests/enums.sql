@@ -122,4 +122,72 @@ begin
   raise notice 'E4 analytics coalesce/compare/filter/group over enum ✓';
 end $$;
 
+-- ═════════════════════════════════════════════════════════════════════════
+-- core.classification_level {public,internal,confidential,restricted}
+-- (documents.classification, spaces.classification, dataset_columns.sensitivity).
+-- ═════════════════════════════════════════════════════════════════════════
+\echo '== enum conversion: core.classification_level =='
+
+-- C1 — enum type exists with exactly the 4 fixed levels (order matters: low→high).
+do $$
+declare vals text;
+begin
+  if not exists (select 1 from pg_type t join pg_namespace n on n.oid=t.typnamespace
+                  where n.nspname='core' and t.typname='classification_level' and t.typtype='e')
+  then raise exception 'FAIL: enum type core.classification_level does not exist'; end if;
+  select string_agg(e.enumlabel, ',' order by e.enumsortorder) into vals
+    from pg_enum e join pg_type t on t.oid=e.enumtypid
+    join pg_namespace n on n.oid=t.typnamespace
+   where n.nspname='core' and t.typname='classification_level';
+  if vals is distinct from 'public,internal,confidential,restricted' then
+    raise exception 'FAIL: core.classification_level values = %, expected public,internal,confidential,restricted', vals; end if;
+  raise notice 'C1 core.classification_level enum {public,internal,confidential,restricted} ✓';
+end $$;
+
+-- C2 — the three migrated columns ARE the enum type, no leftover CHECK.
+do $$
+declare
+  cols text[][] := array[
+    ['documents','classification'],
+    ['spaces','classification'],
+    ['dataset_columns','sensitivity']];
+  i int; t text; c text; udt text;
+begin
+  for i in 1 .. array_length(cols,1) loop
+    t := cols[i][1]; c := cols[i][2];
+    select udt_name into udt from information_schema.columns
+     where table_schema='public' and table_name=t and column_name=c;
+    if udt is distinct from 'classification_level' then
+      raise exception 'FAIL: %.% udt=% (expected classification_level enum)', t, c, coalesce(udt,'<none>'); end if;
+  end loop;
+  if exists (select 1 from pg_constraint where contype='c'
+              and (pg_get_constraintdef(oid) ilike '%classification%in%'
+                or pg_get_constraintdef(oid) ilike '%sensitivity%in%')) then
+    raise exception 'FAIL: a leftover classification/sensitivity CHECK still exists'; end if;
+  raise notice 'C2 three columns are core.classification_level, no leftover CHECK ✓';
+end $$;
+
+-- C3 — write contract: un-cast text param fails, cast succeeds, bad label rejected.
+do $$
+declare bad boolean := false;
+begin
+  create temp table _cl_probe (lvl core.classification_level) on commit drop;
+  begin
+    execute 'insert into _cl_probe(lvl) values ($1)' using 'confidential'::text;
+    bad := true;
+  exception when others then null; end;
+  if bad then raise exception 'FAIL: un-cast text param accepted into classification_level column'; end if;
+
+  execute 'insert into _cl_probe(lvl) values ($1::core.classification_level)' using 'public'::text;
+  execute 'insert into _cl_probe(lvl) values ($1::core.classification_level)' using 'restricted'::text;
+
+  bad := false;
+  begin
+    execute 'insert into _cl_probe(lvl) values ($1::core.classification_level)' using 'secret'::text;
+    bad := true;
+  exception when others then null; end;
+  if bad then raise exception 'FAIL: invalid classification label "secret" accepted'; end if;
+  raise notice 'C3 write contract: un-cast fails, cast succeeds, bad label rejected ✓';
+end $$;
+
 \echo '== enum conversion tests done =='

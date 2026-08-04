@@ -1251,7 +1251,7 @@ pub async fn spaces_create(
     let id = Uuid::new_v4();
     let write = sqlx::query(
         "insert into public.spaces (tenant_id, id, name, classification, owner_id, modified_by) \
-         values ($1,$2,$3, coalesce($4,'confidential'), $5, $6)",
+         values ($1,$2,$3, coalesce($4,'confidential')::core.classification_level, $5, $6)",
     )
     .bind(tenant)
     .bind(id)
@@ -2151,7 +2151,7 @@ pub async fn documents_declassify(
         return (StatusCode::BAD_REQUEST, "invalid classification").into_response();
     }
     let write = sqlx::query(
-        "update public.documents set classification = $3, modified_at = now() \
+        "update public.documents set classification = $3::core.classification_level, modified_at = now() \
           where tenant_id = $1 and id = $2",
     )
     .bind(tenant)

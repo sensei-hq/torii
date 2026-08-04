@@ -1,5 +1,5 @@
 -- database/ddl/table/public/documents.ddl
-set search_path to public, extensions;
+set search_path to public, core, extensions;
 
 create table if not exists documents (
   tenant_id          uuid
@@ -14,8 +14,7 @@ create table if not exists documents (
 , profile_id         uuid
 , space_id           uuid
 , collection_id      uuid
-, classification     varchar(20)  not null default 'internal'
-    check (classification in ('public', 'internal', 'confidential', 'restricted'))
+, classification     core.classification_level not null default 'internal'
 , status             varchar(20)  not null default 'uploaded'
     -- fine pipeline stages; 'completed' stays the terminal value (similarity_search +
     -- hybrid_search + the W1/W2 admin screens filter on it). Redesign later splits this into

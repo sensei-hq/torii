@@ -7,8 +7,7 @@ create table if not exists dataset_columns (
 , dataset_id   uuid        not null
 , name         varchar(200) not null
 , data_type    varchar(40) not null default 'text'
-, sensitivity  varchar(16) not null default 'public'
-    check (sensitivity in ('public','internal','confidential','restricted'))
+, sensitivity  core.classification_level not null default 'public'
 , encrypted    boolean     not null default false
 , stats        jsonb       not null default '{}'
 , primary key (tenant_id, id)

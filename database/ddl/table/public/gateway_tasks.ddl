@@ -1,4 +1,4 @@
-set search_path to public, extensions;
+set search_path to public, core, extensions;
 
 create table if not exists gateway_tasks (
   tenant_id          uuid        not null
@@ -25,8 +25,7 @@ create table if not exists gateway_tasks (
 , currency           varchar(3)  not null default 'USD'
 , final_router       varchar(100)
 , final_model        varchar(100)
-, execution_location varchar(10)
-    check (execution_location in ('local', 'cloud'))
+, execution_location core.execution_location                          -- {local,cloud} enum
 , response_preview   text
 , error_category     varchar(100)
 , error_message      text

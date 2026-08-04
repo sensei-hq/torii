@@ -11,7 +11,7 @@ create table if not exists messages (
 , model              text
 , tier               text
 , cost_usd           numeric(12,6)
-, execution_location varchar(10) check (execution_location is null or execution_location in ('local', 'cloud'))
+, execution_location core.execution_location                             -- {local,cloud} enum (nullable)
 , created_at         timestamptz not null default now()
 , primary key (tenant_id, id)
 , foreign key (tenant_id, conversation_id) references conversations(tenant_id, id) on delete cascade

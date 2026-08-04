@@ -80,7 +80,7 @@ end $$;
 
 -- (3) Reference rows readable by any authenticated user.
 grant select on core.profiles to authenticated;      -- own row (RLS)
-grant select on core.capabilities to authenticated;   -- global capability catalog
+grant select on core.permissions to authenticated;    -- global capability catalog
 
 -- (4) audit_events: append-only — SELECT + INSERT (actor-bound, governance.sql);
 -- UPDATE/DELETE are never granted to authenticated.

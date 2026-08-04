@@ -8,7 +8,7 @@ set search_path to core, extensions;
 create table if not exists role_permissions (
   tenant_id   uuid     references tenants(id) on delete cascade   -- NULL ⇒ shared default grant
 , role_id     uuid     not null references roles(id) on delete cascade
-, capability  varchar  not null references capabilities(key)
+, capability  varchar  not null references permissions(key)
 , primary key (role_id, capability)
 );
 
@@ -17,4 +17,4 @@ create index if not exists idx_role_permissions_tenant on role_permissions(tenan
 comment on table role_permissions is
 'Authoritative (role × capability) grants, resolved server-side (never trusted from the JWT).
 Default-role grants are tenant_id NULL (shared); resolution via core.effective_role_permissions.
-capability ∈ core.capabilities (F2 §4.3).';
+capability ∈ core.permissions (F2 §4.3).';

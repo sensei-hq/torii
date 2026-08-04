@@ -1,5 +1,5 @@
 -- Per-tenant default budget root (C3). RBAC now seeds via import files as SHARED defaults
--- (core.capabilities + tenant_id-NULL core.roles / core.role_permissions) resolved through the
+-- (core.permissions + tenant_id-NULL core.roles / core.role_permissions) resolved through the
 -- core.effective_* views — no per-tenant role copy. This after-script remains only for the budget
 -- root, which is genuinely per-tenant. TODO: move to a core.tenants insert trigger, then drop this.
 -- (after-script: run verbatim by dbd; plpgsql is fine here, unlike parsed ddl/ files.)

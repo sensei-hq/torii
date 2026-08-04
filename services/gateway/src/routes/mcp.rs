@@ -113,7 +113,7 @@ impl ToolAuditSink for GatewayAudit {
             "reason": entry.reason,
         });
         let res = sqlx::query(
-            "insert into public.audit_events (tenant_id, actor_id, action, target_type, data) \
+            "insert into audit.audit_events (tenant_id, actor_id, action, target_type, data) \
              values ($1, $2, 'mcp.tool.invoke', 'mcp_tool', $3)",
         )
         .bind(entry.tenant_id)
@@ -207,7 +207,7 @@ pub async fn register_server(
     let discovered = discover_now(&state, server_id, &body.transport, body.url.as_deref()).await;
 
     let _ = sqlx::query(
-        "insert into public.audit_events (tenant_id, actor_id, action, target_type, target_id, data) \
+        "insert into audit.audit_events (tenant_id, actor_id, action, target_type, target_id, data) \
          values ($1, $2, 'mcp.server.register', 'mcp_server', $3, $4)",
     )
     .bind(tenant)

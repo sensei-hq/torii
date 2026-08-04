@@ -95,7 +95,7 @@ begin;
     end;
 
     begin
-      update public.audit_events set action = 'x';
+      update audit.audit_events set action = 'x';
       raise exception 'FAIL audit: UPDATE allowed for authenticated';
     exception when insufficient_privilege then null;
     end;

@@ -58,7 +58,7 @@ begin;
 
     -- 5. Audit forgery: INSERT audit_events attributing another actor → DENIED (with-check).
     begin
-      insert into public.audit_events(tenant_id, actor_id, action)
+      insert into audit.audit_events(tenant_id, actor_id, action)
         values ('00000000-0000-0000-0000-000000000000','99999999-9999-9999-9999-999999999999','forged');
       raise exception 'FAIL audit: member could forge actor_id on an audit event';
     exception when check_violation or insufficient_privilege then null; end;
@@ -194,16 +194,16 @@ begin;
   begin
     -- this connection is the postgres superuser (RLS-bypassing); prove the
     -- append-only trigger denies UPDATE/DELETE on audit_events regardless of role.
-    if not exists (select 1 from public.audit_events) then
-      insert into public.audit_events (tenant_id, action, actor_id)
+    if not exists (select 1 from audit.audit_events) then
+      insert into audit.audit_events (tenant_id, action, actor_id)
         values ('00000000-0000-0000-0000-000000000000', 'test.append_only', null);
     end if;
     begin
-      update public.audit_events set action = 'tampered';
+      update audit.audit_events set action = 'tampered';
       raise exception 'FAIL append-only: UPDATE allowed on audit_events (superuser)';
     exception when insufficient_privilege then null; end;
     begin
-      delete from public.audit_events;
+      delete from audit.audit_events;
       raise exception 'FAIL append-only: DELETE allowed on audit_events (superuser)';
     exception when insufficient_privilege then null; end;
     raise notice 'O1 audit_events append-only (immutable to superuser) ✓';

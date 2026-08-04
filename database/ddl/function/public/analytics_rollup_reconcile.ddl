@@ -112,7 +112,7 @@ begin
   if v_pre_calls <> v_post_calls
      or abs(v_pre_cost - v_post_cost)       > 0.000001
      or abs(v_pre_savings - v_post_savings) > 0.000001 then
-    insert into public.audit_events (tenant_id, action, target_type, data)
+    insert into audit.audit_events (tenant_id, action, target_type, data)
     values (p_tenant, 'analytics.reconciled', 'analytics_usage_daily',
             jsonb_build_object(
               'day',      p_day,

@@ -1578,7 +1578,7 @@ pub(crate) async fn audit(
     target_id: Option<Uuid>,
 ) {
     if let Err(e) = sqlx::query(
-        "insert into public.audit_events (tenant_id, actor_id, action, target_type, target_id) \
+        "insert into audit.audit_events (tenant_id, actor_id, action, target_type, target_id) \
          values ($1, $2, $3, $4, $5)",
     )
     .bind(tenant)

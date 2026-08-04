@@ -8,8 +8,7 @@ create table if not exists service_accounts (
 , id             uuid        not null default gen_random_uuid()
 , name           varchar(200) not null
 , budget_node_id uuid                                    -- its leaf in the budget tree
-, status         varchar(12) not null default 'active'
-    check (status in ('active', 'disabled'))
+, status         core.service_account_status not null default 'active'
 , created_by     varchar     not null default 'system'
 , created_at     timestamptz not null default now()
 , primary key (tenant_id, id)

@@ -15,8 +15,7 @@ create table if not exists api_keys (
 , scope               jsonb       not null default '[]'      -- capability subset
 , rate_limit          integer                                -- requests/min; null = default
 , last_used_at        timestamptz
-, status              varchar(12) not null default 'active'
-    check (status in ('active', 'revoked'))
+, status              core.api_key_status not null default 'active'
 , created_by          varchar     not null default 'system'
 , created_at          timestamptz not null default now()
 , primary key (tenant_id, id)

@@ -7,8 +7,7 @@ create table if not exists tenants (
 , slug         varchar     not null unique
 , domain       varchar     unique
 , is_platform  boolean     not null default false
-, status       varchar     not null default 'trial'
-    check (status in ('active', 'suspended', 'trial'))
+, status       core.tenant_status not null default 'trial'
 , created_at   timestamptz not null default now()
 , modified_at  timestamptz not null default now()
 , modified_by  varchar     not null

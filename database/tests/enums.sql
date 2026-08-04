@@ -415,4 +415,56 @@ begin
   raise notice 'S1 metering.signal_class enum + column, no leftover CHECK ✓';
 end $$;
 
+-- ═════════════════════════════════════════════════════════════════════════
+-- core+access enums: tenant_status (core.tenants) · membership_status
+-- (core.profile_tenants) · api_key_status (api_keys) · service_account_status
+-- (service_accounts). idp_kind DEFERRED (identity_providers table not built).
+-- ═════════════════════════════════════════════════════════════════════════
+\echo '== enum conversion: core+access enums =='
+
+do $$
+declare
+  specs text[][] := array[
+    ['tenant_status','active,suspended,trial'],
+    ['membership_status','active,suspended'],
+    ['api_key_status','active,revoked'],
+    ['service_account_status','active,disabled']];
+  i int; nm text; want text; got text;
+begin
+  for i in 1 .. array_length(specs,1) loop
+    nm := specs[i][1]; want := specs[i][2];
+    if not exists (select 1 from pg_type t join pg_namespace n on n.oid=t.typnamespace
+                    where n.nspname='core' and t.typname=nm and t.typtype='e') then
+      raise exception 'FAIL: enum core.% does not exist', nm; end if;
+    select string_agg(e.enumlabel, ',' order by e.enumsortorder) into got
+      from pg_enum e join pg_type t on t.oid=e.enumtypid join pg_namespace n on n.oid=t.typnamespace
+     where n.nspname='core' and t.typname=nm;
+    if got is distinct from want then raise exception 'FAIL: core.% = %, expected %', nm, got, want; end if;
+  end loop;
+  raise notice 'A1 four core+access enums exist with expected values ✓';
+end $$;
+
+do $$
+declare
+  cols text[][] := array[
+    ['core','tenants','status','tenant_status'],
+    ['core','profile_tenants','status','membership_status'],
+    ['public','api_keys','status','api_key_status'],
+    ['public','service_accounts','status','service_account_status']];
+  i int; s text; t text; c text; want text; udt text;
+begin
+  for i in 1 .. array_length(cols,1) loop
+    s := cols[i][1]; t := cols[i][2]; c := cols[i][3]; want := cols[i][4];
+    select udt_name into udt from information_schema.columns
+     where table_schema=s and table_name=t and column_name=c;
+    if udt is distinct from want then
+      raise exception 'FAIL: %.%.% udt=% (expected %)', s, t, c, coalesce(udt,'<none>'), want; end if;
+  end loop;
+  if exists (select 1 from pg_constraint where contype='c'
+              and conrelid in ('core.tenants'::regclass,'core.profile_tenants'::regclass,'public.api_keys'::regclass,'public.service_accounts'::regclass)
+              and pg_get_constraintdef(oid) ilike '%status%in%') then
+    raise exception 'FAIL: a leftover core+access status CHECK still exists'; end if;
+  raise notice 'A2 four core+access columns are the enums, no leftover CHECK ✓';
+end $$;
+
 \echo '== enum conversion tests done =='

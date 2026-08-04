@@ -14,7 +14,7 @@ begin
        , stg.slug
        , stg.domain
        , coalesce(stg.is_platform, false)
-       , coalesce(stg.status, 'trial')
+       , coalesce(stg.status, 'trial')::core.tenant_status
        , coalesce(stg.created_at, now())
        , coalesce(stg.modified_at, now())
        , coalesce(stg.modified_by, current_user)

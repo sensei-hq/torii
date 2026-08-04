@@ -7,8 +7,7 @@ set search_path to core, extensions;
 create table if not exists profile_tenants (
   profile_id   uuid        primary key references profiles(id) on delete cascade
 , tenant_id    uuid        not null references tenants(id) on delete restrict
-, status       varchar     not null default 'active'
-    check (status in ('active', 'suspended'))
+, status       core.membership_status not null default 'active'
 , active       boolean     not null default true
 , assigned_at  timestamptz not null default now()
 , assigned_by  varchar     not null

@@ -5,9 +5,9 @@ set search_path to public, core, extensions;
 -- ledger. A reconstructable cache (never a parallel source of truth) — dropping and
 -- rebuilding it from inference_calls loses nothing (proven by the reconcile test).
 -- Grain = (tenant, day, budget_node, served_model, provider, capability, plane).
--- A1 supersedes the RW15 shell (grain/column change on an empty cache; safe to drop).
-drop table if exists analytics_usage_daily cascade;
-create table analytics_usage_daily (
+-- A1 superseded the RW15 shell (grain/column change applied once on the empty cache). Idempotent
+-- `if not exists` — a drop+create in versioned DDL would WIPE this rollup on any re-apply/reconcile.
+create table if not exists analytics_usage_daily (
   tenant_id             uuid          not null references core.tenants(id) on delete cascade
 , day                   date          not null
 , budget_node_id        uuid          not null                    -- GH-5 attribution (no FK: cache)

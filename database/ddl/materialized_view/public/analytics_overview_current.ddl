@@ -1,4 +1,4 @@
--- database/ddl/view/public/analytics_overview_current.ddl
+-- database/ddl/materialized_view/public/analytics_overview_current.ddl
 set search_path to public, core, extensions;
 
 -- O2 §3.2: the W1 Overview stat-row snapshot, one row per tenant. spend/calls/
@@ -7,8 +7,9 @@ set search_path to public, core, extensions;
 -- usage rollup; refreshed CONCURRENTLY every ~60s (A4) — hence the unique index.
 -- "today"/window are evaluated at refresh time (snapshot semantics). MV → no RLS →
 -- never granted to authenticated (gateway reads it as service_role, tenant-scoped).
-drop materialized view if exists analytics_overview_current cascade;
-create materialized view analytics_overview_current as
+-- `if not exists` so re-apply preserves the matview + data (MVs have no CREATE OR REPLACE; to change
+-- THIS definition, drop it manually then re-apply).
+create materialized view if not exists analytics_overview_current as
   select
     u.tenant_id,
     coalesce(sum(u.cost_usd) filter (where u.day = current_date), 0)           as spend_today,

@@ -4,9 +4,9 @@ set search_path to public, core, extensions;
 -- O2 §3.2: daily quality rollup over quality_signals (C6), blended with the usage
 -- rollup so "cost down" is never shown without "quality held". Averages are
 -- call-weighted; *_calls are counts for rates. Reconstructable cache; W5-clean
--- (counts/labels only — no prompt/response content). A1 supersedes the RW15 shell.
-drop table if exists analytics_quality_daily cascade;
-create table analytics_quality_daily (
+-- (counts/labels only — no prompt/response content). A1 superseded the RW15 shell. Idempotent
+-- `if not exists` — a drop+create in versioned DDL would WIPE this rollup on any re-apply/reconcile.
+create table if not exists analytics_quality_daily (
   tenant_id               uuid          not null references core.tenants(id) on delete cascade
 , day                     date          not null
 , budget_node_id          uuid          not null

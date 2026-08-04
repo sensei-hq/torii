@@ -682,4 +682,60 @@ begin
   raise notice 'CT3 guard_document_classification trigger intact ✓';
 end $$;
 
+-- ═════════════════════════════════════════════════════════════════════════
+-- keyvault enums: credential_type + refresh_status (router_credentials).
+-- Schema RENAMED vault→keyvault (Supabase owns `vault`). The shared sensei-vault
+-- crate stays decoupled via `credential_type::text = $4` (schema-agnostic).
+-- ═════════════════════════════════════════════════════════════════════════
+\echo '== enum conversion: keyvault enums =='
+
+do $$
+declare
+  specs text[][] := array[
+    ['credential_type','api_key,oauth'],
+    ['refresh_status','ok,failed']];
+  i int; nm text; want text; got text;
+begin
+  for i in 1 .. array_length(specs,1) loop
+    nm := specs[i][1]; want := specs[i][2];
+    if not exists (select 1 from pg_type t join pg_namespace n on n.oid=t.typnamespace
+                    where n.nspname='keyvault' and t.typname=nm and t.typtype='e') then
+      raise exception 'FAIL: enum keyvault.% does not exist', nm; end if;
+    select string_agg(e.enumlabel, ',' order by e.enumsortorder) into got
+      from pg_enum e join pg_type t on t.oid=e.enumtypid join pg_namespace n on n.oid=t.typnamespace
+     where n.nspname='keyvault' and t.typname=nm;
+    if got is distinct from want then raise exception 'FAIL: keyvault.% = %, expected %', nm, got, want; end if;
+  end loop;
+  raise notice 'KV1 two keyvault enums exist with expected values ✓';
+end $$;
+
+do $$
+declare udt_ct text; udt_rs text;
+begin
+  select udt_name into udt_ct from information_schema.columns
+   where table_schema='public' and table_name='router_credentials' and column_name='credential_type';
+  select udt_name into udt_rs from information_schema.columns
+   where table_schema='public' and table_name='router_credentials' and column_name='refresh_status';
+  if udt_ct is distinct from 'credential_type' then
+    raise exception 'FAIL: router_credentials.credential_type udt=% (expected credential_type)', coalesce(udt_ct,'<none>'); end if;
+  if udt_rs is distinct from 'refresh_status' then
+    raise exception 'FAIL: router_credentials.refresh_status udt=% (expected refresh_status)', coalesce(udt_rs,'<none>'); end if;
+  if exists (select 1 from pg_constraint where conrelid='public.router_credentials'::regclass and contype='c'
+              and pg_get_constraintdef(oid) ilike '%credential_type%in%(%') then
+    raise exception 'FAIL: leftover credential_type value-set CHECK still exists'; end if;
+  -- the cross-column blob_by_type CHECK MUST survive (its literals coerce over the enum).
+  if not exists (select 1 from pg_constraint where conrelid='public.router_credentials'::regclass
+                  and conname='router_credentials_blob_by_type') then
+    raise exception 'FAIL: router_credentials_blob_by_type CHECK was lost'; end if;
+  raise notice 'KV2 router_credentials cols are keyvault enums, value CHECK dropped, blob_by_type intact ✓';
+end $$;
+
+-- KV3 — the crate contract: `credential_type::text = $4` (bound text) resolves over the enum.
+do $$
+declare n int;
+begin
+  select count(*) into n from public.router_credentials where credential_type::text = 'api_key';
+  raise notice 'KV3 schema-agnostic `credential_type::text = $bound` resolves over the enum (n=%) ✓', n;
+end $$;
+
 \echo '== enum conversion tests done =='

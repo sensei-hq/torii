@@ -305,7 +305,7 @@ async fn authenticate_api_key(pool: &sqlx::PgPool, token: &str) -> Result<Claims
     // (id, hashed_secret, profile_id, service_account_id, tenant_id, status)
     type ApiKeyRow = (Uuid, String, Option<Uuid>, Option<Uuid>, Uuid, String);
     let row: Option<ApiKeyRow> = sqlx::query_as(
-        "select id, hashed_secret, profile_id, service_account_id, tenant_id, status \
+        "select id, hashed_secret, profile_id, service_account_id, tenant_id, status::text as status \
            from public.api_keys where prefix = $1",
     )
     .bind(prefix)

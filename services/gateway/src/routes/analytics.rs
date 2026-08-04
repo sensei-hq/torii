@@ -751,7 +751,7 @@ mod gate {
                    (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence, \
                     recorded_at,input_tokens,output_tokens,execution_location,chain_id, \
                     budget_node_id,team_node_id) \
-                 values ($1,$2,'text_chat','anthropic','m',$3,100,'success',0,now(),512,128,$4,'gate-chain',$5,$5)")
+                 values ($1,$2,'text_chat','anthropic','m',$3,100,'success',0,now(),512,128,$4::core.execution_location,'gate-chain',$5,$5)")
                 .bind(t).bind(id).bind(cost).bind(plane).bind(team)
                 .execute(&pool).await.unwrap();
         }

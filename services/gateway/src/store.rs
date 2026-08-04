@@ -120,7 +120,7 @@ impl GatewayStore for PgGatewayStore {
                 (SELECT id FROM anc WHERE kind = 'dept' LIMIT 1),
                 (SELECT id FROM anc WHERE kind = 'team' LIMIT 1),
                 (SELECT id FROM anc WHERE kind IN ('user', 'service') LIMIT 1),
-                $19
+                $19::core.execution_location
             "#,
         )
         .bind(self.tenant_id)

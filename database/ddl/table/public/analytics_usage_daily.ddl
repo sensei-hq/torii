@@ -14,7 +14,7 @@ create table analytics_usage_daily (
 , served_model          text          not null                    -- inference_calls.model
 , provider              text          not null                    -- inference_calls.adapter
 , capability            text          not null
-, execution_location    varchar(10)   not null                    -- 'local' | 'cloud'
+, execution_location    core.execution_location not null            -- {local,cloud} enum
 , calls                 bigint        not null default 0
 , input_tokens          bigint        not null default 0
 , output_tokens         bigint        not null default 0

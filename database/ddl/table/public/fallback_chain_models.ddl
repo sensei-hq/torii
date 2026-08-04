@@ -11,8 +11,7 @@ create table if not exists fallback_chain_models (
 , sequence_order     integer not null
 , max_retries        integer not null default 1
 , is_active          boolean not null default true
-, plane              text    not null default 'cloud'
-    check (plane in ('local', 'cloud'))
+, plane              core.execution_location not null default 'cloud'  -- {local,cloud} enum
 , created_at         timestamptz not null default now()
 , modified_at        timestamptz not null default now()
 , modified_by        varchar not null

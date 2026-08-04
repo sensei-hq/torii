@@ -11,6 +11,7 @@ bash "$here/check-declared-shape.sh"
 
 # Each harness raises on any failed assertion (ON_ERROR_STOP) → non-zero exit.
 suite=(
+  enums.sql     # db-redesign §3: varchar+CHECK → Postgres enum (core.execution_location)
   rls.sql       # F1: RLS coverage + cross-tenant/confidential/secrets isolation
   authz.sql     # RW12: adversarial authz — escalation/budget/self-join/declassify/forge/anon
   budget.sql    # C3: hard budget reserve cannot be exceeded

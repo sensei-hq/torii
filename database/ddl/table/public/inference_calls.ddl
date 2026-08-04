@@ -27,8 +27,7 @@ create table if not exists inference_calls (
 , dept_node_id       uuid
 , team_node_id       uuid
 , user_node_id       uuid
-, execution_location varchar(10)
-    check (execution_location is null or execution_location in ('local', 'cloud'))
+, execution_location core.execution_location                       -- {local,cloud} enum (nullable)
 , hold_id            uuid
 , primary key (tenant_id, id)
 , constraint inference_calls_session_fkey

@@ -43,4 +43,27 @@ begin
   raise notice 'M-audit-3 audit_events_for_tenant shield view + contract ✓';
 end $$;
 
+-- M-audit-4 — notification_channels + siem_cursors relocated public→audit; invariants intact.
+do $$
+declare t text;
+begin
+  foreach t in array array['notification_channels','siem_cursors'] loop
+    if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                    where n.nspname='audit' and c.relname=t and c.relkind='r') then
+      raise exception 'FAIL: audit.% table missing', t; end if;
+    if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                where n.nspname='public' and c.relname=t) then
+      raise exception 'FAIL: public.% still exists (move incomplete)', t; end if;
+    if not (select relrowsecurity from pg_class where oid=('audit.'||t)::regclass) then
+      raise exception 'FAIL: RLS disabled on audit.% after move', t; end if;
+  end loop;
+  -- notification_channels keeps its tenant read policy; siem_cursors is deny-all (RLS, 0 policies).
+  if not exists (select 1 from pg_policies where schemaname='audit' and tablename='notification_channels'
+                  and policyname='notification_channels_read') then
+    raise exception 'FAIL: notification_channels_read policy lost'; end if;
+  if exists (select 1 from pg_policies where schemaname='audit' and tablename='siem_cursors') then
+    raise exception 'FAIL: siem_cursors should be deny-all (no policy)'; end if;
+  raise notice 'M-audit-4 notification_channels + siem_cursors relocated, RLS/policy posture intact ✓';
+end $$;
+
 \echo '== §D moves tests done =='

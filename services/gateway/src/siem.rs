@@ -37,7 +37,7 @@ pub fn spawn(state: SharedState) {
 
 async fn tick(state: &SharedState, client: &reqwest::Client) -> Result<(), sqlx::Error> {
     let channels = sqlx::query(
-        "select tenant_id, id, target from public.notification_channels \
+        "select tenant_id, id, target from audit.notification_channels \
           where kind = 'siem' and enabled = true",
     )
     .fetch_all(&state.pool)
@@ -63,7 +63,7 @@ async fn stream_channel(
 ) -> Result<(), sqlx::Error> {
     // 1. Load the cursor (default: the epoch, min uuid).
     let cur = sqlx::query(
-        "select last_created_at, last_id from public.siem_cursors \
+        "select last_created_at, last_id from audit.siem_cursors \
           where tenant_id = $1 and channel_id = $2",
     )
     .bind(tenant)
@@ -144,7 +144,7 @@ async fn stream_channel(
         let lc: DateTime<Utc> = last.get("created_at");
         let li: Uuid = last.get("id");
         sqlx::query(
-            "insert into public.siem_cursors (tenant_id, channel_id, last_created_at, last_id, updated_at) \
+            "insert into audit.siem_cursors (tenant_id, channel_id, last_created_at, last_id, updated_at) \
              values ($1, $2, $3, $4, now()) \
              on conflict (tenant_id, channel_id) do update set \
                last_created_at = excluded.last_created_at, last_id = excluded.last_id, updated_at = now()",

@@ -13,7 +13,7 @@ begin
     ('public', 'feature_policies'),
     ('public', 'tenant_model_state'),
     ('public', 'tenant_settings'),
-    ('public', 'notification_channels'),
+    ('audit', 'notification_channels'),
     ('public', 'alert_rules'),
     ('public', 'alert_events'),
     ('public', 'model_overrides'),

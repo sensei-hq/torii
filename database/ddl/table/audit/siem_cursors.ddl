@@ -1,10 +1,11 @@
--- database/ddl/table/public/siem_cursors.ddl
-set search_path to public, extensions;
+-- database/ddl/table/audit/siem_cursors.ddl
+set search_path to audit, core, extensions;
 
 -- O1 (P6): per-(tenant, channel) SIEM streaming cursor. The streamer ships
--- `audit_events` ordered by the monotonic (created_at, id) key and records the last
+-- `audit.audit_events` ordered by the monotonic (created_at, id) key and records the last
 -- shipped position here, so it resumes after a restart and never advances past an
 -- unacknowledged batch (at-least-once). service_role-only (the gateway); no client access.
+-- §D Phase 1 MOVE: relocated public→audit (background-only, deny-all).
 create table if not exists siem_cursors (
   tenant_id       uuid not null references core.tenants(id) on delete cascade
 , channel_id      uuid not null
@@ -19,5 +20,5 @@ alter table siem_cursors enable row level security;
 -- (RLS-bypassing) and is the sole reader/writer.
 
 comment on table siem_cursors is
-'O1 SIEM streaming cursor: last (created_at, id) of audit_events shipped per
+'O1 SIEM streaming cursor (audit domain): last (created_at, id) of audit_events shipped per
 (tenant, notification_channel). Enables resume-after-restart + at-least-once.';

@@ -12,6 +12,9 @@ grant usage on schema public, core to authenticated;
 -- service_role (the gateway in prod) writes metering.inference_calls.status via the enum;
 -- authenticated only reads it as text (json_agg), but usage keeps qualified refs resolvable.
 grant usage on schema metering to authenticated, service_role;
+-- governance: new domain schema (enum home for budget_period/enforcement/hold_status/
+-- request_status; policy tables land in a later phase).
+grant usage on schema governance to authenticated, service_role;
 
 -- (1) Privileged tables — SELECT only. Writes are service_role via the gateway.
 do $$

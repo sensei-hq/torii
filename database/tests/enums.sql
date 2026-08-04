@@ -252,4 +252,75 @@ begin
   raise notice 'M3 write contract: un-cast fails, cast succeeds, bad label rejected ✓';
 end $$;
 
+-- ═════════════════════════════════════════════════════════════════════════
+-- governance budget enums: budget_period, enforcement (budget_nodes) ·
+-- hold_status (budget_holds.status) · request_status (budget_requests.status).
+-- request_status uses 'denied' (the live deny-RPC term), not the stale CHECK's 'rejected'.
+-- ═════════════════════════════════════════════════════════════════════════
+\echo '== enum conversion: governance budget enums =='
+
+do $$
+declare
+  specs text[][] := array[
+    ['budget_period','daily,weekly,monthly'],
+    ['enforcement','hard,soft'],
+    ['hold_status','active,committed,released,expired'],
+    ['request_status','pending,approved,denied,withdrawn']];
+  i int; nm text; want text; got text;
+begin
+  for i in 1 .. array_length(specs,1) loop
+    nm := specs[i][1]; want := specs[i][2];
+    if not exists (select 1 from pg_type t join pg_namespace n on n.oid=t.typnamespace
+                    where n.nspname='governance' and t.typname=nm and t.typtype='e') then
+      raise exception 'FAIL: enum governance.% does not exist', nm; end if;
+    select string_agg(e.enumlabel, ',' order by e.enumsortorder) into got
+      from pg_enum e join pg_type t on t.oid=e.enumtypid join pg_namespace n on n.oid=t.typnamespace
+     where n.nspname='governance' and t.typname=nm;
+    if got is distinct from want then
+      raise exception 'FAIL: governance.% = %, expected %', nm, got, want; end if;
+  end loop;
+  raise notice 'G1 four governance budget enums exist with expected values ✓';
+end $$;
+
+do $$
+declare
+  cols text[][] := array[
+    ['budget_nodes','period','budget_period'],
+    ['budget_nodes','enforcement','enforcement'],
+    ['budget_holds','status','hold_status'],
+    ['budget_requests','status','request_status']];
+  i int; t text; c text; want text; udt text;
+begin
+  for i in 1 .. array_length(cols,1) loop
+    t := cols[i][1]; c := cols[i][2]; want := cols[i][3];
+    select udt_name into udt from information_schema.columns
+     where table_schema='public' and table_name=t and column_name=c;
+    if udt is distinct from want then
+      raise exception 'FAIL: %.% udt=% (expected %)', t, c, coalesce(udt,'<none>'), want; end if;
+  end loop;
+  if exists (select 1 from pg_constraint where contype='c'
+              and conrelid::regclass::text like 'budget%'
+              and (pg_get_constraintdef(oid) ilike '%period%in%'
+                or pg_get_constraintdef(oid) ilike '%enforcement%in%'
+                or pg_get_constraintdef(oid) ilike '%status%in%')) then
+    raise exception 'FAIL: a leftover budget period/enforcement/status CHECK still exists'; end if;
+  raise notice 'G2 four budget columns are the governance enums, no leftover CHECK ✓';
+end $$;
+
+-- write contract on request_status (representative): un-cast fails, cast succeeds, bad rejected.
+do $$
+declare bad boolean := false;
+begin
+  create temp table _rq_probe (st governance.request_status) on commit drop;
+  begin execute 'insert into _rq_probe(st) values ($1)' using 'pending'::text; bad := true;
+  exception when others then null; end;
+  if bad then raise exception 'FAIL: un-cast text accepted into request_status'; end if;
+  execute 'insert into _rq_probe(st) values ($1::governance.request_status)' using 'denied'::text;
+  bad := false;
+  begin execute 'insert into _rq_probe(st) values ($1::governance.request_status)' using 'rejected'::text; bad := true;
+  exception when others then null; end;
+  if bad then raise exception 'FAIL: stale label "rejected" accepted into request_status'; end if;
+  raise notice 'G3 request_status write contract (denied valid, rejected invalid) ✓';
+end $$;
+
 \echo '== enum conversion tests done =='

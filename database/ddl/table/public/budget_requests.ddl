@@ -1,5 +1,5 @@
 -- database/ddl/table/public/budget_requests.ddl
-set search_path to public, core, extensions;
+set search_path to public, core, governance, extensions;
 
 -- RW7: member budget-increase request → admin approval → applies to budget_nodes.cap.
 -- The ONLY budget write a client may make directly: INSERT of an own pending request
@@ -11,8 +11,7 @@ create table if not exists budget_requests (
 , requested_by   uuid          not null            -- auth.uid() of the requester
 , requested_cap  numeric(12,2) not null
 , reason         text
-, status         varchar(12)   not null default 'pending'
-    check (status in ('pending', 'approved', 'rejected', 'withdrawn'))
+, status         governance.request_status not null default 'pending'
 , resolved_by    uuid
 , resolved_at    timestamptz
 , created_at     timestamptz   not null default now()

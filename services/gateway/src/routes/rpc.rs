@@ -132,7 +132,7 @@ pub async fn budgets_upsert_node(
         "insert into public.budget_nodes \
            (tenant_id, id, parent_id, kind, name, cap_amount, period, enforcement, \
             alert_threshold, free_floor_enabled, modified_by) \
-         values ($1,$2,$3,$4,$5,$6, coalesce($7,'monthly'), coalesce($8,'hard'), \
+         values ($1,$2,$3,$4,$5,$6, coalesce($7,'monthly')::governance.budget_period, coalesce($8,'hard')::governance.enforcement, \
                  $9, coalesce($10, true), $11) \
          on conflict (tenant_id, id) do update set \
            parent_id = excluded.parent_id, kind = excluded.kind, name = excluded.name, \

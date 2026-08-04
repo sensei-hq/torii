@@ -1,5 +1,5 @@
 -- database/ddl/table/public/budget_nodes.ddl
-set search_path to public, core, extensions;
+set search_path to public, core, governance, extensions;
 
 create table if not exists budget_nodes (
   tenant_id          uuid not null
@@ -11,10 +11,8 @@ create table if not exists budget_nodes (
 , name               varchar(200) not null
 , ref_id             uuid          -- entity this node maps to (e.g. user kind → profile_id)
 , cap_amount         numeric(14,6)  -- micro-dollar precision: per-call costs are sub-cent
-, period             varchar(10) not null default 'monthly'
-    check (period in ('daily', 'weekly', 'monthly'))
-, enforcement        varchar(10) not null default 'hard'
-    check (enforcement in ('hard', 'soft'))
+, period             governance.budget_period not null default 'monthly'
+, enforcement        governance.enforcement   not null default 'hard'
 , alert_threshold    numeric(4,3)  -- fraction 0..1 (e.g. 0.800 = alert at 80%)
     check (alert_threshold is null or (alert_threshold >= 0 and alert_threshold <= 1))
 , free_floor_enabled boolean not null default true

@@ -20,7 +20,7 @@ use crate::{state::SharedState, store::PgGatewayStore};
 /// workspace-scoped `feature_policies` row sets `default-on` or `user-overridable`.
 pub async fn judge_enabled(state: &SharedState, tenant: Uuid) -> bool {
     let st: Option<String> = sqlx::query_scalar(
-        "select state from public.feature_policies \
+        "select state::text from public.feature_policies \
           where tenant_id = $1 and feature_key = 'quality-judge' and scope_type = 'workspace' \
           order by modified_at desc limit 1",
     )

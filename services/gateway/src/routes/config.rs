@@ -300,7 +300,7 @@ mod tests {
             async move {
                 sqlx::query(
                     "insert into public.feature_policies (tenant_id, feature_key, scope_type, scope_id, state) \
-                     values ($1, 'demo-feat', $2, $3, $4)",
+                     values ($1, 'demo-feat', $2::governance.feature_scope, $3, $4::governance.feature_state)",
                 )
                 .bind(tenant)
                 .bind(scope)

@@ -13,9 +13,9 @@ begin
    , is_active, is_enterprise, requires_approval, sequence
    , modified_at, modified_by)
   select trim(stg.name), stg.display_name, stg.description
-       , coalesce(stg.router_type, 'direct')
+       , coalesce(stg.router_type, 'direct')::catalog.router_type
        , stg.website_url, stg.documentation_url, stg.api_base_url, stg.api_key_env_var
-       , coalesce(stg.authentication_type, 'api_key')
+       , coalesce(stg.authentication_type, 'api_key')::catalog.auth_type
        , stg.default_headers, stg.supported_auth_methods
        , stg.regions, stg.rate_limits, stg.pricing_info_url, stg.status_page_url
        , coalesce(stg.is_active, true)

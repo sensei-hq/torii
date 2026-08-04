@@ -1,16 +1,16 @@
-set search_path to config, extensions;
+set search_path to config, catalog, extensions;
 
 create table if not exists routers (
   id                       uuid primary key default uuid_generate_v4()
 , name                     varchar(100) not null unique
 , display_name             varchar(200)
 , description              text
-, router_type              varchar(20) not null check (router_type in ('direct', 'aggregator', 'local'))
+, router_type              catalog.router_type not null
 , website_url              varchar(500)
 , documentation_url        varchar(500)
 , api_base_url             varchar(500)
 , api_key_env_var          varchar(200)
-, authentication_type      varchar(50) default 'api_key' check (authentication_type in ('api_key', 'aws_signature', 'oauth2', 'bearer_token', 'custom', 'none'))
+, authentication_type      catalog.auth_type default 'api_key'
 , default_headers          jsonb
 , supported_auth_methods   jsonb
 , regions                  jsonb

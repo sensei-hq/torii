@@ -14,11 +14,12 @@ create table if not exists documents (
 , space_id           uuid
 , collection_id      uuid
 , classification     core.classification_level not null default 'internal'
-, status             varchar(20)  not null default 'uploaded'
-    -- fine pipeline stages; 'completed' stays the terminal value (similarity_search +
-    -- hybrid_search + the W1/W2 admin screens filter on it). Redesign later splits this into
-    -- a stable lifecycle enum + a free-form stage column (db-redesign §7-#5).
-    check (status in ('uploaded','queued','parsing','redacting','chunking','embedding','indexing','processing','completed','failed'))
+  -- §7-#5 SPLIT: stable lifecycle enum + a free-form transient stage. lifecycle drives
+  -- retrieval (hybrid_search/similarity_search filter lifecycle='completed') + the W1/W2 screens;
+  -- stage carries the fine pipeline step (parsing/redacting/chunking/embedding/indexing), so a
+  -- pipeline change never churns the enum. set_status() maps a step onto (lifecycle, stage).
+, lifecycle          content.document_lifecycle not null default 'pending'
+, stage              varchar(20)
 , chunk_count        integer
 , embedding_model    varchar(100)
 , error_message      text
@@ -43,7 +44,7 @@ create index if not exists idx_documents_scope
   on documents(scope, tenant_id, profile_id);
 
 create index if not exists idx_documents_status
-  on documents(status);
+  on documents(lifecycle);
 
 create index if not exists idx_documents_content_hash on documents(tenant_id, content_hash);
 

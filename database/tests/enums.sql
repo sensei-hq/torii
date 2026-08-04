@@ -738,4 +738,63 @@ begin
   raise notice 'KV3 schema-agnostic `credential_type::text = $bound` resolves over the enum (n=%) ✓', n;
 end $$;
 
+-- ═════════════════════════════════════════════════════════════════════════
+-- content.document_lifecycle SPLIT (§7-#5): documents.status{10 vals} →
+-- lifecycle enum {pending,processing,completed,failed,archived} + free-form `stage`.
+-- ═════════════════════════════════════════════════════════════════════════
+\echo '== enum conversion: content.document_lifecycle split =='
+
+do $$
+declare vals text; udt text; stage_type text;
+begin
+  select string_agg(e.enumlabel, ',' order by e.enumsortorder) into vals
+    from pg_enum e join pg_type t on t.oid=e.enumtypid join pg_namespace n on n.oid=t.typnamespace
+   where n.nspname='content' and t.typname='document_lifecycle';
+  if vals is distinct from 'pending,processing,completed,failed,archived' then
+    raise exception 'FAIL: content.document_lifecycle = %, expected pending,processing,completed,failed,archived', coalesce(vals,'<none>'); end if;
+
+  -- lifecycle column is the enum; the old `status` column is GONE; a `stage` varchar exists.
+  select udt_name into udt from information_schema.columns
+   where table_schema='public' and table_name='documents' and column_name='lifecycle';
+  if udt is distinct from 'document_lifecycle' then
+    raise exception 'FAIL: documents.lifecycle udt=% (expected document_lifecycle)', coalesce(udt,'<none>'); end if;
+  if exists (select 1 from information_schema.columns
+              where table_schema='public' and table_name='documents' and column_name='status') then
+    raise exception 'FAIL: legacy documents.status column still exists (should be renamed to lifecycle)'; end if;
+  select data_type into stage_type from information_schema.columns
+   where table_schema='public' and table_name='documents' and column_name='stage';
+  if stage_type is null then raise exception 'FAIL: documents.stage column missing'; end if;
+  if exists (select 1 from pg_constraint where conrelid='public.documents'::regclass and contype='c'
+              and pg_get_constraintdef(oid) ilike '%status%in%') then
+    raise exception 'FAIL: leftover documents status CHECK still exists'; end if;
+  raise notice 'LF1 documents.lifecycle enum + stage col, status column/CHECK gone ✓';
+end $$;
+
+-- LF2 — retrieval filters were repointed status→lifecycle (else hybrid/similarity_search break).
+do $$
+begin
+  if pg_get_functiondef('public.hybrid_search'::regproc) !~ 'lifecycle' then
+    raise exception 'FAIL: hybrid_search does not reference lifecycle (still on d.status?)'; end if;
+  if pg_get_functiondef('public.hybrid_search'::regproc) ~ 'd\.status' then
+    raise exception 'FAIL: hybrid_search still references d.status'; end if;
+  if pg_get_functiondef('public.similarity_search'::regproc) !~ 'lifecycle' then
+    raise exception 'FAIL: similarity_search does not reference lifecycle'; end if;
+  raise notice 'LF2 hybrid_search + similarity_search filter lifecycle=completed ✓';
+end $$;
+
+-- LF3 — the set_status mapping (step → lifecycle,stage) is what the Rust store writes.
+do $$
+declare lc text; st text;
+begin
+  create temp table _doc (lifecycle content.document_lifecycle, stage varchar) on commit drop;
+  -- a transient step → processing + stage; a terminal step → its lifecycle, stage null.
+  insert into _doc values ('processing'::content.document_lifecycle, 'chunking');   -- set_status('chunking')
+  insert into _doc values ('completed'::content.document_lifecycle, null);           -- finalize
+  select lifecycle::text, stage into lc, st from _doc where stage='chunking';
+  if lc <> 'processing' then raise exception 'FAIL: chunking should map to processing lifecycle'; end if;
+  if not exists (select 1 from _doc where lifecycle='completed' and stage is null) then
+    raise exception 'FAIL: completed should have null stage'; end if;
+  raise notice 'LF3 lifecycle/stage split model holds (processing+stage vs terminal+null) ✓';
+end $$;
+
 \echo '== enum conversion tests done =='

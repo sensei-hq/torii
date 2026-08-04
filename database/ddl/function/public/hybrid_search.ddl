@@ -43,7 +43,7 @@ language sql stable as $$
      and d.id        = de.document_id
     where de.tenant_id = p_tenant_id
       and de.superseded_at is null
-      and d.status = 'completed'
+      and d.lifecycle = 'completed'
       and (p_space_id is null or d.space_id = p_space_id)
       and (doc_ids is null or d.id = any(doc_ids))
       and (

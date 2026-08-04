@@ -255,7 +255,7 @@ pub async fn get_document(
             'content_type', d.content_type, \
             'scope', d.scope, \
             'classification', d.classification, \
-            'status', d.status, \
+            'status', d.lifecycle::text, 'stage', d.stage, \
             'status_reason', d.status_reason, \
             'chunk_count', d.chunk_count, \
             'embedding_model', d.embedding_model, \
@@ -314,13 +314,13 @@ pub async fn list_documents(
     let sql = format!(
         "select coalesce(json_agg(t order by t.created_at desc), '[]'::json) from ( \
            select d.id as document_id, d.title, d.original_filename, d.content_type, \
-                  d.classification, d.status, d.status_reason, d.chunk_count, \
+                  d.classification, d.lifecycle::text as status, d.stage, d.status_reason, d.chunk_count, \
                   d.space_id, d.collection_id, d.uploaded_at as created_at, d.completed_at \
              from public.documents d \
             where {DOC_READ_PREDICATE} \
               and ($3::uuid is null or d.space_id = $3) \
               and ($4::uuid is null or d.collection_id = $4) \
-              and ($5::text is null or d.status = $5) \
+              and ($5::text is null or d.lifecycle::text = $5 or d.stage = $5) \
             order by d.uploaded_at desc \
             limit 500) t"
     );

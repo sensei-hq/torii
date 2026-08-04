@@ -601,7 +601,7 @@ declare
   cols text[][] := array[
     ['public','alert_rules','severity','alert_severity'],
     ['public','alert_events','severity','alert_severity'],
-    ['public','notification_channels','kind','channel_kind'],
+    ['audit','notification_channels','kind','channel_kind'],
     ['history','past_feature_states','operation','operation']];
   i int; s text; t text; c text; want text; udt text;
 begin
@@ -613,7 +613,7 @@ begin
       raise exception 'FAIL: %.%.% udt=% (expected %)', s, t, c, coalesce(udt,'<none>'), want; end if;
   end loop;
   if exists (select 1 from pg_constraint where contype='c'
-              and conrelid in ('public.alert_rules'::regclass,'public.notification_channels'::regclass)
+              and conrelid in ('public.alert_rules'::regclass,'audit.notification_channels'::regclass)
               and (pg_get_constraintdef(oid) ilike '%severity%in%' or pg_get_constraintdef(oid) ilike '%kind%in%')) then
     raise exception 'FAIL: a leftover audit CHECK still exists'; end if;
   raise notice 'AU2 four audit columns are the enums, no leftover CHECK ✓';

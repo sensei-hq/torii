@@ -547,20 +547,20 @@ end $$;
 do $$
 declare
   cols text[][] := array[
-    ['mcp_servers','transport','mcp_transport'],
-    ['mcp_servers','scope','mcp_scope'],
-    ['devices','status','device_status']];
-  i int; t text; c text; want text; udt text;
+    ['public','mcp_servers','transport','mcp_transport'],
+    ['public','mcp_servers','scope','mcp_scope'],
+    ['device','devices','status','device_status']];   -- devices moved public→device (§D)
+  i int; s text; t text; c text; want text; udt text;
 begin
   for i in 1 .. array_length(cols,1) loop
-    t := cols[i][1]; c := cols[i][2]; want := cols[i][3];
+    s := cols[i][1]; t := cols[i][2]; c := cols[i][3]; want := cols[i][4];
     select udt_name into udt from information_schema.columns
-     where table_schema='public' and table_name=t and column_name=c;
+     where table_schema=s and table_name=t and column_name=c;
     if udt is distinct from want then
-      raise exception 'FAIL: %.% udt=% (expected %)', t, c, coalesce(udt,'<none>'), want; end if;
+      raise exception 'FAIL: %.%.% udt=% (expected %)', s, t, c, coalesce(udt,'<none>'), want; end if;
   end loop;
   if exists (select 1 from pg_constraint where contype='c'
-              and conrelid in ('public.mcp_servers'::regclass,'public.devices'::regclass)
+              and conrelid in ('public.mcp_servers'::regclass,'device.devices'::regclass)
               and (pg_get_constraintdef(oid) ilike '%transport%in%'
                 or pg_get_constraintdef(oid) ilike '%scope%in%'
                 or pg_get_constraintdef(oid) ilike '%status%in%')) then

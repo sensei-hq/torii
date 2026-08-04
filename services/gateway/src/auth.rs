@@ -255,7 +255,7 @@ async fn finish_authed(state: &SharedState, mut req: Request, claims: Claims, ne
             Err(_) => return (StatusCode::FORBIDDEN, "invalid device id").into_response(),
         };
         let active: bool = sqlx::query_scalar(
-            "select exists(select 1 from public.devices \
+            "select exists(select 1 from device.devices \
                where id = $1 and status = 'active' and tenant_id = $2 and profile_id::text = $3)",
         )
         .bind(did)
@@ -267,7 +267,7 @@ async fn finish_authed(state: &SharedState, mut req: Request, claims: Claims, ne
         if !active {
             return (StatusCode::FORBIDDEN, "device revoked or not recognized").into_response();
         }
-        let _ = sqlx::query("update public.devices set last_seen_at = now() where id = $1")
+        let _ = sqlx::query("update device.devices set last_seen_at = now() where id = $1")
             .bind(did)
             .execute(&state.pool)
             .await;

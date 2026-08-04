@@ -48,7 +48,7 @@ begin
     ('public', 'space_members'),
     ('public', 'budget_nodes'),
     ('public', 'settings'),
-    ('public', 'devices'),
+    ('device', 'devices'),
     ('public', 'document_embeddings'),   -- gateway-produced (ingestion); never client-written
     ('public', 'document_versions'),     -- gateway-produced
     ('public', 'document_assets'),       -- gateway-produced

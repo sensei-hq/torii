@@ -1,5 +1,5 @@
 -- database/ddl/table/public/devices.ddl
-set search_path to public, core, extensions;
+set search_path to public, core, device, extensions;
 
 create table if not exists devices (
   tenant_id      uuid not null
@@ -14,8 +14,7 @@ create table if not exists devices (
 , sync_policy    jsonb not null default    -- O3-4 §3.4: D4 config-pull cadence + buffer flushing
     '{"config_pull":"realtime","pull_interval_s":300,"offline_grace_h":72,"buffer_flush":"on_reconnect"}'::jsonb
 , buffer_health  jsonb                      -- D4-8 §3.3 offline buffer snapshot; O3-4 renders a fleet verdict (null until reported)
-, status         varchar(20) not null default 'active'
-    check (status in ('active', 'revoked'))
+, status         device.device_status not null default 'active'
 , enrolled_at    timestamptz not null default now()
 , last_seen_at   timestamptz
 , primary key (tenant_id, id)

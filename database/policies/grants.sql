@@ -18,6 +18,9 @@ grant usage on schema governance to authenticated, service_role;
 -- catalog: new domain schema (enum home for router_type/auth_type/override_scope/breaker_state;
 -- config.routers + model_overrides + provider_health move here in a later phase).
 grant usage on schema catalog to authenticated, service_role;
+-- device: new domain schema (enum home for mcp_transport/mcp_scope/device_status;
+-- mcp_servers + devices move here in a later phase).
+grant usage on schema device to authenticated, service_role;
 
 -- (1) Privileged tables — SELECT only. Writes are service_role via the gateway.
 do $$

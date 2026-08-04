@@ -449,8 +449,8 @@ declare
   cols text[][] := array[
     ['core','tenants','status','tenant_status'],
     ['core','profile_tenants','status','membership_status'],
-    ['public','api_keys','status','api_key_status'],
-    ['public','service_accounts','status','service_account_status']];
+    ['core','api_keys','status','api_key_status'],              -- moved public→core (§D)
+    ['core','service_accounts','status','service_account_status']];
   i int; s text; t text; c text; want text; udt text;
 begin
   for i in 1 .. array_length(cols,1) loop
@@ -461,7 +461,7 @@ begin
       raise exception 'FAIL: %.%.% udt=% (expected %)', s, t, c, coalesce(udt,'<none>'), want; end if;
   end loop;
   if exists (select 1 from pg_constraint where contype='c'
-              and conrelid in ('core.tenants'::regclass,'core.profile_tenants'::regclass,'public.api_keys'::regclass,'public.service_accounts'::regclass)
+              and conrelid in ('core.tenants'::regclass,'core.profile_tenants'::regclass,'core.api_keys'::regclass,'core.service_accounts'::regclass)
               and pg_get_constraintdef(oid) ilike '%status%in%') then
     raise exception 'FAIL: a leftover core+access status CHECK still exists'; end if;
   raise notice 'A2 four core+access columns are the enums, no leftover CHECK ✓';

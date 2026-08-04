@@ -335,7 +335,7 @@ pub async fn apikeys_issue(
     let (profile_id, sa_id): (Option<Uuid>, Option<Uuid>) = match body.service_account_id {
         Some(sa) => {
             let ok: bool = sqlx::query_scalar(
-                "select exists(select 1 from public.service_accounts where tenant_id=$1 and id=$2)",
+                "select exists(select 1 from core.service_accounts where tenant_id=$1 and id=$2)",
             )
             .bind(tenant)
             .bind(sa)
@@ -362,7 +362,7 @@ pub async fn apikeys_issue(
     let id = Uuid::new_v4();
     let scope = json!([body.name.as_deref().unwrap_or("inference")]).to_string();
     let write = sqlx::query(
-        "insert into public.api_keys \
+        "insert into core.api_keys \
            (tenant_id, id, profile_id, service_account_id, hashed_secret, prefix, scope, status, created_by) \
          values ($1,$2,$3,$4,$5,$6,$7::jsonb,'active',$8)",
     )
@@ -412,7 +412,7 @@ pub async fn apikeys_revoke(
 
     // The key must belong to the caller's tenant (else 404 — no cross-tenant revoke).
     let exists: bool = sqlx::query_scalar(
-        "select exists(select 1 from public.api_keys where id = $1 and tenant_id = $2)",
+        "select exists(select 1 from core.api_keys where id = $1 and tenant_id = $2)",
     )
     .bind(body.id)
     .bind(tenant)
@@ -424,7 +424,7 @@ pub async fn apikeys_revoke(
     }
 
     let write = sqlx::query(
-        "update public.api_keys set status = 'revoked' where id = $1 and tenant_id = $2",
+        "update core.api_keys set status = 'revoked' where id = $1 and tenant_id = $2",
     )
     .bind(body.id)
     .bind(tenant)

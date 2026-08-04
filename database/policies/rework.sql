@@ -8,8 +8,8 @@ declare r record;
 begin
   for r in select * from (values
     ('public', 'budget_holds'),
-    ('public', 'service_accounts'),
-    ('public', 'api_keys'),
+    ('core', 'service_accounts'),
+    ('core', 'api_keys'),
     ('public', 'feature_policies'),
     ('public', 'tenant_model_state'),
     ('public', 'tenant_settings'),
@@ -45,7 +45,7 @@ end $$;
 
 -- api_keys: never expose the hash/secret to clients even on SELECT — revoke the
 -- column so PostgREST cannot return it (defense-in-depth; service_role only).
-revoke select (hashed_secret) on public.api_keys from authenticated;
+revoke select (hashed_secret) on core.api_keys from authenticated;
 
 -- ── (B) Self-owned benign tables — owner-scoped DML ────────────────────────────
 -- user_preferences: owner only.

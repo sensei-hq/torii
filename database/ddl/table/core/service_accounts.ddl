@@ -1,5 +1,5 @@
--- database/ddl/table/public/service_accounts.ddl
-set search_path to public, core, extensions;
+-- database/ddl/table/core/service_accounts.ddl
+set search_path to core, extensions;   -- §D Phase 1 MOVE: public→core (access folds into core, §8)
 
 -- RW4 (decision #2): a first-class programmatic identity. It IS a node in the
 -- org/budget tree (budget_nodes.kind='service'); spend meters to that node.

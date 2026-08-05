@@ -1,5 +1,5 @@
--- database/ddl/table/core/tenant_keys.ddl
-set search_path to core, extensions;
+-- database/ddl/table/keyvault/tenant_keys.ddl
+set search_path to keyvault, core, extensions;
 
 create table if not exists tenant_keys (
   tenant_id    uuid        primary key
@@ -18,5 +18,5 @@ comment on table tenant_keys is
 'Per-tenant Data Encryption Key (DEK) used to encrypt router API keys.
 - encrypted_dek: DEK encrypted with master KEK from TORII_KEK env var
 - dek_version: incremented by application on DEK rotation
-- DEK rotation requires re-encrypting all router_credentials rows for this tenant atomically
-- KEK rotation only requires re-encrypting encrypted_dek rows (not router_credentials)';
+- DEK rotation requires re-encrypting all keyvault.router_credentials rows for this tenant atomically
+- KEK rotation only requires re-encrypting encrypted_dek rows (not keyvault.router_credentials)';

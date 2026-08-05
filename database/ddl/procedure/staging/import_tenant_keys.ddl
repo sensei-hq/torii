@@ -6,7 +6,7 @@ language plpgsql
 as
 $$
 begin
-  insert into core.tenant_keys(
+  insert into keyvault.tenant_keys(
      tenant_id, encrypted_dek, dek_version, modified_at, modified_by)
   select stg.tenant_id
        , decode(stg.encrypted_dek, 'hex') as encrypted_dek
@@ -18,7 +18,7 @@ begin
       on t.id = stg.tenant_id        -- skip rows when tenant not yet imported
    where not exists (
      select 1
-       from core.tenant_keys tk
+       from keyvault.tenant_keys tk
       where tk.tenant_id   = stg.tenant_id
         and tk.modified_at > coalesce(stg.modified_at, now())
    )

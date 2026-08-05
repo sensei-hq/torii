@@ -1133,51 +1133,11 @@ pub async fn governance_matrix(
     }
 }
 
-#[derive(Deserialize)]
-pub struct SetModelEnabled {
-    pub model_full_name: String,
-    pub enabled: bool,
-}
-
-/// `POST /rpc/models/set-enabled` — enable/disable a model for the tenant (absent row =
-/// enabled). Capability `model.manage`. pk is (tenant, model) so ON CONFLICT is exact.
-pub async fn models_set_enabled(
-    Extension(claims): Extension<Claims>,
-    State(state): State<SharedState>,
-    Json(body): Json<SetModelEnabled>,
-) -> Response {
-    let (tenant, actor) = match authorize(&state, &claims, "model.manage").await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
-    let write = sqlx::query(
-        "insert into public.tenant_model_state (tenant_id, model_full_name, enabled, modified_by) \
-         values ($1,$2,$3,$4) \
-         on conflict (tenant_id, model_full_name) \
-         do update set enabled = excluded.enabled, modified_by = excluded.modified_by, modified_at = now()",
-    )
-    .bind(tenant)
-    .bind(&body.model_full_name)
-    .bind(body.enabled)
-    .bind(actor.to_string())
-    .execute(&state.pool)
-    .await;
-    if let Err(e) = write {
-        tracing::error!("models_set_enabled: {e}");
-        return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
-    }
-    audit(
-        &state,
-        tenant,
-        actor,
-        "model.enabled.set",
-        "tenant_model_state",
-        None,
-    )
-    .await;
-    crate::routes::config::bump(&state.pool, tenant, "catalog").await;
-    (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
-}
+// §D Phase 3: `POST /rpc/models/set-enabled` + `SetModelEnabled` + the `tenant_model_state` writer
+// were RETIRED. Model enablement is no longer a stored per-tenant toggle — it is DERIVED from chain
+// membership (catalog.chains_for_tenant): a model is usable iff it's in one of the tenant's active,
+// key-configured chains. Enablement is now managed by editing chains (/rpc/routing/*); the admin
+// Models screen is informational (its `enabled` badge reads /v1/models, derived from the view).
 
 #[derive(Deserialize)]
 pub struct SetChainStep {

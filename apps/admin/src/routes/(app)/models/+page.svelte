@@ -8,7 +8,6 @@
 	let models = $state([])
 	let error = $state('')
 	let loading = $state(true)
-	let busy = $state('')
 	let provider = $state('all')
 
 	async function load() {
@@ -22,20 +21,9 @@
 	}
 	onMount(load)
 
-	/** Enable/disable a model for the tenant — a real, C1-enforced write. @param {import('$lib/api').ModelRow} m */
-	async function toggle(m) {
-		if (busy) return
-		busy = m.full_name
-		error = ''
-		try {
-			await api.setModelEnabled(m.full_name, !m.enabled)
-			await load()
-		} catch (e) {
-			error = e instanceof Error ? e.message : String(e)
-		} finally {
-			busy = ''
-		}
-	}
+	// §D Phase 3: enablement is DERIVED from chain membership (read-only here). A model is
+	// `enabled` iff it's in one of the tenant's active, key-configured chains — manage it on the
+	// Routing screen by editing chains, not with a per-model toggle.
 
 	const providers = $derived(providerList(models))
 	const rows = $derived(filterModels(models, provider))
@@ -46,7 +34,7 @@
 	<PageHeader
 		eyebrow="Models"
 		title="Model catalog"
-		sub="Every model your org can reach through the gateway — its context window, output ceiling, endpoint reachability, and whether it’s enabled for the tenant."
+		sub="Every model your org can reach through the gateway — its context window, output ceiling, endpoint reachability, and whether it’s enabled (in an active, key-configured chain). Manage enablement on the Routing screen."
 	/>
 
 	{#if loading}
@@ -90,7 +78,7 @@
 								<th class="!text-right">Context</th>
 								<th class="!text-right">Max output</th>
 								<th>Status</th>
-								<th class="!text-right">Access</th>
+								<th class="!text-right">Enabled</th>
 							</tr>
 						</thead>
 						<tbody class="[&_td]:px-6 [&_td]:py-3">
@@ -119,12 +107,9 @@
 										</Chip>
 									</td>
 									<td class="text-right">
-										<button
-											onclick={() => toggle(m)}
-											disabled={busy === m.full_name}
-											class="w-20 rounded-md border border-paper-edge px-2 py-1 text-xs font-medium text-ink-soft hover:bg-paper-mute disabled:opacity-40"
-											>{m.enabled ? 'Disable' : 'Enable'}</button
-										>
+										<Chip tone={m.enabled ? 'success' : 'mute'}>
+											{m.enabled ? 'enabled' : 'disabled'}
+										</Chip>
 									</td>
 								</tr>
 							{/each}

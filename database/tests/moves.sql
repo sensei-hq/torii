@@ -322,13 +322,16 @@ end $$;
 
 \echo '== §D catalog moves: overrides + provider_health =='
 
--- M-catalog-4 — RW10 per-tenant override tables + provider_health MOVED public→catalog (move only).
--- Tenant-scoped (tenant_id + RLS); FKs to catalog.models/providers already intra-schema; the _read
--- policies carry by name (no orphan). Enums scope_type=override_scope, state=breaker_state survive.
+-- M-catalog-4 — provider_overrides + provider_health MOVED public→catalog (move only; model_overrides
+-- was also moved here in Phase 1 but is now RETIRED in Phase 3). Tenant-scoped (tenant_id + RLS); FKs
+-- to catalog.models/providers already intra-schema; the _read policies carry by name (no orphan).
+-- Enum state=breaker_state survives (override_scope was dropped with model_overrides).
 do $$
 declare t text;
 begin
-  foreach t in array array['model_overrides','provider_overrides','provider_health'] loop
+  -- model_overrides was moved here in Phase 1 but RETIRED in Phase 3 (enablement derives from
+  -- chains_for_tenant); only provider_overrides + provider_health remain as moved tables.
+  foreach t in array array['provider_overrides','provider_health'] loop
     if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
                     where n.nspname='catalog' and c.relname=t and c.relkind='r') then
       raise exception 'FAIL: catalog.% table missing', t; end if;
@@ -340,7 +343,11 @@ begin
     if not exists (select 1 from pg_policies where schemaname='catalog' and tablename=t and policyname=t||'_read') then
       raise exception 'FAIL: catalog.%._read policy lost', t; end if;
   end loop;
-  raise notice 'M-catalog-4 model_overrides/provider_overrides/provider_health moved public→catalog, RLS + _read policy intact ✓';
+  -- model_overrides must be GONE (Phase 3 drop).
+  if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+              where n.nspname='catalog' and c.relname='model_overrides') then
+    raise exception 'FAIL: catalog.model_overrides still exists (Phase 3 retirement incomplete)'; end if;
+  raise notice 'M-catalog-4 provider_overrides/provider_health moved public→catalog (model_overrides retired) ✓';
 end $$;
 
 \echo '== §D Phase 2 secret custody: keyvault.{router_credentials,tenant_keys,tenant_key_archive} + shield =='

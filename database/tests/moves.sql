@@ -343,12 +343,12 @@ begin
   raise notice 'M-catalog-4 model_overrides/provider_overrides/provider_health moved public→catalog, RLS + _read policy intact ✓';
 end $$;
 
-\echo '== §D Phase 2 shield (ahead of move): keyvault.connections_for_tenant =='
+\echo '== §D Phase 2 secret custody: keyvault.{router_credentials,tenant_keys,tenant_key_archive} + shield =='
 
--- M-keyvault-1 — the ★ top shield ships in Slice A, BEFORE router_credentials moves (Slice B). It
--- must exist in keyvault with the exact Connections contract, expose NO ciphertext, and — since it
--- carries every tenant's rows with no security_invoker — must NOT be granted to authenticated
--- (a grant would be a PostgREST cross-tenant leak). router_credentials is still in public here.
+-- M-keyvault-1 — the ★ top shield (Slice A shipped it BEFORE the move so Connections never observed
+-- the table sliding into keyvault). It must exist in keyvault with the exact Connections contract,
+-- expose NO ciphertext, and — since it carries every tenant's rows with no security_invoker — must
+-- NOT be granted to authenticated (a grant would be a PostgREST cross-tenant leak).
 do $$
 declare missing text;
 begin
@@ -371,6 +371,45 @@ begin
   if has_table_privilege('anon','keyvault.connections_for_tenant','select') then
     raise exception 'FAIL: anon can SELECT connections_for_tenant'; end if;
   raise notice 'M-keyvault-1 connections_for_tenant shield (no ciphertext, deny-all) + contract ✓';
+end $$;
+
+-- M-keyvault-2 — Slice B: the 3 secret tables relocated into keyvault (router_credentials ← public,
+-- tenant_keys + tenant_key_archive ← core). Each must keep the deny-all posture (RLS on + 0 policies
+-- = service_role-only), the router_credentials → tenants/routers FKs must survive the move, and the
+-- shield view must now read keyvault.router_credentials.
+do $$
+declare t text; src text;
+begin
+  foreach t in array array['router_credentials','tenant_keys','tenant_key_archive'] loop
+    if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                    where n.nspname='keyvault' and c.relname=t and c.relkind='r') then
+      raise exception 'FAIL: keyvault.% table missing', t; end if;
+    -- gone from BOTH old homes (router_credentials was public; the key tables were core).
+    foreach src in array array['public','core'] loop
+      if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                  where n.nspname=src and c.relname=t) then
+        raise exception 'FAIL: %.% still exists (move incomplete)', src, t; end if;
+    end loop;
+    if not (select relrowsecurity from pg_class where oid=('keyvault.'||t)::regclass) then
+      raise exception 'FAIL: RLS disabled on keyvault.% after move', t; end if;
+    -- deny-all: RLS on with ZERO policies (service_role bypasses RLS; clients get nothing).
+    if exists (select 1 from pg_policies where schemaname='keyvault' and tablename=t) then
+      raise exception 'FAIL: keyvault.% must be deny-all (0 policies), found one', t; end if;
+    -- and authenticated/anon hold no table privilege on the secret.
+    if has_table_privilege('authenticated', ('keyvault.'||t)::regclass, 'select') then
+      raise exception 'FAIL: authenticated can SELECT keyvault.% (secret leak)', t; end if;
+  end loop;
+  -- router_credentials FKs survived SET SCHEMA (identity by OID, but assert they still resolve).
+  if not exists (select 1 from pg_constraint where conrelid='keyvault.router_credentials'::regclass
+                  and confrelid='core.tenants'::regclass and contype='f') then
+    raise exception 'FAIL: keyvault.router_credentials → core.tenants FK lost'; end if;
+  if not exists (select 1 from pg_constraint where conrelid='keyvault.router_credentials'::regclass
+                  and confrelid='catalog.routers'::regclass and contype='f') then
+    raise exception 'FAIL: keyvault.router_credentials → catalog.routers FK lost'; end if;
+  -- the shield view now reads the relocated table.
+  if pg_get_viewdef('keyvault.connections_for_tenant'::regclass) !~ 'keyvault\.router_credentials' then
+    raise exception 'FAIL: connections_for_tenant not repointed to keyvault.router_credentials'; end if;
+  raise notice 'M-keyvault-2 3 secret tables relocated → keyvault, deny-all + FKs intact, shield repointed ✓';
 end $$;
 
 \echo '== §D moves tests done =='

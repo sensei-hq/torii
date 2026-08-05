@@ -709,7 +709,7 @@ mod connections_view {
         }
         // Tenant A connects a (dummy-sealed) BYOK key for openai; B connects nothing.
         sqlx::query(
-            "insert into public.router_credentials \
+            "insert into keyvault.router_credentials \
                (tenant_id, router_id, encrypted_api_key, key_label, modified_by, credential_type) \
              values ($1, $2, '\\x00'::bytea, 'byok', 'tester', 'api_key')",
         )

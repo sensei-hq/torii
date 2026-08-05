@@ -15,7 +15,7 @@ begin
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
     where c.relkind = 'r'
-      and n.nspname in ('core', 'public', 'audit', 'device', 'catalog')
+      and n.nspname in ('core', 'public', 'audit', 'device', 'catalog', 'keyvault')
       and exists (
         select 1 from pg_attribute a
         where a.attrelid = c.oid and a.attname = 'tenant_id' and not a.attisdropped
@@ -89,7 +89,7 @@ begin;
     end if;
 
     begin
-      perform 1 from public.router_credentials;
+      perform 1 from keyvault.router_credentials;
       raise exception 'FAIL secrets: router_credentials readable by authenticated';
     exception when insufficient_privilege then null;
     end;

@@ -30,7 +30,7 @@ impl KekProvider for GatewayKek {
 }
 
 /// The F3 BYOK cache, specialized for the gateway: the runtime KEK ([`GatewayKek`]) + the
-/// Postgres store over `core.tenant_keys` / `public.router_credentials`. The cache, envelope
+/// Postgres store over `keyvault.tenant_keys` / `keyvault.router_credentials`. The cache, envelope
 /// crypto, and rotation all live in the shared `sensei-vault` crate (V5); the gateway only pins
 /// the concrete `K`/`S`.
 pub type TenantKeyCache = vault::TenantKeyCache<GatewayKek, PostgresVaultStore>;
@@ -181,9 +181,9 @@ mod integration {
 
         // cleanup (FK-safe order + the seeded secret).
         for stmt in [
-            "delete from public.router_credentials where tenant_id = $1",
-            "delete from core.tenant_key_archive where tenant_id = $1",
-            "delete from core.tenant_keys where tenant_id = $1",
+            "delete from keyvault.router_credentials where tenant_id = $1",
+            "delete from keyvault.tenant_key_archive where tenant_id = $1",
+            "delete from keyvault.tenant_keys where tenant_id = $1",
             "delete from core.tenants where id = $1",
         ] {
             sqlx::query(stmt).bind(tenant).execute(&pool).await.unwrap();

@@ -1,5 +1,5 @@
 -- database/ddl/view/keyvault/connections_for_tenant.ddl
-set search_path to keyvault, catalog, core, public, extensions;
+set search_path to keyvault, catalog, core, extensions;
 
 -- §D §B ★ TOP SHIELD view: the stable read contract for GET /v1/connections, shipped BEFORE the
 -- Phase 2 secret-custody move so the Connections screen never observes router_credentials sliding
@@ -13,8 +13,8 @@ set search_path to keyvault, catalog, core, public, extensions;
 -- Shape: one row per (tenant, router). catalog.routers is the platform-global catalog (no tenant_id),
 -- so routers the caller has NOT connected must still appear as connected=false — hence the
 -- core.tenants × catalog.routers product (cross-join precedent: effective_chain_models), with the
--- per-tenant credential joined INSIDE the left join. Slice B repoints the two credential joins from
--- public.router_credentials → keyvault.router_credentials with no shape change.
+-- per-tenant credential joined INSIDE the left join. The two credential joins read
+-- keyvault.router_credentials (same-schema after the Phase 2 move; deny-all, service_role-only).
 create or replace view connections_for_tenant as
 select
   t.id                            as tenant_id
@@ -28,12 +28,12 @@ select
 , o.modified_at                  as oauth_connected_at
 from core.tenants t
 cross join catalog.routers r
-left join public.router_credentials k
+left join keyvault.router_credentials k
   on  k.router_id       = r.id
   and k.tenant_id       = t.id
   and k.is_active       = true
   and k.credential_type = 'api_key'
-left join public.router_credentials o
+left join keyvault.router_credentials o
   on  o.router_id       = r.id
   and o.tenant_id       = t.id
   and o.is_active       = true

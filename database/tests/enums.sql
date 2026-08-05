@@ -713,18 +713,18 @@ do $$
 declare udt_ct text; udt_rs text;
 begin
   select udt_name into udt_ct from information_schema.columns
-   where table_schema='public' and table_name='router_credentials' and column_name='credential_type';
+   where table_schema='keyvault' and table_name='router_credentials' and column_name='credential_type';
   select udt_name into udt_rs from information_schema.columns
-   where table_schema='public' and table_name='router_credentials' and column_name='refresh_status';
+   where table_schema='keyvault' and table_name='router_credentials' and column_name='refresh_status';
   if udt_ct is distinct from 'credential_type' then
     raise exception 'FAIL: router_credentials.credential_type udt=% (expected credential_type)', coalesce(udt_ct,'<none>'); end if;
   if udt_rs is distinct from 'refresh_status' then
     raise exception 'FAIL: router_credentials.refresh_status udt=% (expected refresh_status)', coalesce(udt_rs,'<none>'); end if;
-  if exists (select 1 from pg_constraint where conrelid='public.router_credentials'::regclass and contype='c'
+  if exists (select 1 from pg_constraint where conrelid='keyvault.router_credentials'::regclass and contype='c'
               and pg_get_constraintdef(oid) ilike '%credential_type%in%(%') then
     raise exception 'FAIL: leftover credential_type value-set CHECK still exists'; end if;
   -- the cross-column blob_by_type CHECK MUST survive (its literals coerce over the enum).
-  if not exists (select 1 from pg_constraint where conrelid='public.router_credentials'::regclass
+  if not exists (select 1 from pg_constraint where conrelid='keyvault.router_credentials'::regclass
                   and conname='router_credentials_blob_by_type') then
     raise exception 'FAIL: router_credentials_blob_by_type CHECK was lost'; end if;
   raise notice 'KV2 router_credentials cols are keyvault enums, value CHECK dropped, blob_by_type intact ✓';
@@ -734,7 +734,7 @@ end $$;
 do $$
 declare n int;
 begin
-  select count(*) into n from public.router_credentials where credential_type::text = 'api_key';
+  select count(*) into n from keyvault.router_credentials where credential_type::text = 'api_key';
   raise notice 'KV3 schema-agnostic `credential_type::text = $bound` resolves over the enum (n=%) ✓', n;
 end $$;
 

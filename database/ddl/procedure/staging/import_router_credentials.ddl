@@ -6,7 +6,7 @@ language plpgsql
 as
 $$
 begin
-  insert into public.router_credentials(
+  insert into keyvault.router_credentials(
      tenant_id, router_id, encrypted_api_key
    , key_label, is_active, modified_at, modified_by)
   select stg.tenant_id
@@ -27,7 +27,7 @@ begin
    -- credential (credential_type defaults to 'api_key'); an existing api_key row is left as-is.
    where not exists (
      select 1
-       from public.router_credentials rk
+       from keyvault.router_credentials rk
       where rk.tenant_id       = stg.tenant_id
         and rk.router_id       = rtr.id
         and rk.credential_type = 'api_key'

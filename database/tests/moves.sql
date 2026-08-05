@@ -649,4 +649,40 @@ begin
   raise notice 'M-org-2 budget_requests_for_tenant shield: BudgetRequest contract + deny-all ✓';
 end $$;
 
+-- M-org-3 (S2) — the NEW org-tree tables exist in core with RLS + a tenant read policy + the FK
+-- spine (empty in S2; backfilled in S3). Privileged: authenticated SELECT-only (writes are gateway
+-- service_role). RLS coverage (rls.sql) also asserts these since `core` is in its nspname set.
+do $$
+declare t text;
+begin
+  foreach t in array array['unit_levels','org_units','unit_members'] loop
+    if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                    where n.nspname='core' and c.relname=t and c.relkind='r') then
+      raise exception 'FAIL: core.% table missing', t; end if;
+    if not (select relrowsecurity from pg_class where oid=('core.'||t)::regclass) then
+      raise exception 'FAIL: RLS disabled on core.%', t; end if;
+    if not exists (select 1 from pg_policies where schemaname='core' and tablename=t) then
+      raise exception 'FAIL: core.% has no RLS policy (rls.sql coverage would fail)', t; end if;
+    if not has_table_privilege('authenticated', ('core.'||t)::regclass, 'select') then
+      raise exception 'FAIL: authenticated lost SELECT on core.%', t; end if;
+    if has_table_privilege('authenticated', ('core.'||t)::regclass, 'insert') then
+      raise exception 'FAIL: authenticated can INSERT core.% (writes must be gateway service_role)', t; end if;
+  end loop;
+  -- org_units: composite self-parent FK + level→unit_levels FK.
+  if not exists (select 1 from pg_constraint where conrelid='core.org_units'::regclass
+                  and confrelid='core.org_units'::regclass and contype='f') then
+    raise exception 'FAIL: org_units self-parent FK missing'; end if;
+  if not exists (select 1 from pg_constraint where conrelid='core.org_units'::regclass
+                  and confrelid='core.unit_levels'::regclass and contype='f') then
+    raise exception 'FAIL: org_units.level → unit_levels FK missing'; end if;
+  -- unit_members → org_units + profiles.
+  if not exists (select 1 from pg_constraint where conrelid='core.unit_members'::regclass
+                  and confrelid='core.org_units'::regclass and contype='f') then
+    raise exception 'FAIL: unit_members → org_units FK missing'; end if;
+  if not exists (select 1 from pg_constraint where conrelid='core.unit_members'::regclass
+                  and confrelid='core.profiles'::regclass and contype='f') then
+    raise exception 'FAIL: unit_members → profiles FK missing'; end if;
+  raise notice 'M-org-3 core.{unit_levels,org_units,unit_members}: RLS + policy + FK spine + SELECT-only ✓';
+end $$;
+
 \echo '== §D moves tests done =='

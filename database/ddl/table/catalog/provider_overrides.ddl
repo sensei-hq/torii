@@ -1,5 +1,5 @@
--- database/ddl/table/public/provider_overrides.ddl
-set search_path to public, core, config, extensions;
+-- database/ddl/table/catalog/provider_overrides.ddl
+set search_path to catalog, core, extensions;
 -- RW10: per-tenant provider enable/disable over catalog.providers.
 create table if not exists provider_overrides (
   tenant_id    uuid        not null references core.tenants(id) on delete cascade

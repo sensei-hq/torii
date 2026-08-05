@@ -356,8 +356,8 @@ declare
   cols text[][] := array[
     ['catalog','routers','router_type','router_type'],
     ['catalog','routers','authentication_type','auth_type'],
-    ['public','model_overrides','scope_type','override_scope'],
-    ['public','provider_health','state','breaker_state']];
+    ['catalog','model_overrides','scope_type','override_scope'],
+    ['catalog','provider_health','state','breaker_state']];
   i int; s text; t text; c text; want text; udt text;
 begin
   for i in 1 .. array_length(cols,1) loop
@@ -368,7 +368,7 @@ begin
       raise exception 'FAIL: %.%.% udt=% (expected %)', s, t, c, coalesce(udt,'<none>'), want; end if;
   end loop;
   if exists (select 1 from pg_constraint where contype='c'
-              and conrelid in ('catalog.routers'::regclass,'public.model_overrides'::regclass,'public.provider_health'::regclass)
+              and conrelid in ('catalog.routers'::regclass,'catalog.model_overrides'::regclass,'catalog.provider_health'::regclass)
               and (pg_get_constraintdef(oid) ilike '%router_type%in%'
                 or pg_get_constraintdef(oid) ilike '%authentication_type%in%'
                 or pg_get_constraintdef(oid) ilike '%scope_type%in%'

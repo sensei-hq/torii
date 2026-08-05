@@ -320,4 +320,27 @@ begin
   raise notice 'M-catalog-3 routing tables → catalog (2 renames + 2 moves), RLS + FKs + no orphan policy ✓';
 end $$;
 
+\echo '== §D catalog moves: overrides + provider_health =='
+
+-- M-catalog-4 — RW10 per-tenant override tables + provider_health MOVED public→catalog (move only).
+-- Tenant-scoped (tenant_id + RLS); FKs to catalog.models/providers already intra-schema; the _read
+-- policies carry by name (no orphan). Enums scope_type=override_scope, state=breaker_state survive.
+do $$
+declare t text;
+begin
+  foreach t in array array['model_overrides','provider_overrides','provider_health'] loop
+    if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                    where n.nspname='catalog' and c.relname=t and c.relkind='r') then
+      raise exception 'FAIL: catalog.% table missing', t; end if;
+    if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                where n.nspname='public' and c.relname=t) then
+      raise exception 'FAIL: public.% still exists (move incomplete)', t; end if;
+    if not (select relrowsecurity from pg_class where oid=('catalog.'||t)::regclass) then
+      raise exception 'FAIL: RLS disabled on catalog.% after move', t; end if;
+    if not exists (select 1 from pg_policies where schemaname='catalog' and tablename=t and policyname=t||'_read') then
+      raise exception 'FAIL: catalog.%._read policy lost', t; end if;
+  end loop;
+  raise notice 'M-catalog-4 model_overrides/provider_overrides/provider_health moved public→catalog, RLS + _read policy intact ✓';
+end $$;
+
 \echo '== §D moves tests done =='

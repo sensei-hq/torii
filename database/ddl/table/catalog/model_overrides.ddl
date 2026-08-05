@@ -1,5 +1,5 @@
--- database/ddl/table/public/model_overrides.ddl
-set search_path to public, core, config, catalog, extensions;
+-- database/ddl/table/catalog/model_overrides.ddl
+set search_path to catalog, core, extensions;
 -- RW10: per-tenant/space/role model enablement + pricing overrides over catalog.models.
 create table if not exists model_overrides (
   tenant_id     uuid        not null references core.tenants(id) on delete cascade

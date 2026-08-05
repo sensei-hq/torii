@@ -453,9 +453,34 @@ begin
   end if;
 
   -- Gateway-internal: authenticated must NOT be able to read it (cross-tenant leak otherwise).
+  -- NB: this ambient state is correct only AFTER policies/rework.sql is applied (run.sh order) —
+  -- rework.sql's `grant select on all tables in schema catalog` sweeps in views, so the shield
+  -- depends on the explicit `revoke ... chains_for_tenant` carve-out right after that grant.
   if has_table_privilege('authenticated','catalog.chains_for_tenant','select') then
     raise exception 'FAIL: authenticated can SELECT chains_for_tenant (cross-tenant leak)'; end if;
   raise notice 'M-catalog-5 chains_for_tenant shield: contract + keyless-safe viability (keyless=%, key-no-cred scrubbed) + deny-all ✓', kless;
+end $$;
+
+-- M-catalog-5b — NON-VACUOUS regression guard for the blanket-grant sweep (the leak the
+-- dbd-pattern-verifier caught). Proves, in a rolled-back subtransaction: (1) the catalog blanket
+-- grant DOES reach this view (so M-catalog-5's deny-all is not free), and (2) the revoke carve-out
+-- re-closes it. If someone drops the revoke from rework.sql, the harness (policies→tests) trips
+-- M-catalog-5; this block independently proves the mechanism.
+do $$
+begin
+  begin  -- subtransaction: the raise at the end rolls back the grant/revoke below
+    grant select on all tables in schema catalog to authenticated;
+    if not has_table_privilege('authenticated','catalog.chains_for_tenant','select') then
+      raise exception 'FAIL(vacuous): the catalog blanket grant did NOT reach chains_for_tenant — test assumption stale'; end if;
+    revoke select on catalog.chains_for_tenant from authenticated;
+    if has_table_privilege('authenticated','catalog.chains_for_tenant','select') then
+      raise exception 'FAIL: revoke carve-out does not re-close the shield after the blanket grant'; end if;
+    raise exception 'rollback_ok';  -- undo the grant/revoke (no privilege state leaks out)
+  exception
+    when others then
+      if sqlerrm <> 'rollback_ok' then raise; end if;  -- re-raise real failures
+  end;
+  raise notice 'M-catalog-5b blanket catalog grant reaches the view; the revoke carve-out re-closes it ✓';
 end $$;
 
 -- M-catalog-6 — the chat enablement GATE derivation (chat.rs ensure_model_enabled) and the

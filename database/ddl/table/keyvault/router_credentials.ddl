@@ -2,7 +2,7 @@
 set search_path to keyvault, core, catalog, extensions;
 
 -- Encrypted per-tenant provider credentials — api_key AND OAuth (RW13 / #18: renamed from
--- `router_keys`; the viable_chain_models view + secrets.sql track this name). All columns are
+-- `router_keys`; the chains_for_tenant view + secrets.sql track this name). All columns are
 -- declared inline (declarative schema — dbd applies the whole table in one shot; no forward
 -- references from indexes/constraints to columns added later).
 create table if not exists router_credentials (
@@ -48,5 +48,5 @@ comment on table router_credentials is
 - One ACTIVE credential per (tenant, router, credential_type); superseded rows retained (V4/O-7)
 - id retained for API-layer row addressing; (tenant_id, router_id, credential_type) is the active key
 - encrypted_api_key / encrypted_oauth: sealed with the tenant DEK from keyvault.tenant_keys
-- viable_chain_models view uses this table to filter usable (router, model) combinations
+- catalog.chains_for_tenant uses this table (keyless-safe) to filter usable (router, model) steps
 - Decryption happens in application layer only — never exposed via views';

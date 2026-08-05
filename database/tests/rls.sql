@@ -15,7 +15,7 @@ begin
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
     where c.relkind = 'r'
-      and n.nspname in ('core', 'public', 'audit', 'device', 'catalog', 'keyvault')
+      and n.nspname in ('core', 'public', 'audit', 'device', 'catalog', 'keyvault', 'governance')
       and exists (
         select 1 from pg_attribute a
         where a.attrelid = c.oid and a.attname = 'tenant_id' and not a.attisdropped
@@ -45,8 +45,8 @@ begin;
     values ('99999999-9999-9999-9999-999999999999', 'TestB', 'testb', false, 'active', 'test')
     on conflict (id) do nothing;
   insert into public.sessions(tenant_id, user_id, module_id) values
-    ('00000000-0000-0000-0000-000000000000', 'plat', (select id from config.modules limit 1)),
-    ('99999999-9999-9999-9999-999999999999', 'b',    (select id from config.modules limit 1));
+    ('00000000-0000-0000-0000-000000000000', 'plat', (select id from governance.modules limit 1)),
+    ('99999999-9999-9999-9999-999999999999', 'b',    (select id from governance.modules limit 1));
   insert into public.spaces(tenant_id, id, name, classification, owner_id, modified_by)
     values ('00000000-0000-0000-0000-000000000000', '5face999-0000-0000-0000-000000000099', 'S', 'confidential', 'aaaaaaaa-0000-0000-0000-000000000001', 't');
   insert into public.documents(tenant_id, id, original_filename, content_type, space_id, classification)

@@ -10,7 +10,7 @@ begin
     ('public', 'budget_holds'),
     ('core', 'service_accounts'),
     ('core', 'api_keys'),
-    ('public', 'feature_policies'),
+    ('governance', 'feature_policies'),
     ('public', 'tenant_settings'),
     ('audit', 'notification_channels'),
     ('public', 'alert_rules'),
@@ -146,6 +146,13 @@ grant select on all tables in schema catalog to authenticated;
 -- (owner-rights view) — exposing it to authenticated would be a cross-tenant leak. Carve it back out
 -- (mirrors the core.api_keys hashed_secret revoke above). It is read only by the service_role gateway.
 revoke select on catalog.chains_for_tenant from authenticated;
+-- governance LOOKUPS moved config→governance (§D Phase 4: features/modules). Grant them EXPLICITLY
+-- (not a blanket `grant on all tables in schema governance`) so the gateway-internal shield
+-- feature_governance_for_tenant — all-tenant rows, no security_invoker — is never swept in. The
+-- config bulk grant above no longer reaches these on a fresh build.
+grant usage on schema governance to authenticated;
+grant select on governance.features to authenticated;
+grant select on governance.modules  to authenticated;
 grant select on core.tenants to authenticated;
 alter table core.tenants enable row level security;
 drop policy if exists tenants_self on core.tenants;

@@ -516,4 +516,72 @@ begin
   raise notice 'M-catalog-6 enablement gate derives from chains_for_tenant: in-chat-chain allowed, non-chain blocked ✓';
 end $$;
 
+\echo '== §D Phase 4: governance features move + feature_key→feature_id fold =='
+
+-- M-gov-1 — config.features + config.modules relocated → governance (lookups; rich UI columns kept),
+-- public.feature_policies relocated → governance, and config.feature_states RETIRED. The lookups keep
+-- authenticated SELECT (grant parity); feature_policies keeps RLS + its tenant read policy.
+do $$
+declare t text;
+begin
+  foreach t in array array['features','modules','feature_policies'] loop
+    if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                    where n.nspname='governance' and c.relname=t and c.relkind='r') then
+      raise exception 'FAIL: governance.% table missing', t; end if;
+  end loop;
+  -- gone from the old homes.
+  if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+              where n.nspname='config' and c.relname in ('features','modules','feature_states')) then
+    raise exception 'FAIL: a config.{features,modules,feature_states} table still exists'; end if;
+  if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+              where n.nspname='public' and c.relname='feature_policies') then
+    raise exception 'FAIL: public.feature_policies still exists'; end if;
+  -- lookups readable by authenticated (parity); feature_policies is tenant-scoped RLS.
+  if not has_table_privilege('authenticated','governance.features','select') then
+    raise exception 'FAIL: authenticated lost SELECT on governance.features'; end if;
+  if not (select relrowsecurity from pg_class where oid='governance.feature_policies'::regclass) then
+    raise exception 'FAIL: RLS disabled on governance.feature_policies'; end if;
+  if not exists (select 1 from pg_policies where schemaname='governance' and tablename='feature_policies'
+                  and policyname='feature_policies_read') then
+    raise exception 'FAIL: feature_policies_read policy missing'; end if;
+  raise notice 'M-gov-1 features/modules/feature_policies → governance, feature_states retired, grants+RLS intact ✓';
+end $$;
+
+-- M-gov-2 — the feature_key→feature_id FOLD: feature_policies is keyed by a uuid FK→governance.features
+-- (feature_key column gone), with a global unique(slug) on features so slug→id is unambiguous.
+do $$
+begin
+  if exists (select 1 from information_schema.columns
+              where table_schema='governance' and table_name='feature_policies' and column_name='feature_key') then
+    raise exception 'FAIL: feature_policies.feature_key still exists (fold incomplete)'; end if;
+  if not exists (select 1 from information_schema.columns
+                  where table_schema='governance' and table_name='feature_policies' and column_name='feature_id') then
+    raise exception 'FAIL: feature_policies.feature_id missing'; end if;
+  if not exists (select 1 from pg_constraint where conrelid='governance.feature_policies'::regclass
+                  and confrelid='governance.features'::regclass and contype='f') then
+    raise exception 'FAIL: feature_policies.feature_id → governance.features FK missing'; end if;
+  -- global slug uniqueness (enables the slug→id resolution writers rely on).
+  if not exists (select 1 from pg_indexes where schemaname='governance' and tablename='features'
+                  and indexname='features_slug_ukey') then
+    raise exception 'FAIL: governance.features global slug unique index missing'; end if;
+  raise notice 'M-gov-2 feature_key→feature_id fold: uuid FK + global slug unique, feature_key dropped ✓';
+end $$;
+
+-- M-gov-3 — the feature_governance_for_tenant shield exists, exposes slug over the fold, and is
+-- gateway-internal (NOT granted to authenticated — all-tenant rows, no security_invoker).
+do $$
+declare missing text;
+begin
+  if not exists (select 1 from pg_views where schemaname='governance' and viewname='feature_governance_for_tenant') then
+    raise exception 'FAIL: governance.feature_governance_for_tenant view missing'; end if;
+  select string_agg(c, ', ') into missing from unnest(array[
+    'tenant_id','feature_id','slug','title','enabled','mandatory','sequence','policy_state']) as c
+   where not exists (select 1 from information_schema.columns
+                      where table_schema='governance' and table_name='feature_governance_for_tenant' and column_name=c);
+  if missing is not null then raise exception 'FAIL: shield missing columns: %', missing; end if;
+  if has_table_privilege('authenticated','governance.feature_governance_for_tenant','select') then
+    raise exception 'FAIL: authenticated can SELECT feature_governance_for_tenant (cross-tenant leak)'; end if;
+  raise notice 'M-gov-3 feature_governance_for_tenant shield: slug contract + deny-all ✓';
+end $$;
+
 \echo '== §D moves tests done =='

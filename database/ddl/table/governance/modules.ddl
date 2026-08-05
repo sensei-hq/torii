@@ -1,4 +1,4 @@
-set search_path to config, extensions;
+set search_path to governance, extensions;
 
 create table if not exists modules (
   id                       uuid primary key default uuid_generate_v4()

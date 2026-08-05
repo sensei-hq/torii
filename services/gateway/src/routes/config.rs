@@ -177,10 +177,14 @@ async fn assemble_snapshot(pool: &sqlx::PgPool, tenant: Uuid) -> sqlx::Result<Va
     .fetch_one(pool)
     .await?;
 
+    // §D Phase 4: the snapshot's workspace feature policies via the shield — `slug` (exposed over
+    // the feature_id fold) as feature_key, the resolved workspace policy_state as state. Only
+    // features WITH a workspace policy (policy_state not null), matching the prior scope-filtered read.
     let features: Value = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.feature_key), '[]'::json) from ( \
-           select feature_key, state, scope_type from public.feature_policies \
-            where tenant_id = $1 and scope_type = 'workspace') t",
+           select slug as feature_key, policy_state as state, 'workspace' as scope_type \
+             from governance.feature_governance_for_tenant \
+            where tenant_id = $1 and policy_state is not null) t",
     )
     .bind(tenant)
     .fetch_one(pool)
@@ -231,9 +235,11 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        // §D Phase 4: feature_policies is keyed by feature_id (FK) — use a real feature slug and
+        // resolve it. 'fencing' is a seeded governance.features row.
         sqlx::query(
-            "insert into public.feature_policies (tenant_id, feature_key, scope_type, state) \
-             values ($1, 'tools', 'workspace', 'locked')",
+            "insert into governance.feature_policies (tenant_id, feature_id, scope_type, state) \
+             select $1, f.id, 'workspace', 'locked' from governance.features f where f.slug = 'fencing'",
         )
         .bind(tenant)
         .execute(&pool)
@@ -264,7 +270,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .any(|f| f["feature_key"] == "tools"));
+            .any(|f| f["feature_key"] == "fencing"));
         // the model catalog is present (seeded rows).
         assert!(!snap["catalog"].as_array().unwrap().is_empty());
 
@@ -297,12 +303,16 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // §D Phase 4: feature_policies is keyed by feature_id (FK) — use a real, mandatory=false
+        // feature slug ('cost-tracking') so the resolver runs the precedence logic (a mandatory
+        // feature would short-circuit to 'mandatory'). The insert resolves slug→feature_id.
         let policy = |scope: &'static str, sid: Option<Uuid>, state: &'static str| {
             let pool = pool.clone();
             async move {
                 sqlx::query(
-                    "insert into public.feature_policies (tenant_id, feature_key, scope_type, scope_id, state) \
-                     values ($1, 'demo-feat', $2::governance.feature_scope, $3, $4::governance.feature_state)",
+                    "insert into governance.feature_policies (tenant_id, feature_id, scope_type, scope_id, state) \
+                     select $1, f.id, $2::governance.feature_scope, $3, $4::governance.feature_state \
+                       from governance.features f where f.slug = 'cost-tracking'",
                 )
                 .bind(tenant)
                 .bind(scope)
@@ -316,7 +326,7 @@ mod tests {
         let clear = || {
             let pool = pool.clone();
             async move {
-                sqlx::query("delete from public.feature_policies where tenant_id=$1")
+                sqlx::query("delete from governance.feature_policies where tenant_id=$1")
                     .bind(tenant)
                     .execute(&pool)
                     .await
@@ -327,14 +337,14 @@ mod tests {
         // locked@workspace beats space=default-on → OFF, governed, source locked@workspace.
         policy("workspace", None, "locked").await;
         policy("space", Some(space), "default-on").await;
-        let fs = resolve_feature(&pool, tenant, &[role], "demo-feat", Some(space)).await;
+        let fs = resolve_feature(&pool, tenant, &[role], "cost-tracking", Some(space)).await;
         assert!(!fs.enabled && fs.governed && fs.source == "locked@workspace");
 
         // role (default-on) beats workspace (default-off) → ON, source role.
         clear().await;
         policy("role", Some(role), "default-on").await;
         policy("workspace", None, "default-off").await;
-        let fs = resolve_feature(&pool, tenant, &[role], "demo-feat", Some(space)).await;
+        let fs = resolve_feature(&pool, tenant, &[role], "cost-tracking", Some(space)).await;
         assert!(fs.enabled && fs.governed && fs.source == "role");
 
         // no policy for an unknown feature → ungoverned default-off (the caller decides).

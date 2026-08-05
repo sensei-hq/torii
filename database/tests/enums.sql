@@ -493,21 +493,22 @@ end $$;
 
 do $$
 declare
+  -- §D Phase 4: feature_policies moved public→governance; settings stays public until Slice B.
   cols text[][] := array[
-    ['feature_policies','scope_type','feature_scope'],
-    ['feature_policies','state','feature_state'],
-    ['settings','scope','config_scope']];
-  i int; t text; c text; want text; udt text;
+    ['governance','feature_policies','scope_type','feature_scope'],
+    ['governance','feature_policies','state','feature_state'],
+    ['public','settings','scope','config_scope']];
+  i int; s text; t text; c text; want text; udt text;
 begin
   for i in 1 .. array_length(cols,1) loop
-    t := cols[i][1]; c := cols[i][2]; want := cols[i][3];
+    s := cols[i][1]; t := cols[i][2]; c := cols[i][3]; want := cols[i][4];
     select udt_name into udt from information_schema.columns
-     where table_schema='public' and table_name=t and column_name=c;
+     where table_schema=s and table_name=t and column_name=c;
     if udt is distinct from want then
-      raise exception 'FAIL: %.% udt=% (expected %)', t, c, coalesce(udt,'<none>'), want; end if;
+      raise exception 'FAIL: %.%.% udt=% (expected %)', s, t, c, coalesce(udt,'<none>'), want; end if;
   end loop;
   if exists (select 1 from pg_constraint where contype='c'
-              and conrelid in ('public.feature_policies'::regclass,'public.settings'::regclass)
+              and conrelid in ('governance.feature_policies'::regclass,'public.settings'::regclass)
               and (pg_get_constraintdef(oid) ilike '%scope_type%in%'
                 or pg_get_constraintdef(oid) ilike '%state%in%'
                 or pg_get_constraintdef(oid) ilike '%scope%in%')) then
@@ -567,7 +568,7 @@ end $$;
 
 -- ═════════════════════════════════════════════════════════════════════════
 -- audit enums: alert_severity (alert_rules + alert_events) · channel_kind
--- (notification_channels) · operation (history.past_feature_states, UPPERCASE).
+-- (notification_channels) · operation (history.past_* twins, UPPERCASE).
 -- alert_kind DEFERRED (no CHECK/data/code; value set unratified).
 -- ═════════════════════════════════════════════════════════════════════════
 \echo '== enum conversion: audit enums =='
@@ -598,8 +599,8 @@ declare
   cols text[][] := array[
     ['public','alert_rules','severity','alert_severity'],
     ['public','alert_events','severity','alert_severity'],
-    ['audit','notification_channels','kind','channel_kind'],
-    ['history','past_feature_states','operation','operation']];
+    ['audit','notification_channels','kind','channel_kind']];
+    -- (history.past_feature_states.operation retired — its table was dropped with feature_states, §D Phase 4)
   i int; s text; t text; c text; want text; udt text;
 begin
   for i in 1 .. array_length(cols,1) loop
@@ -613,7 +614,7 @@ begin
               and conrelid in ('public.alert_rules'::regclass,'audit.notification_channels'::regclass)
               and (pg_get_constraintdef(oid) ilike '%severity%in%' or pg_get_constraintdef(oid) ilike '%kind%in%')) then
     raise exception 'FAIL: a leftover audit CHECK still exists'; end if;
-  raise notice 'AU2 four audit columns are the enums, no leftover CHECK ✓';
+  raise notice 'AU2 three audit columns are the enums, no leftover CHECK ✓';
 end $$;
 
 -- ═════════════════════════════════════════════════════════════════════════

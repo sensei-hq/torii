@@ -5,7 +5,7 @@ language plpgsql
 as
 $$
 begin
-  insert into config.modules(
+  insert into governance.modules(
      slug, name, title, description, persona
    , sequence, is_active
    , modified_at, modified_by)
@@ -16,7 +16,7 @@ begin
        , coalesce(stg.modified_by, current_user)
     from staging.modules stg
    where not exists (select 1
-                       from config.modules m
+                       from governance.modules m
                       where m.slug = trim(stg.slug)
                         and m.modified_at > stg.modified_at)
       on conflict(slug)

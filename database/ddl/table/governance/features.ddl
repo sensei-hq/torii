@@ -1,4 +1,4 @@
-set search_path to config, extensions;
+set search_path to governance, extensions;
 
 create table if not exists features (
   id                       uuid primary key default uuid_generate_v4()
@@ -17,6 +17,10 @@ create table if not exists features (
 );
 
 create unique index if not exists features_ukey on features(module_id, slug);
+-- §D Phase 4: slug is the stable governance key (feature_policies.feature_id FK resolves via slug on
+-- write; the frontend/API speak slug). Enforce GLOBAL slug uniqueness so slug→feature_id is
+-- unambiguous — the prior (module_id, slug) unique alone would allow a slug in two modules.
+create unique index if not exists features_slug_ukey on features(slug);
 create index if not exists features_fkey1 on features(module_id);
 create index if not exists features_idx1 on features(enabled);
 create index if not exists features_idx2 on features(mandatory);

@@ -614,16 +614,15 @@ pub async fn get_governance(
         Ok(t) => t,
         Err(resp) => return resp,
     };
+    // §D Phase 4: reads through the feature_governance_for_tenant shield (governance.features ×
+    // the resolved workspace feature_policies state). The shield exposes `slug` over the
+    // feature_key→feature_id fold, so this read is unchanged in shape (byte-stable payload).
     let rows: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.sequence), '[]'::json) from ( \
-           select f.slug, f.title, f.description, f.purpose, f.enabled, f.mandatory, f.sequence, \
-                  fp.state as policy_state \
-             from config.features f \
-             left join lateral ( \
-                select state from public.feature_policies p \
-                 where p.feature_key = f.slug and p.tenant_id = $1 \
-                   and p.scope_type = 'workspace' and p.scope_id is null \
-                 order by p.modified_at desc limit 1) fp on true) t",
+           select slug, title, description, purpose, enabled, mandatory, sequence, \
+                  policy_state \
+             from governance.feature_governance_for_tenant \
+            where tenant_id = $1) t",
     )
     .bind(tenant)
     .fetch_one(&state.pool)

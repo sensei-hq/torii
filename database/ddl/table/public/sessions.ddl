@@ -13,7 +13,7 @@ create table if not exists sessions (
 , duration            interval
 , primary key (tenant_id, id)
 , constraint sessions_module_fkey foreign key (module_id)
-    references config.modules(id) on delete restrict
+    references governance.modules(id) on delete restrict
 , constraint sessions_previous_fkey foreign key (tenant_id, previous_session_id)
     references sessions(tenant_id, id) on delete restrict
 );
@@ -28,5 +28,5 @@ comment on table sessions is
 - tenant_id: partition key (composite PK)
 - user_id: identity of the user who owns this session (opaque string, e.g. Supabase auth UID)
 - previous_session_id self-FK is composite to prevent cross-tenant references
-- module_id references config.modules(id) — config is shared (not partitioned)
+- module_id references governance.modules(id) — config is shared (not partitioned)
 - created_at/completed_at are timestamptz; duration is an interval';

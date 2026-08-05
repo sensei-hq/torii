@@ -156,11 +156,13 @@ async fn assemble_snapshot(pool: &sqlx::PgPool, tenant: Uuid) -> sqlx::Result<Va
     .await?;
 
     let catalog: Value = sqlx::query_scalar(
+        // §D Phase 3: enablement is DERIVED from chain membership (no tenant_model_state) —
+        // a model is enabled iff it appears in the tenant's resolved+viable chains.
         "select coalesce(json_agg(t order by t.full_name), '[]'::json) from ( \
-           select m.full_name, coalesce(tms.enabled, true) as enabled \
+           select m.full_name, \
+                  exists(select 1 from catalog.chains_for_tenant cft \
+                          where cft.tenant_id = $1 and cft.model_id = m.id) as enabled \
              from catalog.models m \
-             left join public.tenant_model_state tms \
-               on tms.model_full_name = m.full_name and tms.tenant_id = $1 \
             where m.deprecated_on is null) t",
     )
     .bind(tenant)

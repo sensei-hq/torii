@@ -260,9 +260,15 @@ pub(crate) async fn ensure_model_enabled(
     let (Some(tenant), Some(model)) = (claims.tenant_id, model) else {
         return Ok(()); // no explicit model, or no tenant (reserve_budget will 402)
     };
+    // §D Phase 3: enablement is DERIVED from chain membership (tenant_model_state retired). A
+    // directly-requested model is allowed iff it is in one of the tenant's resolved+viable CHAT
+    // chains — the same derivation as /v1/models/available, so the gate and the picker agree. A
+    // model in no viable chat chain (never configured, or its router has no key) is a hard block.
     let enabled: bool = sqlx::query_scalar(
-        "select coalesce((select enabled from public.tenant_model_state \
-           where tenant_id = $1 and model_full_name = $2), true)",
+        "select exists( \
+           select 1 from catalog.chains_for_tenant cft \
+             join catalog.capability_types c on c.id = cft.capability_id \
+            where cft.tenant_id = $1 and cft.model_full_name = $2 and c.name = 'chat')",
     )
     .bind(tenant)
     .bind(model)
@@ -278,7 +284,7 @@ pub(crate) async fn ensure_model_enabled(
     if !enabled {
         return Err((
             StatusCode::FORBIDDEN,
-            format!("model '{model}' is disabled for this workspace"),
+            format!("model '{model}' is not enabled for this workspace"),
         ));
     }
     Ok(())

@@ -358,19 +358,19 @@ pub async fn get_models(
         Ok(t) => t,
         Err(resp) => return resp,
     };
-    // Catalog is global (catalog.models); enablement is per-tenant (tenant_model_state,
-    // absent row = enabled).
+    // Catalog is global (catalog.models); enablement is per-tenant and DERIVED from chain
+    // membership (§D Phase 3) — a model is `enabled` iff it appears in the tenant's resolved+viable
+    // chains (chains_for_tenant). `reachable` (has any endpoint) stays a separate catalog fact.
     let rows: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.provider, t.display_name), '[]'::json) from ( \
            select m.full_name, m.display_name, m.description, m.context_window, \
                   m.max_output_tokens, m.released_on, m.deprecated_on, \
                   coalesce(p.name, 'unknown') as provider, \
                   exists(select 1 from catalog.model_endpoints e where e.model_id = m.id) as reachable, \
-                  coalesce(tms.enabled, true) as enabled \
+                  exists(select 1 from catalog.chains_for_tenant cft \
+                          where cft.tenant_id = $1 and cft.model_id = m.id) as enabled \
              from catalog.models m \
              left join catalog.providers p on p.id = m.provider_id \
-             left join public.tenant_model_state tms \
-               on tms.model_full_name = m.full_name and tms.tenant_id = $1 \
             where m.deprecated_on is null) t",
     )
     .bind(tenant)
@@ -397,21 +397,22 @@ pub async fn get_available_models(
         Ok(t) => t,
         Err(resp) => return resp,
     };
+    // §D Phase 3: the CHAT models a member may call = the DISTINCT models in the tenant's
+    // resolved+viable chains FOR THE CHAT CAPABILITY (chains_for_tenant already applies
+    // tenant-override resolution + the keyless-safe key-config filter; a model reaches a chain only
+    // via a configured model_endpoint, so the old endpoint EXISTS is subsumed). The capability
+    // filter is preserved — this powers Compare's cloud columns, which are chat-only.
     let rows: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.provider, t.display_name), '[]'::json) from ( \
-           select m.full_name, coalesce(m.display_name, m.full_name) as display_name, \
-                  coalesce(p.name, 'unknown') as provider \
-             from catalog.models m \
-             left join catalog.providers p on p.id = m.provider_id \
-             left join public.tenant_model_state tms \
-               on tms.model_full_name = m.full_name and tms.tenant_id = $1 \
-            where m.deprecated_on is null \
-              and coalesce(tms.enabled, true) = true \
-              and exists(select 1 from catalog.model_endpoints e where e.model_id = m.id) \
-              and exists(select 1 from catalog.model_capabilities mc \
-                           join catalog.capability_types c on c.id = mc.capability_id \
-                          where mc.model_id = m.id and c.name = 'chat' \
-                            and coalesce(mc.supported, true) = true)) t",
+           select distinct cft.model_full_name as full_name, \
+                  coalesce(cft.model_display_name, cft.model_full_name) as display_name, \
+                  coalesce(cft.provider, 'unknown') as provider \
+             from catalog.chains_for_tenant cft \
+             join catalog.models m on m.id = cft.model_id \
+             join catalog.capability_types c on c.id = cft.capability_id \
+            where cft.tenant_id = $1 \
+              and c.name = 'chat' \
+              and m.deprecated_on is null) t",
     )
     .bind(tenant)
     .fetch_one(&state.pool)

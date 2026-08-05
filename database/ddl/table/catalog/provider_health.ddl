@@ -1,5 +1,5 @@
--- database/ddl/table/public/provider_health.ddl
-set search_path to public, core, catalog, extensions;
+-- database/ddl/table/catalog/provider_health.ddl
+set search_path to catalog, core, extensions;
 -- RW14 (C2): circuit-breaker / provider health state (per-instance for v1).
 create table if not exists provider_health (
   tenant_id    uuid        not null references core.tenants(id) on delete cascade

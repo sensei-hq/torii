@@ -2,17 +2,21 @@
 \set ON_ERROR_STOP on
 \echo '== C3 hard-reserve: over-cap reserves are rejected =='
 begin;
-  -- org (cap 100, hard) → team (no cap) → user (no cap)
-  insert into public.budget_nodes(tenant_id,id,parent_id,kind,name,cap_amount,enforcement,modified_by) values
-    ('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000a1',null,'org','Org',100,'hard','t'),
-    ('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000a2','b0d0e000-0000-0000-0000-0000000000a1','user','U',null,'hard','t');
+  -- §D Phase 5: structure in core.org_units, caps in governance.nodes (id == org_unit_id, DC-1).
+  -- org (cap 100, hard) → user (no cap). Levels 0/3 must exist in unit_levels (seeded for the platform tenant).
+  insert into core.org_units(tenant_id,id,parent_id,level,name,is_personal,modified_by) values
+    ('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000a1',null,0,'Org',false,'t'),
+    ('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000a2','b0d0e000-0000-0000-0000-0000000000a1',3,'U',true,'t');
+  insert into governance.nodes(tenant_id,id,org_unit_id,cap_amount,enforcement,modified_by) values
+    ('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000a1','b0d0e000-0000-0000-0000-0000000000a1',100,'hard','t'),
+    ('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000a2','b0d0e000-0000-0000-0000-0000000000a2',null,'hard','t');
 
   do $$
   declare h1 uuid; h2 uuid;
   begin
     -- reserve 60 on the user → ok (org headroom 100)
     h1 := public.budget_reserve('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000a2',60);
-    if (select reserved_amount from public.budget_nodes where id='b0d0e000-0000-0000-0000-0000000000a1') <> 60 then
+    if (select reserved_amount from governance.nodes where id='b0d0e000-0000-0000-0000-0000000000a1') <> 60 then
       raise exception 'FAIL: org.reserved should be 60'; end if;
 
     -- a second 60 would exceed the org cap (100-60=40 < 60) → must raise
@@ -23,8 +27,8 @@ begin;
 
     -- commit h1 with actual 50 → org.spent=50, reserved=0
     perform public.budget_commit('00000000-0000-0000-0000-000000000000',h1,50);
-    if (select spent_amount from public.budget_nodes where id='b0d0e000-0000-0000-0000-0000000000a1') <> 50
-       or (select reserved_amount from public.budget_nodes where id='b0d0e000-0000-0000-0000-0000000000a1') <> 0 then
+    if (select spent_amount from governance.nodes where id='b0d0e000-0000-0000-0000-0000000000a1') <> 50
+       or (select reserved_amount from governance.nodes where id='b0d0e000-0000-0000-0000-0000000000a1') <> 0 then
       raise exception 'FAIL: commit did not settle spent/reserved'; end if;
 
     -- now headroom is 50; a 60 reserve still exceeds → raise; a 40 is fine
@@ -44,26 +48,29 @@ begin;
   -- Regression guard: per-call costs are sub-cent (~$0.0002). If budget_nodes
   -- amounts revert to numeric(12,2) these round to 0.00 and spend never accrues
   -- (a silent budget leak). org cap 1.00 → user (no cap).
-  insert into public.budget_nodes(tenant_id,id,parent_id,kind,name,cap_amount,enforcement,modified_by) values
-    ('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000b1',null,'org','OrgP',1,'hard','t'),
-    ('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000b2','b0d0e000-0000-0000-0000-0000000000b1','user','UP',null,'hard','t');
+  insert into core.org_units(tenant_id,id,parent_id,level,name,is_personal,modified_by) values
+    ('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000b1',null,0,'OrgP',false,'t'),
+    ('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000b2','b0d0e000-0000-0000-0000-0000000000b1',3,'UP',true,'t');
+  insert into governance.nodes(tenant_id,id,org_unit_id,cap_amount,enforcement,modified_by) values
+    ('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000b1','b0d0e000-0000-0000-0000-0000000000b1',1,'hard','t'),
+    ('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000b2','b0d0e000-0000-0000-0000-0000000000b2',null,'hard','t');
   do $$
   declare h uuid;
   begin
     h := public.budget_reserve('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000b2',0.001);
     perform public.budget_commit('00000000-0000-0000-0000-000000000000',h,0.000204);
-    if (select spent_amount from public.budget_nodes where id='b0d0e000-0000-0000-0000-0000000000b1') <> 0.000204 then
+    if (select spent_amount from governance.nodes where id='b0d0e000-0000-0000-0000-0000000000b1') <> 0.000204 then
       raise exception 'FAIL: sub-cent spend rounded away (spent=%); budget_nodes amounts must be numeric(14,6)',
-        (select spent_amount from public.budget_nodes where id='b0d0e000-0000-0000-0000-0000000000b1'); end if;
+        (select spent_amount from governance.nodes where id='b0d0e000-0000-0000-0000-0000000000b1'); end if;
 
     -- many sub-cent commits must accumulate, not vanish.
     for i in 1..10 loop
       h := public.budget_reserve('00000000-0000-0000-0000-000000000000','b0d0e000-0000-0000-0000-0000000000b2',0.001);
       perform public.budget_commit('00000000-0000-0000-0000-000000000000',h,0.0001);
     end loop;
-    if (select spent_amount from public.budget_nodes where id='b0d0e000-0000-0000-0000-0000000000b1') <> 0.001204 then
+    if (select spent_amount from governance.nodes where id='b0d0e000-0000-0000-0000-0000000000b1') <> 0.001204 then
       raise exception 'FAIL: sub-cent commits did not accumulate (spent=%)',
-        (select spent_amount from public.budget_nodes where id='b0d0e000-0000-0000-0000-0000000000b1'); end if;
+        (select spent_amount from governance.nodes where id='b0d0e000-0000-0000-0000-0000000000b1'); end if;
 
     raise notice 'C3 sub-cent accrual holds ✓';
   end $$;

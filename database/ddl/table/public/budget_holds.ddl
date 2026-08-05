@@ -17,7 +17,7 @@ create table if not exists budget_holds (
 , expires_at      timestamptz  not null            -- TTL reaper releases stale holds
 , primary key (tenant_id, id)
 , foreign key (tenant_id, budget_node_id)
-    references budget_nodes(tenant_id, id) on delete cascade
+    references governance.nodes(tenant_id, id) on delete cascade  -- §D Phase 5: budget_nodes→governance.nodes
 );
 
 create index if not exists idx_budget_holds_node   on budget_holds(tenant_id, budget_node_id, status);

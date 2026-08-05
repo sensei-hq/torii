@@ -2,8 +2,8 @@
 //! run a concurrency-safe hard **reserve → commit** around the inference call.
 //!
 //! Budgets bind to the identity/node, never to a key. At execution C1 resolves the
-//! authenticated caller → their leaf `budget_node` (via `ref_id`), reserves a
-//! worst-case estimate (PR-4), runs inference, then commits the actual spend
+//! authenticated caller → their personal unit's node (via `core.unit_members`, §D Phase 5),
+//! reserves a worst-case estimate (PR-4), runs inference, then commits the actual spend
 //! (releasing the surplus). Enforcement is server-side + serialized in the DB
 //! (`budget_reserve` locks the ancestor path FOR UPDATE) — a `hard` cap cannot be
 //! exceeded even under concurrency. **Fail-closed**: no resolvable node ⇒ deny.
@@ -41,15 +41,18 @@ pub fn estimate(input_est: u32, max_output: u32) -> f64 {
     ((input_est as u64 + max_output as u64) as f64) * WORST_CASE_USD_PER_TOKEN
 }
 
-/// Resolve the caller's budget node: their identity leaf (`ref_id = subject`) first,
-/// else the tenant's org root (`parent_id is null`, the tenant default). Fail-closed
-/// (`NoNode`) when neither exists — every ancestor of the returned node is enforced
-/// by the DB cascade.
+/// Resolve the caller's budget node id (§D Phase 5: over the split org tree). Their PERSONAL unit's
+/// node (`core.unit_members` → `core.org_units.is_personal` → `governance.nodes`) first, else the
+/// tenant's org-root node (`core.org_units.parent_id is null`). The returned id is a
+/// `governance.nodes.id` which == its `org_unit_id` (DC-1), so `budget_reserve` walks the org tree from
+/// it. Fail-closed (`NoNode`) when neither exists — every ancestor unit with a hard cap is enforced.
 pub async fn resolve_node(pool: &PgPool, tenant: Uuid, subject: Uuid) -> Result<Uuid, BudgetError> {
     let leaf: Option<Uuid> = sqlx::query_scalar(
-        "select id from public.budget_nodes \
-           where tenant_id = $1 and ref_id = $2 \
-           order by (kind = 'user') desc limit 1",
+        "select n.id from governance.nodes n \
+           join core.org_units ou on ou.tenant_id = n.tenant_id and ou.id = n.org_unit_id \
+           join core.unit_members um on um.tenant_id = ou.tenant_id and um.unit_id = ou.id \
+          where n.tenant_id = $1 and um.profile_id = $2 \
+          order by ou.is_personal desc limit 1",
     )
     .bind(tenant)
     .bind(subject)
@@ -60,9 +63,10 @@ pub async fn resolve_node(pool: &PgPool, tenant: Uuid, subject: Uuid) -> Result<
     }
 
     let root: Option<Uuid> = sqlx::query_scalar(
-        "select id from public.budget_nodes \
-           where tenant_id = $1 and parent_id is null \
-           order by (kind = 'org') desc limit 1",
+        "select n.id from governance.nodes n \
+           join core.org_units ou on ou.tenant_id = n.tenant_id and ou.id = n.org_unit_id \
+          where n.tenant_id = $1 and ou.parent_id is null \
+          order by ou.level asc limit 1",
     )
     .bind(tenant)
     .fetch_optional(pool)

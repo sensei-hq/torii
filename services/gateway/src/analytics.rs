@@ -119,7 +119,7 @@ impl SpendGroup {
         }
     }
 
-    /// True for the org→dept→team→user tree dims (joined to `budget_nodes` for name/cap).
+    /// True for the org→dept→team→user tree dims (joined to core.org_units + governance.nodes for name/cap).
     pub fn is_node(self) -> bool {
         matches!(
             self,

@@ -33,10 +33,10 @@ begin;
       raise exception 'FAIL escalation: member could INSERT profile_roles (grant self a role)';
     exception when insufficient_privilege then null; end;
 
-    -- 2. Self budget-raise: UPDATE budget_nodes.cap → DENIED (SELECT-only).
+    -- 2. Self budget-raise: UPDATE governance.nodes.cap → DENIED (SELECT-only). §D Phase 5.
     begin
-      update public.budget_nodes set cap_amount = 999999;
-      raise exception 'FAIL budget: member could UPDATE budget_nodes.cap_amount';
+      update governance.nodes set cap_amount = 999999;
+      raise exception 'FAIL budget: member could UPDATE governance.nodes.cap_amount';
     exception when insufficient_privilege then null; end;
 
     -- 3. Confidential self-join: INSERT space_members → DENIED (SELECT-only).

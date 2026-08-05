@@ -53,11 +53,14 @@ enum ScopeErr {
 /// budget-tree walk used only for authz scoping, NOT on the spend aggregation path (the
 /// P12 no-recursive-CTE gate is about the spend GROUP BY, which stays recursion-free).
 async fn subtree_ids(pool: &sqlx::PgPool, tenant: Uuid, root: Uuid) -> Result<Vec<Uuid>, sqlx::Error> {
+    // §D Phase 5: the subtree is over the org tree (core.org_units.parent_id). The ids are org_unit
+    // ids == the ledger's budget_node_id values (DC-1), so the `budget_node_id = any(subtree)` filter
+    // on analytics rows still matches.
     sqlx::query_scalar(
         "with recursive sub as ( \
-           select id from public.budget_nodes where tenant_id = $1 and id = $2 \
+           select id from core.org_units where tenant_id = $1 and id = $2 \
            union all \
-           select b.id from public.budget_nodes b \
+           select b.id from core.org_units b \
              join sub on b.parent_id = sub.id where b.tenant_id = $1) \
          select id from sub",
     )
@@ -68,8 +71,8 @@ async fn subtree_ids(pool: &sqlx::PgPool, tenant: Uuid, root: Uuid) -> Result<Ve
 }
 
 /// The scope-filter resolution (testable without the auth stack): resolve the caller's
-/// PERSONAL budget leaf (`ref_id = subject`, no org-root fallback — that would leak
-/// tenant-wide), then apply [`scope_decision`]. `has_wide` = holds `audit.read`.
+/// PERSONAL unit (`core.unit_members` → `core.org_units.is_personal`, no org-root fallback — that
+/// would leak tenant-wide), then apply [`scope_decision`]. `has_wide` = holds `audit.read`. §D Phase 5.
 async fn scope_filter_for(
     pool: &sqlx::PgPool,
     tenant: Uuid,
@@ -78,8 +81,9 @@ async fn scope_filter_for(
     requested: Option<Uuid>,
 ) -> Result<ScopeFilter, ScopeErr> {
     let own_leaf: Option<Uuid> = sqlx::query_scalar(
-        "select id from public.budget_nodes \
-           where tenant_id = $1 and ref_id = $2 order by (kind = 'user') desc limit 1",
+        "select ou.id from core.org_units ou \
+           join core.unit_members um on um.tenant_id = ou.tenant_id and um.unit_id = ou.id \
+          where ou.tenant_id = $1 and um.profile_id = $2 and ou.is_personal limit 1",
     )
     .bind(tenant)
     .bind(subject)
@@ -179,8 +183,9 @@ pub async fn get_overview(
       from ( \
         select \
           coalesce(sum(cost_usd) filter (where day = current_date),0)::float8 as spend_today, \
-          (select cap_amount::float8 from public.budget_nodes \
-             where tenant_id = $1 and parent_id is null order by cap_amount desc nulls last limit 1) as cap, \
+          (select n.cap_amount::float8 from governance.nodes n \
+             join core.org_units ou on ou.tenant_id = n.tenant_id and ou.id = n.org_unit_id \
+             where n.tenant_id = $1 and ou.parent_id is null order by n.cap_amount desc nulls last limit 1) as cap, \
           coalesce(sum(calls) filter (where day = current_date),0) as calls_today, \
           case when coalesce(sum(calls) filter (where day = current_date - 1),0) > 0 \
                then round((100.0*(sum(calls) filter (where day = current_date) \
@@ -397,12 +402,14 @@ fn spend_sql(group: SpendGroup) -> String {
         format!(
             "{per_call} \
              select json_build_object('rows', coalesce(json_agg(t order by t.cost_usd desc), '[]'::json)) from ( \
-               select (pc.grp)::text as node_id, bn.name as node_name, bn.kind, \
+               select (pc.grp)::text as node_id, ou.name as node_name, core.unit_kind(ou.level) as kind, \
                       sum(pc.cost_usd)::float8 as cost_usd, count(*) as calls, sum(pc.savings)::float8 as savings_usd, \
-                      bn.cap_amount::float8 as cap_usd, \
-                      case when bn.cap_amount > 0 then round((100.0*sum(pc.cost_usd)/bn.cap_amount)::numeric,1)::float8 else null end as pct_of_cap \
-                 from pc left join public.budget_nodes bn on bn.tenant_id = $1 and bn.id = (pc.grp)::uuid \
-                group by pc.grp, bn.name, bn.kind, bn.cap_amount) t"
+                      n.cap_amount::float8 as cap_usd, \
+                      case when n.cap_amount > 0 then round((100.0*sum(pc.cost_usd)/n.cap_amount)::numeric,1)::float8 else null end as pct_of_cap \
+                 from pc \
+                 left join core.org_units ou on ou.tenant_id = $1 and ou.id = (pc.grp)::uuid \
+                 left join governance.nodes n on n.tenant_id = $1 and n.org_unit_id = ou.id \
+                group by pc.grp, ou.name, ou.level, n.cap_amount) t"
         )
     } else {
         format!(
@@ -725,8 +732,15 @@ mod gate {
 
         sqlx::query("insert into core.tenants (id, name, slug, modified_by) values ($1,'gate','gate-'||$1,'test')")
             .bind(t).execute(&pool).await.unwrap();
-        sqlx::query("insert into public.budget_nodes (tenant_id, id, kind, name, cap_amount, modified_by) \
-                     values ($1,$2,'team','Gate Team',100,'test')")
+        // §D Phase 5: team as an org_unit (level 2) + its cap node. unit_levels seeded for the level FK.
+        sqlx::query("insert into core.unit_levels (tenant_id, level, label) \
+                     select $1, v.level, v.label from (values (0,'Organization'),(1,'Department'),(2,'Team'),(3,'Personal'),(4,'Service')) as v(level,label)")
+            .bind(t).execute(&pool).await.unwrap();
+        sqlx::query("insert into core.org_units (tenant_id, id, parent_id, level, name, is_personal, modified_by) \
+                     values ($1,$2,null,2,'Gate Team',false,'test')")
+            .bind(t).bind(team).execute(&pool).await.unwrap();
+        sqlx::query("insert into governance.nodes (tenant_id, id, org_unit_id, cap_amount, enforcement, modified_by) \
+                     values ($1,$2,$2,100,'hard','test')")
             .bind(t).bind(team).execute(&pool).await.unwrap();
         // priced cloud chain owned by the tenant → the local call's counterfactual
         sqlx::query("insert into catalog.models (id,name,version) values ($1,'gate-cloud','1')")
@@ -861,16 +875,26 @@ mod scope_authz {
 
         sqlx::query("insert into core.tenants (id,name,slug,modified_by) values ($1,'sc','sc-'||$1,'test')")
             .bind(t).execute(&pool).await.unwrap();
-        for (id, parent, kind, name, refid) in [
-            (org, None, "org", "Org", None),
-            (team, Some(org), "team", "Team", None),
-            (user, Some(team), "user", "User", Some(subject)),
+        // §D Phase 5: the org tree is core.org_units; the member's identity maps to their PERSONAL
+        // (level-3) unit via core.unit_members (replaces budget_nodes.ref_id). unit_levels seeded for
+        // the level FK; a profiles row for the unit_members.profile_id FK.
+        sqlx::query("insert into core.unit_levels (tenant_id, level, label) \
+                     select $1, v.level, v.label from (values (0,'Organization'),(1,'Department'),(2,'Team'),(3,'Personal'),(4,'Service')) as v(level,label)")
+            .bind(t).execute(&pool).await.unwrap();
+        for (id, parent, level, name, personal) in [
+            (org, None, 0_i32, "Org", false),
+            (team, Some(org), 2, "Team", false),
+            (user, Some(team), 3, "User", true),
         ] {
-            sqlx::query("insert into public.budget_nodes (tenant_id,id,parent_id,kind,name,ref_id,modified_by) \
+            sqlx::query("insert into core.org_units (tenant_id,id,parent_id,level,name,is_personal,modified_by) \
                          values ($1,$2,$3,$4,$5,$6,'test')")
-                .bind(t).bind(id).bind(parent).bind(kind).bind(name).bind(refid)
+                .bind(t).bind(id).bind(parent).bind(level).bind(name).bind(personal)
                 .execute(&pool).await.unwrap();
         }
+        sqlx::query("insert into core.profiles (id) values ($1) on conflict do nothing")
+            .bind(subject).execute(&pool).await.unwrap();
+        sqlx::query("insert into core.unit_members (tenant_id, unit_id, profile_id) values ($1,$2,$3)")
+            .bind(t).bind(user).bind(subject).execute(&pool).await.unwrap();
 
         // subtree_ids: org → all three; team → {team,user}; user → {user}.
         let mut all3 = vec![org, team, user]; all3.sort();

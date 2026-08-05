@@ -24,7 +24,7 @@ begin
     ('catalog', 'chain_models'),
     ('public', 'spaces'),
     ('public', 'space_members'),
-    ('public', 'budget_nodes'),
+    ('governance', 'nodes'),  -- §D Phase 5: was public.budget_nodes (budget cap facet)
     ('governance', 'settings'),
     -- devices: NOT tenant-wide — it has a bespoke own-vs-`device.manage` SELECT policy
     -- (devices_access in governance.sql). A generic `devices_read` here would OR with it

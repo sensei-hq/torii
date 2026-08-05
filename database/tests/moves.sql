@@ -685,4 +685,66 @@ begin
   raise notice 'M-org-3 core.{unit_levels,org_units,unit_members}: RLS + policy + FK spine + SELECT-only ✓';
 end $$;
 
+\echo '== §D Phase 5: budget_nodes → governance.nodes reshape (S3) =='
+
+-- M-org-4 — budget_nodes relocated+reshaped → governance.nodes: structure cols dropped, org_unit_id
+-- FK+UNIQUE+CHECK(id==org_unit_id, DC-1), budget cols + RLS/policy intact, dependent FKs follow the OID,
+-- the shield reads the split schema, core.unit_kind maps the tier, and the 1:1 backfill holds.
+do $$
+declare leftover text;
+begin
+  if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                  where n.nspname='governance' and c.relname='nodes' and c.relkind='r') then
+    raise exception 'FAIL: governance.nodes table missing'; end if;
+  if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+              where n.nspname='public' and c.relname='budget_nodes') then
+    raise exception 'FAIL: public.budget_nodes still exists (move incomplete)'; end if;
+  -- structural cols dropped (moved to core.org_units).
+  select string_agg(col,', ') into leftover from unnest(array['parent_id','kind','ref_id','name']) as col
+   where exists (select 1 from information_schema.columns
+                  where table_schema='governance' and table_name='nodes' and column_name=col);
+  if leftover is not null then raise exception 'FAIL: governance.nodes still has structural cols: %', leftover; end if;
+  -- org_unit_id NOT NULL + FK + UNIQUE + CHECK(id=org_unit_id) (DC-1).
+  if (select is_nullable from information_schema.columns
+        where table_schema='governance' and table_name='nodes' and column_name='org_unit_id') is distinct from 'NO' then
+    raise exception 'FAIL: governance.nodes.org_unit_id missing or nullable'; end if;
+  if not exists (select 1 from pg_constraint where conrelid='governance.nodes'::regclass
+                  and confrelid='core.org_units'::regclass and contype='f') then
+    raise exception 'FAIL: governance.nodes → core.org_units FK missing'; end if;
+  if not exists (select 1 from pg_constraint where conrelid='governance.nodes'::regclass
+                  and contype='u' and conname='nodes_org_unit_unique') then
+    raise exception 'FAIL: governance.nodes UNIQUE(tenant_id,org_unit_id) missing'; end if;
+  if not exists (select 1 from pg_constraint where conrelid='governance.nodes'::regclass
+                  and contype='c' and conname='nodes_id_is_unit') then
+    raise exception 'FAIL: governance.nodes CHECK(id=org_unit_id) missing (DC-1)'; end if;
+  -- RLS + tenant read policy (SELECT-only privileged).
+  if not (select relrowsecurity from pg_class where oid='governance.nodes'::regclass) then
+    raise exception 'FAIL: RLS disabled on governance.nodes'; end if;
+  if not exists (select 1 from pg_policies where schemaname='governance' and tablename='nodes' and policyname='nodes_read') then
+    raise exception 'FAIL: nodes_read policy missing'; end if;
+  -- the carried-over budget_nodes_read policy from the RENAME must be gone (orphan-policy footgun).
+  if exists (select 1 from pg_policies where schemaname='governance' and tablename='nodes' and policyname='budget_nodes_read') then
+    raise exception 'FAIL: orphan budget_nodes_read policy lingers on governance.nodes'; end if;
+  -- dependent FKs follow the OID: budget_holds.budget_node_id + budget_requests.node_id → governance.nodes.
+  if not exists (select 1 from pg_constraint where conrelid='public.budget_holds'::regclass
+                  and confrelid='governance.nodes'::regclass and contype='f') then
+    raise exception 'FAIL: budget_holds → governance.nodes FK lost'; end if;
+  if not exists (select 1 from pg_constraint where conrelid='public.budget_requests'::regclass
+                  and confrelid='governance.nodes'::regclass and contype='f') then
+    raise exception 'FAIL: budget_requests → governance.nodes FK lost'; end if;
+  -- shield reads the split schema; core.unit_kind maps the tier.
+  if pg_get_viewdef('governance.budget_tree_for_tenant'::regclass) !~ 'org_units' then
+    raise exception 'FAIL: budget_tree_for_tenant not repointed to core.org_units'; end if;
+  if core.unit_kind(0) <> 'org' or core.unit_kind(3) <> 'user' or core.unit_kind(4) <> 'service' then
+    raise exception 'FAIL: core.unit_kind tier map wrong'; end if;
+  -- 1:1 backfill integrity: every node has id==org_unit_id and a matching org_unit.
+  if exists (select 1 from governance.nodes n where n.id <> n.org_unit_id) then
+    raise exception 'FAIL: a governance.nodes row has id <> org_unit_id (DC-1 violated)'; end if;
+  if exists (select 1 from governance.nodes n
+              where not exists (select 1 from core.org_units ou
+                                 where ou.tenant_id=n.tenant_id and ou.id=n.org_unit_id)) then
+    raise exception 'FAIL: a governance.nodes row has no matching core.org_units (backfill gap)'; end if;
+  raise notice 'M-org-4 budget_nodes→governance.nodes: reshaped + DC-1 (id==org_unit_id) + FK/UNIQUE/CHECK, dependent FKs follow, shield+unit_kind, 1:1 backfill ✓';
+end $$;
+
 \echo '== §D moves tests done =='

@@ -1,6 +1,7 @@
-set search_path to public, core, extensions;
+set search_path to public, core, governance, extensions;
 
 -- C3/RW7: release a hold without spend (call failed / cancelled).
+-- §D Phase 5: the path rows are governance.nodes (path_node_ids unchanged).
 create or replace function public.budget_release(
   p_tenant uuid,
   p_hold   uuid
@@ -17,7 +18,7 @@ begin
    for update;
   if not found then return; end if;
 
-  update public.budget_nodes
+  update governance.nodes
      set reserved_amount = greatest(0, reserved_amount - v_amount)
    where tenant_id = p_tenant and id = any(v_path);
 

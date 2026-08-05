@@ -116,6 +116,18 @@ pub struct UpsertNode {
     pub free_floor_enabled: Option<bool>,
 }
 
+/// §D Phase 5: the client still sends a `kind` (org/dept/team/user/service); it maps to the org-tree
+/// tier ordinal for core.org_units.level (the inverse of core.unit_kind on the read side).
+fn kind_to_level(kind: &str) -> i32 {
+    match kind {
+        "org" => 0,
+        "dept" => 1,
+        "team" => 2,
+        "service" => 4,
+        _ => 3, // "user" / personal (default)
+    }
+}
+
 /// `POST /rpc/budgets/upsert-node` — capability `budget.write`.
 pub async fn budgets_upsert_node(
     Extension(claims): Extension<Claims>,
@@ -128,31 +140,46 @@ pub async fn budgets_upsert_node(
     };
 
     let id = body.id.unwrap_or_else(Uuid::new_v4);
-    let write = sqlx::query(
-        "insert into public.budget_nodes \
-           (tenant_id, id, parent_id, kind, name, cap_amount, period, enforcement, \
-            alert_threshold, free_floor_enabled, modified_by) \
-         values ($1,$2,$3,$4,$5,$6, coalesce($7,'monthly')::governance.budget_period, coalesce($8,'hard')::governance.enforcement, \
-                 $9, coalesce($10, true), $11) \
-         on conflict (tenant_id, id) do update set \
-           parent_id = excluded.parent_id, kind = excluded.kind, name = excluded.name, \
-           cap_amount = excluded.cap_amount, period = excluded.period, \
-           enforcement = excluded.enforcement, alert_threshold = excluded.alert_threshold, \
-           free_floor_enabled = excluded.free_floor_enabled, \
-           modified_at = now(), modified_by = excluded.modified_by",
-    )
-    .bind(tenant)
-    .bind(id)
-    .bind(body.parent_id)
-    .bind(&body.kind)
-    .bind(&body.name)
-    .bind(body.cap_amount)
-    .bind(&body.period)
-    .bind(&body.enforcement)
-    .bind(body.alert_threshold)
-    .bind(body.free_floor_enabled)
-    .bind(actor.to_string())
-    .execute(&state.pool)
+    let level = kind_to_level(&body.kind);
+    let is_personal = body.kind == "user";
+
+    // §D Phase 5: fork the old conflated write into core.org_units (structure) + governance.nodes
+    // (cap), atomically. id == org_unit_id (DC-1); level derives from the client's `kind`.
+    let write: Result<(), sqlx::Error> = async {
+        let mut tx = state.pool.begin().await?;
+        sqlx::query(
+            "insert into core.org_units \
+               (tenant_id, id, parent_id, level, name, is_personal, modified_by) \
+             values ($1,$2,$3,$4,$5,$6,$7) \
+             on conflict (tenant_id, id) do update set \
+               parent_id = excluded.parent_id, level = excluded.level, name = excluded.name, \
+               is_personal = excluded.is_personal, modified_at = now(), modified_by = excluded.modified_by",
+        )
+        .bind(tenant).bind(id).bind(body.parent_id).bind(level).bind(&body.name)
+        .bind(is_personal).bind(actor.to_string())
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "insert into governance.nodes \
+               (tenant_id, id, org_unit_id, cap_amount, period, enforcement, \
+                alert_threshold, free_floor_enabled, modified_by) \
+             values ($1,$2,$2,$3, coalesce($4,'monthly')::governance.budget_period, \
+                     coalesce($5,'hard')::governance.enforcement, $6, coalesce($7, true), $8) \
+             on conflict (tenant_id, id) do update set \
+               cap_amount = excluded.cap_amount, period = excluded.period, \
+               enforcement = excluded.enforcement, alert_threshold = excluded.alert_threshold, \
+               free_floor_enabled = excluded.free_floor_enabled, \
+               modified_at = now(), modified_by = excluded.modified_by",
+        )
+        .bind(tenant).bind(id).bind(body.cap_amount).bind(&body.period)
+        .bind(&body.enforcement).bind(body.alert_threshold).bind(body.free_floor_enabled)
+        .bind(actor.to_string())
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await
+    }
     .await;
 
     if let Err(e) = write {
@@ -178,10 +205,11 @@ pub struct DeleteNode {
     pub id: Uuid,
 }
 
-/// `POST /rpc/budgets/delete-node` — capability `budget.write`. Deletes a budget node and,
-/// via the `(tenant_id, parent_id)` self-FK `ON DELETE CASCADE`, its entire subtree. The
-/// tenant's org ROOT (`parent_id IS NULL`) is UNDELETABLE: budget resolution is fail-closed
-/// and every call needs a seeded org root, so removing it would break metering tenant-wide.
+/// `POST /rpc/budgets/delete-node` — capability `budget.write`. §D Phase 5: deletes the
+/// core.org_units row; its subtree goes via the org-tree self-FK `ON DELETE CASCADE`, and each unit's
+/// governance.nodes cap (+ holds/requests) cascade via `nodes.org_unit_id ON DELETE CASCADE`. The
+/// tenant's org ROOT (`parent_id IS NULL`) is UNDELETABLE: budget resolution is fail-closed and every
+/// call needs a seeded org root, so removing it would break metering tenant-wide.
 pub async fn budgets_delete_node(
     Extension(claims): Extension<Claims>,
     State(state): State<SharedState>,
@@ -195,7 +223,7 @@ pub async fn budgets_delete_node(
     // Look up the node IN THE CALLER'S TENANT (no cross-tenant delete). A NULL parent
     // identifies the org root, which is refused.
     let parent: Result<Option<Option<Uuid>>, _> = sqlx::query_scalar(
-        "select parent_id from public.budget_nodes where tenant_id = $1 and id = $2",
+        "select parent_id from core.org_units where tenant_id = $1 and id = $2",
     )
     .bind(tenant)
     .bind(body.id)
@@ -218,8 +246,9 @@ pub async fn budgets_delete_node(
         }
     }
 
-    // Cascade delete — descendants go with it via the parent_id self-FK ON DELETE CASCADE.
-    let del = sqlx::query("delete from public.budget_nodes where tenant_id = $1 and id = $2")
+    // Cascade delete — org-tree descendants via parent_id self-FK, each unit's cap node via
+    // governance.nodes.org_unit_id, all ON DELETE CASCADE.
+    let del = sqlx::query("delete from core.org_units where tenant_id = $1 and id = $2")
         .bind(tenant)
         .bind(body.id)
         .execute(&state.pool)
@@ -272,7 +301,7 @@ pub async fn budgets_request(
         "insert into public.budget_requests \
            (tenant_id, node_id, requested_by, requested_cap, reason, status) \
          select $1, $2, $3, $4::numeric, $5, 'pending' \
-          where exists (select 1 from public.budget_nodes b where b.tenant_id = $1 and b.id = $2) \
+          where exists (select 1 from governance.nodes b where b.tenant_id = $1 and b.id = $2) \
          returning id",
     )
     .bind(tenant)
@@ -466,7 +495,7 @@ pub async fn budgets_approve_request(
         "with req as ( \
            update public.budget_requests set status='approved', resolved_by=$2, resolved_at=now() \
             where tenant_id=$1 and id=$3 and status='pending' returning node_id, requested_cap) \
-         update public.budget_nodes b set cap_amount = req.requested_cap, modified_at = now() \
+         update governance.nodes b set cap_amount = req.requested_cap, modified_at = now() \
            from req where b.tenant_id=$1 and b.id = req.node_id",
     )
     .bind(tenant)
@@ -1401,11 +1430,31 @@ pub async fn orgs_create(
         .bind(owner_role)
         .execute(&mut *tx)
         .await?;
+        // §D Phase 5: seed the org tree root — unit_levels (0-4) + org_units root (level 0) + its
+        // uncapped hard governance.nodes cap (id == org_unit_id, DC-1). Fail-closed C1 needs this root.
         sqlx::query(
-            "insert into public.budget_nodes (tenant_id, kind, name, cap_amount, enforcement, modified_by) \
-             values ($1, 'org', 'Organization', null, 'hard', $2)",
+            "insert into core.unit_levels (tenant_id, level, label) \
+             select $1, v.level, v.label \
+             from (values (0,'Organization'),(1,'Department'),(2,'Team'),(3,'Personal'),(4,'Service')) as v(level,label) \
+             on conflict (tenant_id, level) do nothing",
         )
         .bind(tenant)
+        .execute(&mut *tx)
+        .await?;
+        let org_unit: Uuid = sqlx::query_scalar(
+            "insert into core.org_units (tenant_id, parent_id, level, name, is_personal, modified_by) \
+             values ($1, null, 0, 'Organization', false, $2) returning id",
+        )
+        .bind(tenant)
+        .bind(actor.to_string())
+        .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query(
+            "insert into governance.nodes (tenant_id, id, org_unit_id, cap_amount, enforcement, modified_by) \
+             values ($1, $2, $2, null, 'hard', $3)",
+        )
+        .bind(tenant)
+        .bind(org_unit)
         .bind(actor.to_string())
         .execute(&mut *tx)
         .await?;
@@ -2393,34 +2442,42 @@ mod tests {
         sqlx::query("insert into core.tenants (id,name,slug,modified_by) values ($1,'budtree-test',$2,'test')")
             .bind(tenant).bind(format!("budtree-{tenant}")).execute(&pool).await.unwrap();
 
-        // org (root) → dept → user, plus alert/floor to prove the columns round-trip.
+        // §D Phase 5: structure in core.org_units, cap/alert/floor in governance.nodes (id==org_unit_id).
+        sqlx::query("insert into core.unit_levels (tenant_id,level,label) \
+                     select $1, v.level, v.label from (values (0,'Organization'),(1,'Department'),(2,'Team'),(3,'Personal'),(4,'Service')) as v(level,label)")
+            .bind(tenant).execute(&pool).await.unwrap();
+        // org (root, level 0) → dept (1) → user (3), plus alert/floor to prove the columns round-trip.
         let (org, dept, user) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-        let ins = |id: Uuid, parent: Option<Uuid>, kind: &'static str, p: PgPool, t: Uuid| async move {
-            sqlx::query("insert into public.budget_nodes (tenant_id,id,parent_id,kind,name,cap_amount,alert_threshold,free_floor_enabled,enforcement,modified_by) \
-                         values ($1,$2,$3,$4,$4,100,0.8,false,'hard','test')")
-                .bind(t).bind(id).bind(parent).bind(kind).execute(&p).await.unwrap();
+        let ins = |id: Uuid, parent: Option<Uuid>, level: i32, personal: bool, p: PgPool, t: Uuid| async move {
+            sqlx::query("insert into core.org_units (tenant_id,id,parent_id,level,name,is_personal,modified_by) \
+                         values ($1,$2,$3,$4,'n',$5,'test')")
+                .bind(t).bind(id).bind(parent).bind(level).bind(personal).execute(&p).await.unwrap();
+            sqlx::query("insert into governance.nodes (tenant_id,id,org_unit_id,cap_amount,alert_threshold,free_floor_enabled,enforcement,modified_by) \
+                         values ($1,$2,$2,100,0.8,false,'hard','test')")
+                .bind(t).bind(id).execute(&p).await.unwrap();
         };
-        ins(org, None, "org", pool.clone(), tenant).await;
-        ins(dept, Some(org), "dept", pool.clone(), tenant).await;
-        ins(user, Some(dept), "user", pool.clone(), tenant).await;
+        ins(org, None, 0, false, pool.clone(), tenant).await;
+        ins(dept, Some(org), 1, false, pool.clone(), tenant).await;
+        ins(user, Some(dept), 3, true, pool.clone(), tenant).await;
 
         // (1) root guard: the org node has a NULL parent → the handler refuses to delete it.
         let root_parent: Option<Uuid> = sqlx::query_scalar(
-            "select parent_id from public.budget_nodes where tenant_id=$1 and id=$2")
+            "select parent_id from core.org_units where tenant_id=$1 and id=$2")
             .bind(tenant).bind(org).fetch_one(&pool).await.unwrap();
         assert!(root_parent.is_none(), "org root must have a NULL parent (undeletable)");
-        // alert/floor persisted (columns exposed by the read + upsert).
+        // alert/floor persisted on the cap node (columns exposed by the read + upsert).
         let (alert, floor): (Option<f64>, bool) = sqlx::query_as(
-            "select alert_threshold::float8, free_floor_enabled from public.budget_nodes where tenant_id=$1 and id=$2")
+            "select alert_threshold::float8, free_floor_enabled from governance.nodes where tenant_id=$1 and id=$2")
             .bind(tenant).bind(dept).fetch_one(&pool).await.unwrap();
         assert_eq!(alert, Some(0.8));
         assert!(!floor, "free_floor_enabled must round-trip false");
 
-        // (2) delete the dept → cascade removes dept + its user child; only the org root remains.
-        sqlx::query("delete from public.budget_nodes where tenant_id=$1 and id=$2")
+        // (2) delete the dept org_unit → cascade removes dept + its user child (org-tree self-FK) and
+        // each unit's cap node (nodes.org_unit_id FK); only the org root remains.
+        sqlx::query("delete from core.org_units where tenant_id=$1 and id=$2")
             .bind(tenant).bind(dept).execute(&pool).await.unwrap();
         let remaining: i64 = sqlx::query_scalar(
-            "select count(*) from public.budget_nodes where tenant_id=$1")
+            "select count(*) from core.org_units where tenant_id=$1")
             .bind(tenant).fetch_one(&pool).await.unwrap();
         assert_eq!(remaining, 1, "cascade must remove dept + user, leaving only the org root");
 
@@ -2465,8 +2522,14 @@ mod tests {
             .bind(actor).bind(tenant).execute(&mut *tx).await.unwrap();
         sqlx::query("insert into core.profile_roles (tenant_id,profile_id,role_id,assigned_by) values ($1,$2,$3,'self_create')")
             .bind(tenant).bind(actor).bind(owner_role).execute(&mut *tx).await.unwrap();
-        sqlx::query("insert into public.budget_nodes (tenant_id,kind,name,cap_amount,enforcement,modified_by) values ($1,'org','Organization',null,'hard',$2)")
-            .bind(tenant).bind(actor.to_string()).execute(&mut *tx).await.unwrap();
+        // §D Phase 5: seed org tree root — unit_levels + org_units(root) + governance.nodes(cap).
+        sqlx::query("insert into core.unit_levels (tenant_id,level,label) \
+                     select $1, v.level, v.label from (values (0,'Organization'),(1,'Department'),(2,'Team'),(3,'Personal'),(4,'Service')) as v(level,label) on conflict do nothing")
+            .bind(tenant).execute(&mut *tx).await.unwrap();
+        let ou: Uuid = sqlx::query_scalar("insert into core.org_units (tenant_id,parent_id,level,name,is_personal,modified_by) values ($1,null,0,'Organization',false,$2) returning id")
+            .bind(tenant).bind(actor.to_string()).fetch_one(&mut *tx).await.unwrap();
+        sqlx::query("insert into governance.nodes (tenant_id,id,org_unit_id,cap_amount,enforcement,modified_by) values ($1,$2,$2,null,'hard',$3)")
+            .bind(tenant).bind(ou).bind(actor.to_string()).execute(&mut *tx).await.unwrap();
         sqlx::query("update core.profiles set claims_version = claims_version + 1 where id=$1")
             .bind(actor).execute(&mut *tx).await.unwrap();
         tx.commit().await.unwrap();
@@ -2482,7 +2545,9 @@ mod tests {
             .bind(tenant).bind(actor).bind(owner_role).fetch_one(&pool).await.unwrap();
         assert!(is_owner, "caller must hold the owner role");
         let root_ok: bool = sqlx::query_scalar(
-            "select exists(select 1 from public.budget_nodes where tenant_id=$1 and kind='org' and cap_amount is null and enforcement='hard')")
+            "select exists(select 1 from governance.nodes n \
+               join core.org_units ou on ou.tenant_id=n.tenant_id and ou.id=n.org_unit_id \
+              where n.tenant_id=$1 and ou.parent_id is null and ou.level=0 and n.cap_amount is null and n.enforcement='hard')")
             .bind(tenant).fetch_one(&pool).await.unwrap();
         assert!(root_ok, "fail-closed budget org-root must be seeded");
         let cv: i64 = sqlx::query_scalar("select claims_version from core.profiles where id=$1")

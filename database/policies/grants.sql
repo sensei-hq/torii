@@ -50,7 +50,7 @@ begin
     ('catalog', 'chain_models'),
     ('public', 'spaces'),
     ('public', 'space_members'),
-    ('public', 'budget_nodes'),
+    ('governance', 'nodes'),  -- §D Phase 5: was public.budget_nodes
     ('governance', 'settings'),
     ('device', 'devices'),
     ('public', 'document_embeddings'),   -- gateway-produced (ingestion); never client-written

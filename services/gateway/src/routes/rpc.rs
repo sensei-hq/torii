@@ -1197,7 +1197,7 @@ pub async fn routing_set_step(
         Err(resp) => return resp,
     };
     let write = sqlx::query(
-        "update public.fallback_chain_models \
+        "update catalog.chain_models \
             set is_active = $1, modified_by = $2, modified_at = now() \
           where id = $3 and tenant_id = $4",
     )

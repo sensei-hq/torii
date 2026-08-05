@@ -73,7 +73,7 @@ begin;
 
     -- 7. Chain tamper: UPDATE fallback_chains → DENIED (SELECT-only).
     begin
-      update public.fallback_chains set name = 'x';
+      update catalog.chains set name = 'x';
       raise exception 'FAIL chain: member could UPDATE fallback_chains';
     exception when insufficient_privilege then null; end;
 

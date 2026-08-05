@@ -1,7 +1,9 @@
--- database/ddl/table/public/fallback_chains.ddl
-set search_path to public, core, config, extensions;
+-- database/ddl/table/catalog/chains.ddl
+set search_path to catalog, core, extensions;
 
-create table if not exists fallback_chains (
+-- §D rename+move: catalog.chains → catalog.chains (db-redesign.md §98). Tenant-scoped
+-- fallback chains; column names kept. RLS-covered (tenant read policy via tenant_isolation.sql).
+create table if not exists chains (
   tenant_id                    uuid        not null
     references core.tenants(id) on delete cascade
 , id                           uuid        not null default gen_random_uuid()
@@ -20,21 +22,21 @@ create table if not exists fallback_chains (
 , primary key (tenant_id, id)
 );
 
-create unique index if not exists fallback_chains_tenant_name_ukey
-  on fallback_chains(tenant_id, name);
+create unique index if not exists chains_tenant_name_ukey
+  on chains(tenant_id, name);
 
-create index if not exists fallback_chains_capability_idx
-  on fallback_chains(tenant_id, capability_id);
+create index if not exists chains_capability_idx
+  on chains(tenant_id, capability_id);
 
-create index if not exists fallback_chains_active_idx
-  on fallback_chains(tenant_id, is_active);
+create index if not exists chains_active_idx
+  on chains(tenant_id, is_active);
 
-create index if not exists fallback_chains_priority_idx
-  on fallback_chains(tenant_id, priority);
+create index if not exists chains_priority_idx
+  on chains(tenant_id, priority);
 
-comment on table fallback_chains is
+comment on table chains is
 'Fallback chain configurations, scoped per tenant.
 - tenant_id: partition key — platform tenant holds the default chains
 - Tenants override platform chains by defining a chain with the same name
 - is_active = false falls back to platform chain (not just silently hidden)
-- Works with fallback_chain_models and effective_chain_models view';
+- Works with catalog.chain_models and public.effective_chain_models view';

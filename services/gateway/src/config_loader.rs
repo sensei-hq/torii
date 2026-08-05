@@ -2,7 +2,7 @@
 //!
 //! The torii schema stores routing configuration in `catalog.routers`,
 //! `catalog.models`, `catalog.model_capabilities`, `catalog.model_endpoints`,
-//! and `public.fallback_chains` / `public.fallback_chain_models` (tenant-scoped
+//! and `catalog.chains` / `catalog.chain_models` (tenant-scoped
 //! to the platform tenant: `core.tenants WHERE is_platform = true`).
 //!
 //! DB→config mapping lives in **pure builder functions** (no I/O) so they can
@@ -189,7 +189,7 @@ pub(crate) fn build_models(rows: &[ModelRow]) -> HashMap<String, ModelConfig> {
     models
 }
 
-/// Build the `chains` map from `public.fallback_chains` + `fallback_chain_models`.
+/// Build the `chains` map from `catalog.chains` + `catalog.chain_models`.
 ///
 /// Chains whose DB capability name doesn't map to a gateway [`Capability`] are
 /// skipped. Chains with no active members are also skipped. Entries are sorted
@@ -246,7 +246,7 @@ pub(crate) fn build_chains(
 /// Reads:
 /// - `catalog.routers` (active only)
 /// - `catalog.models` joined to `model_capabilities` + primary `model_endpoints`
-/// - `public.fallback_chains` + `fallback_chain_models` for the platform tenant
+/// - `catalog.chains` + `catalog.chain_models` for the platform tenant
 ///
 /// Uses runtime `sqlx::query` (no compile-time `query!` macro). After loading,
 /// logs `"config: N routers, M models, K chains"`.
@@ -335,7 +335,7 @@ pub async fn load_gateway_config(pool: &sqlx::PgPool) -> anyhow::Result<GatewayC
     // the seed/default chains consumed by the gateway engine.
     let chain_pg_rows = sqlx::query(
         "SELECT fc.name, cap.name AS capability_name
-         FROM public.fallback_chains fc
+         FROM catalog.chains fc
          JOIN catalog.capability_types cap ON cap.id = fc.capability_id
          WHERE fc.tenant_id = (
                    SELECT id FROM core.tenants WHERE is_platform = true LIMIT 1
@@ -364,8 +364,8 @@ pub async fn load_gateway_config(pool: &sqlx::PgPool) -> anyhow::Result<GatewayC
                 m.full_name     AS model_full_name,
                 me.router_model_id,
                 fcm.sequence_order
-         FROM public.fallback_chain_models fcm
-         JOIN public.fallback_chains fc
+         FROM catalog.chain_models fcm
+         JOIN catalog.chains fc
               ON fc.tenant_id = fcm.tenant_id AND fc.id = fcm.fallback_chain_id
          JOIN catalog.routers r ON r.id = fcm.router_id
          JOIN catalog.models  m ON m.id = fcm.model_id

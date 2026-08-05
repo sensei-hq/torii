@@ -14,7 +14,7 @@ language sql
 stable
 as $$
   select chain_id
-    from public.chain_bindings
+    from catalog.chain_bindings
    where tenant_id  = p_tenant
      and capability = p_capability
      and (space_id is null or space_id = p_space)

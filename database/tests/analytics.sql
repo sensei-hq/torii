@@ -203,12 +203,12 @@ begin;
   -- NB: model sav-cloud-unpriced (…003) intentionally has NO endpoint → its cloud
   -- step is unpriced (no ModelPricing), which the baseline must surface, not guess.
   -- four chains (tenant 0 owns them → effective_chain_models first branch)
-  insert into public.fallback_chains (id, tenant_id, name, capability_id, is_active, modified_by) values
+  insert into catalog.chains (id, tenant_id, name, capability_id, is_active, modified_by) values
     ('a3320000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000000','sav-cloud',:'cid',true,'test'),
     ('a3320000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000000','sav-local',:'cid',true,'test'),
     ('a3320000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000000','sav-unpriced',:'cid',true,'test'),
     ('a3320000-0000-0000-0000-000000000004','00000000-0000-0000-0000-000000000000','sav-two',:'cid',true,'test');
-  insert into public.fallback_chain_models
+  insert into catalog.chain_models
     (id, tenant_id, fallback_chain_id, router_id, model_id, sequence_order, plane, is_active, modified_by) values
     -- sav-cloud: one cheap cloud step
     ('a3330000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000000','a3320000-0000-0000-0000-000000000001',:'rid','a3300000-0000-0000-0000-000000000001',1,'cloud',true,'test'),
@@ -280,10 +280,10 @@ begin;
     (id, model_id, router_id, capability_id, endpoint_url, cost_per_input_token, cost_per_output_token, is_active)
     values ('a4410000-0000-0000-0000-000000000001','a4400000-0000-0000-0000-000000000001',
             :'rid',:'cid','http://t',0.00001,0.00003,true);
-  insert into public.fallback_chains (id, tenant_id, name, capability_id, is_active, modified_by)
+  insert into catalog.chains (id, tenant_id, name, capability_id, is_active, modified_by)
     values ('a4420000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000000',
             'recon-chain',:'cid',true,'test');
-  insert into public.fallback_chain_models
+  insert into catalog.chain_models
     (id, tenant_id, fallback_chain_id, router_id, model_id, sequence_order, plane, is_active, modified_by)
     values ('a4430000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000000',
             'a4420000-0000-0000-0000-000000000001',:'rid',

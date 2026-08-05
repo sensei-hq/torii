@@ -612,4 +612,41 @@ begin
   raise notice 'M-gov-4 settings → governance + tenant_settings absorbed/retired, settings_for_tenant shield deny-all ✓';
 end $$;
 
+\echo '== §D Phase 5: org/budget split — budget shields (S1) =='
+
+-- M-org-1 — budget_tree_for_tenant shield exists with the flat BudgetNode contract and is
+-- gateway-internal (NOT granted to authenticated — all-tenant rows, no security_invoker). Shipped
+-- BEFORE the budget_nodes→governance.nodes move so /v1/budgets + org-tree-state stay byte-identical.
+do $$
+declare missing text;
+begin
+  if not exists (select 1 from pg_views where schemaname='governance' and viewname='budget_tree_for_tenant') then
+    raise exception 'FAIL: governance.budget_tree_for_tenant view missing'; end if;
+  select string_agg(c, ', ') into missing from unnest(array[
+    'tenant_id','id','parent_id','kind','name','cap_amount','spent_amount','reserved_amount',
+    'enforcement','period','alert_threshold','free_floor_enabled']) as c
+   where not exists (select 1 from information_schema.columns
+                      where table_schema='governance' and table_name='budget_tree_for_tenant' and column_name=c);
+  if missing is not null then raise exception 'FAIL: budget_tree_for_tenant missing columns: %', missing; end if;
+  if has_table_privilege('authenticated','governance.budget_tree_for_tenant','select') then
+    raise exception 'FAIL: authenticated can SELECT budget_tree_for_tenant (cross-tenant leak)'; end if;
+  raise notice 'M-org-1 budget_tree_for_tenant shield: BudgetNode contract + deny-all ✓';
+end $$;
+
+-- M-org-2 — budget_requests_for_tenant shield exists with the BudgetRequest contract, deny-all.
+do $$
+declare missing text;
+begin
+  if not exists (select 1 from pg_views where schemaname='governance' and viewname='budget_requests_for_tenant') then
+    raise exception 'FAIL: governance.budget_requests_for_tenant view missing'; end if;
+  select string_agg(c, ', ') into missing from unnest(array[
+    'tenant_id','id','node_id','requested_by','requested_cap','reason','status','created_at']) as c
+   where not exists (select 1 from information_schema.columns
+                      where table_schema='governance' and table_name='budget_requests_for_tenant' and column_name=c);
+  if missing is not null then raise exception 'FAIL: budget_requests_for_tenant missing columns: %', missing; end if;
+  if has_table_privilege('authenticated','governance.budget_requests_for_tenant','select') then
+    raise exception 'FAIL: authenticated can SELECT budget_requests_for_tenant (cross-tenant leak)'; end if;
+  raise notice 'M-org-2 budget_requests_for_tenant shield: BudgetRequest contract + deny-all ✓';
+end $$;
+
 \echo '== §D moves tests done =='

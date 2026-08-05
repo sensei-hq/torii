@@ -190,7 +190,7 @@ pub async fn get_budgets(
                   cap_amount::float8 as cap_amount, spent_amount::float8 as spent_amount, \
                   reserved_amount::float8 as reserved_amount, enforcement, period, \
                   alert_threshold::float8 as alert_threshold, free_floor_enabled \
-             from public.budget_nodes where tenant_id = $1) t",
+             from governance.budget_tree_for_tenant where tenant_id = $1) t",
     )
     .bind(tenant)
     .fetch_one(&state.pool)
@@ -199,7 +199,7 @@ pub async fn get_budgets(
         "select coalesce(json_agg(t order by t.created_at desc), '[]'::json) from ( \
            select id, node_id, requested_by, requested_cap::float8 as requested_cap, \
                   reason, status, created_at \
-             from public.budget_requests where tenant_id = $1 and status = 'pending') t",
+             from governance.budget_requests_for_tenant where tenant_id = $1 and status = 'pending') t",
     )
     .bind(tenant)
     .fetch_one(&state.pool)

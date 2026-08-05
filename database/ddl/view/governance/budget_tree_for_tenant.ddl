@@ -1,33 +1,36 @@
 -- database/ddl/view/governance/budget_tree_for_tenant.ddl
-set search_path to governance, public, core, extensions;
+set search_path to governance, core, extensions;
 
 -- §D §B ★ shield view (Phase 5): the flat budget-tree read contract backing GET /v1/budgets (nodes).
--- Shipped BEFORE the budget_nodes→governance.nodes org/budget split so the frontend org-tree
--- (org-tree.ts buildTree/childKind keys on the machine `kind` in {org,dept,team,user,service}) and
--- the Activity cascade stay BYTE-IDENTICAL while the table splits into core.org_units (structure) +
--- governance.nodes (caps). S1 = a passthrough over the still-conflated public.budget_nodes; S3 swaps
--- the body to `governance.nodes × core.org_units × core.unit_levels` deriving `kind` from
--- org_units.level (core.unit_kind) — the view NAME + column contract never change across the move.
--- Gateway-internal: read via the service_role pool, tenant-filtered; NOT granted to authenticated
--- (all-tenant rows, no security_invoker → a grant would be a PostgREST cross-tenant leak).
+-- After the org/budget split the flat {parent_id, kind} contract is REASSEMBLED from the split schema:
+-- structure (parent_id, name, level) from core.org_units, cap facet from governance.nodes (joined 1:1
+-- via org_unit_id == id, DC-1), and `kind` derived from org_units.level via core.unit_kind — the fixed
+-- machine map {org,dept,team,user,service} the frontend (org-tree.ts KIND_RANK/childKind) keys on (NOT
+-- unit_levels.label, which is the separate human relabel). So org-tree.ts + the Activity cascade stay
+-- BYTE-IDENTICAL while the table splits. Gateway-internal: read via the service_role pool,
+-- tenant-filtered; NOT granted to authenticated (all-tenant rows, no security_invoker → a grant would
+-- be a PostgREST cross-tenant leak; governance has no blanket table grant so this is deny-all by default).
 create or replace view budget_tree_for_tenant as
 select
-  tenant_id
-, id
-, parent_id
-, kind
-, name
-, cap_amount
-, spent_amount
-, reserved_amount
-, enforcement
-, period
-, alert_threshold
-, free_floor_enabled
-from public.budget_nodes;
+  n.tenant_id
+, n.id
+, ou.parent_id
+, core.unit_kind(ou.level)          as kind
+, ou.name
+, n.cap_amount
+, n.spent_amount
+, n.reserved_amount
+, n.enforcement
+, n.period
+, n.alert_threshold
+, n.free_floor_enabled
+from governance.nodes n
+join core.org_units ou
+  on  ou.tenant_id = n.tenant_id
+  and ou.id        = n.org_unit_id;
 
 comment on view budget_tree_for_tenant is
-'Budget-tree read shield (§D §B, Phase 5): the flat BudgetNode contract for /v1/budgets. S1
-passes through public.budget_nodes; after the org/budget split the body reads
-governance.nodes × core.org_units × core.unit_levels (kind derived from org_units.level) with the
-same columns. Gateway-internal; never grant to authenticated.';
+'Budget-tree read shield (§D §B, Phase 5): the flat BudgetNode contract for /v1/budgets. Reassembles
+{id,parent_id,kind,name,cap/spent/reserved,enforcement,period,alert_threshold,free_floor_enabled} from
+core.org_units (structure) × governance.nodes (cap, 1:1 via org_unit_id==id) with kind from
+core.unit_kind(org_units.level). Gateway-internal; never grant to authenticated.';

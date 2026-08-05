@@ -85,21 +85,22 @@ impl GatewayStore for PgGatewayStore {
             "cloud"
         };
 
-        // GH-5 attribution: `subject_id` is the resolved budget node → `budget_node_id`
-        // (spec's `subject_id := budget_node_id`). The recursive CTE walks that node's
-        // ancestor path and denormalizes it into `{org,dept,team,user}_node_id` so the
-        // per-scope spend rollups (P12) need no recursive join. When `subject_id` is
-        // NULL the CTE is empty and the path columns are NULL (aggregate over 0 rows).
-        // (`hold_id` needs a crate `InferenceCall` field — the remaining GH-5 bit.)
+        // GH-5 attribution (§D Phase 5): `subject_id` is the resolved node id → `budget_node_id`,
+        // which == its `org_unit_id` (DC-1). The recursive CTE walks that unit's ancestor path over
+        // `core.org_units.parent_id` and denormalizes it into `{org,dept,team,user}_node_id` (by tier
+        // `level`: 0=org, 1=dept, 2=team, 3/4=user/service) so the per-scope spend rollups (P12) need no
+        // recursive join. The stored ids are org_unit ids (== node ids), so historical ledger rows stay
+        // valid — no data migration; P6 renames the column to org_unit_id. NULL subject → empty CTE →
+        // NULL path columns (aggregate over 0 rows).
         sqlx::query(
             r#"
             WITH RECURSIVE anc AS (
-                SELECT id, parent_id, kind
-                  FROM public.budget_nodes
+                SELECT id, parent_id, level
+                  FROM core.org_units
                  WHERE tenant_id = $1 AND id = $18
                 UNION ALL
-                SELECT b.id, b.parent_id, b.kind
-                  FROM public.budget_nodes b
+                SELECT b.id, b.parent_id, b.level
+                  FROM core.org_units b
                   JOIN anc ON b.id = anc.parent_id
                  WHERE b.tenant_id = $1
             )
@@ -116,10 +117,10 @@ impl GatewayStore for PgGatewayStore {
                 $10, $11, $12, $13,
                 $14::metering.call_status, $15, $16, $17,
                 $18,
-                (SELECT id FROM anc WHERE kind = 'org'  LIMIT 1),
-                (SELECT id FROM anc WHERE kind = 'dept' LIMIT 1),
-                (SELECT id FROM anc WHERE kind = 'team' LIMIT 1),
-                (SELECT id FROM anc WHERE kind IN ('user', 'service') LIMIT 1),
+                (SELECT id FROM anc WHERE level = 0 LIMIT 1),
+                (SELECT id FROM anc WHERE level = 1 LIMIT 1),
+                (SELECT id FROM anc WHERE level = 2 LIMIT 1),
+                (SELECT id FROM anc WHERE level IN (3, 4) LIMIT 1),
                 $19::core.execution_location
             "#,
         )

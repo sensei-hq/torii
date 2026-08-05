@@ -284,22 +284,24 @@ end $$;
 
 do $$
 declare
+  -- §D Phase 5: period/enforcement moved to governance.nodes (was public.budget_nodes); holds/requests
+  -- stay in public. Schema-qualified so the check follows the split.
   cols text[][] := array[
-    ['budget_nodes','period','budget_period'],
-    ['budget_nodes','enforcement','enforcement'],
-    ['budget_holds','status','hold_status'],
-    ['budget_requests','status','request_status']];
-  i int; t text; c text; want text; udt text;
+    ['governance','nodes','period','budget_period'],
+    ['governance','nodes','enforcement','enforcement'],
+    ['public','budget_holds','status','hold_status'],
+    ['public','budget_requests','status','request_status']];
+  i int; s text; t text; c text; want text; udt text;
 begin
   for i in 1 .. array_length(cols,1) loop
-    t := cols[i][1]; c := cols[i][2]; want := cols[i][3];
+    s := cols[i][1]; t := cols[i][2]; c := cols[i][3]; want := cols[i][4];
     select udt_name into udt from information_schema.columns
-     where table_schema='public' and table_name=t and column_name=c;
+     where table_schema=s and table_name=t and column_name=c;
     if udt is distinct from want then
-      raise exception 'FAIL: %.% udt=% (expected %)', t, c, coalesce(udt,'<none>'), want; end if;
+      raise exception 'FAIL: %.%.% udt=% (expected %)', s, t, c, coalesce(udt,'<none>'), want; end if;
   end loop;
   if exists (select 1 from pg_constraint where contype='c'
-              and conrelid::regclass::text like 'budget%'
+              and (conrelid::regclass::text like 'budget%' or conrelid = 'governance.nodes'::regclass)
               and (pg_get_constraintdef(oid) ilike '%period%in%'
                 or pg_get_constraintdef(oid) ilike '%enforcement%in%'
                 or pg_get_constraintdef(oid) ilike '%status%in%')) then

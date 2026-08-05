@@ -16,7 +16,7 @@ create table if not exists budget_requests (
 , resolved_at    timestamptz
 , created_at     timestamptz   not null default now()
 , primary key (tenant_id, id)
-, foreign key (tenant_id, node_id) references budget_nodes(tenant_id, id) on delete cascade
+, foreign key (tenant_id, node_id) references governance.nodes(tenant_id, id) on delete cascade  -- §D Phase 5
 );
 
 create index if not exists idx_budget_requests_node on budget_requests(tenant_id, node_id, status);

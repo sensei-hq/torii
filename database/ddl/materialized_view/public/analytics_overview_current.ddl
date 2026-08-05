@@ -1,5 +1,5 @@
 -- database/ddl/materialized_view/public/analytics_overview_current.ddl
-set search_path to public, core, extensions;
+set search_path to public, core, governance, extensions;
 
 -- O2 §3.2: the W1 Overview stat-row snapshot, one row per tenant. spend/calls/
 -- fallbacks "today", latency avg + p95, blended cost/call over the trailing 14d
@@ -13,9 +13,12 @@ create materialized view if not exists analytics_overview_current as
   select
     u.tenant_id,
     coalesce(sum(u.cost_usd) filter (where u.day = current_date), 0)           as spend_today,
-    ( select bn.cap_amount from public.budget_nodes bn
-       where bn.tenant_id = u.tenant_id and bn.parent_id is null
-       order by bn.cap_amount desc nulls last limit 1 )                        as spend_today_cap,
+    -- §D Phase 5: the tenant-root cap now lives on governance.nodes, joined to the org_units root
+    -- (parent_id is null) via org_unit_id (== id, DC-1). Was public.budget_nodes(parent_id is null).
+    ( select n.cap_amount from governance.nodes n
+       join core.org_units ou on ou.tenant_id = n.tenant_id and ou.id = n.org_unit_id
+       where n.tenant_id = u.tenant_id and ou.parent_id is null
+       order by n.cap_amount desc nulls last limit 1 )                        as spend_today_cap,
     coalesce(sum(u.calls) filter (where u.day = current_date), 0)              as calls_today,
     coalesce(sum(u.fallback_calls) filter (where u.day = current_date), 0)     as fallbacks_today,
     case when coalesce(sum(u.latency_ms_count) filter (where u.day = current_date), 0) > 0

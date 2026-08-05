@@ -1,7 +1,8 @@
-set search_path to public, core, extensions;
+set search_path to public, core, governance, extensions;
 
 -- C3/RW7: commit a hold — release its reserve on the path and add the ACTUAL
 -- metered cost to spent_amount. Idempotent (only acts on an active hold).
+-- §D Phase 5: the path rows are governance.nodes (path_node_ids unchanged — node ids == unit ids).
 create or replace function public.budget_commit(
   p_tenant uuid,
   p_hold   uuid,
@@ -19,7 +20,7 @@ begin
    for update;
   if not found then return; end if;
 
-  update public.budget_nodes
+  update governance.nodes
      set reserved_amount = greatest(0, reserved_amount - v_amount),
          spent_amount    = spent_amount + p_actual
    where tenant_id = p_tenant and id = any(v_path);

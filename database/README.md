@@ -46,9 +46,9 @@ The import pipeline (configured in `design.yaml`):
 
 | Schema    | Purpose                                 | Tables                                                                                                                                                                         |
 | --------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `config`  | Reference data (rarely changes)         | providers, models, routers, capabilities, fallback_chains, fallback_chain_models, modules, features, feature_states, mcp_servers, documents, document_embeddings               |
+| `config`  | Reference data (rarely changes)         | config_versions (most reference data has moved to catalog/governance per §D)               |
 | `public`  | Runtime data (grows with usage)         | model_capabilities, model_endpoints, gateway_tasks, gateway_task_logs, sessions, session_logs, plans, planned_tasks, planned_task_interactions, documents, document_embeddings |
-| `history` | Historization (audit trail)             | past_mcp_servers, past_feature_states                                                                                                                                          |
+| `history` | Historization (audit trail)             | past_mcp_servers                                                                                                                                          |
 | `staging` | Import staging (truncated before loads) | mirrors of 11 importable tables                                                                                                                                                |
 
 ## Folder Structure

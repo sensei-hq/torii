@@ -19,10 +19,13 @@ use crate::{state::SharedState, store::PgGatewayStore};
 /// Is the `quality-judge` feature enabled for this tenant? Default-off: on only when a
 /// workspace-scoped `feature_policies` row sets `default-on` or `user-overridable`.
 pub async fn judge_enabled(state: &SharedState, tenant: Uuid) -> bool {
+    // §D Phase 4: read the resolved workspace state through the feature_governance_for_tenant
+    // shield (policy_state already reflects the fold's feature_id keying; `slug` stays the API key).
+    // Filter to a non-null policy_state so a tenant with no 'quality-judge' policy yields None
+    // (→ default-off), preserving the prior fetch_optional semantics.
     let st: Option<String> = sqlx::query_scalar(
-        "select state::text from public.feature_policies \
-          where tenant_id = $1 and feature_key = 'quality-judge' and scope_type = 'workspace' \
-          order by modified_at desc limit 1",
+        "select policy_state::text from governance.feature_governance_for_tenant \
+          where tenant_id = $1 and slug = 'quality-judge' and policy_state is not null",
     )
     .bind(tenant)
     .fetch_optional(&state.pool)

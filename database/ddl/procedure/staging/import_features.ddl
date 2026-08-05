@@ -5,7 +5,7 @@ language plpgsql
 as
 $$
 begin
-  insert into config.features(
+  insert into governance.features(
      module_id, slug, title, description, purpose, benefit, example
    , enabled, mandatory, sequence
    , modified_at, modified_by)
@@ -22,11 +22,11 @@ begin
        , coalesce(stg.modified_at, now())
        , coalesce(stg.modified_by, current_user)
     from staging.features stg
-   inner join config.modules mod
+   inner join governance.modules mod
       on mod.slug = trim(stg.module_slug)
    where not exists (
      select 1
-       from config.features f
+       from governance.features f
       where f.module_id = mod.id
         and f.slug = trim(stg.slug)
         and f.modified_at > stg.modified_at

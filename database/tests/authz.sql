@@ -81,19 +81,15 @@ begin;
   end $$;
 rollback;
 
--- 8. anon cannot write config.feature_states (the closed RW6 hole).
-begin;
-  set local role anon;
-  do $$
-  begin
-    begin
-      insert into config.feature_states(feature_id, user_id, enabled)
-        values ((select id from config.features limit 1), 'anon-attacker', true);
-      raise exception 'FAIL feature_states: anon could INSERT config.feature_states';
-    exception when insufficient_privilege then null; end;
-    raise notice 'RW12 anon feature_states write: DENIED ✓';
-  end $$;
-rollback;
+-- 8. config.feature_states was RETIRED (§D Phase 4 — per-user feature state, 0 rows/0 readers,
+-- design-ratified). The old RW6 hole (anon writing it) is closed by removal; assert it's gone.
+do $$
+begin
+  if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+              where c.relname='feature_states') then
+    raise exception 'FAIL: feature_states still exists (should be retired in §D Phase 4)'; end if;
+  raise notice 'RW12 config.feature_states retired (no per-user feature-state table) ✓';
+end $$;
 
 -- 9. Anti-escalation subset guard (HIGH #3): `/rpc/rbac/assign-role` refuses to
 -- grant a role whose capabilities are NOT a subset of the actor's own. Proven here

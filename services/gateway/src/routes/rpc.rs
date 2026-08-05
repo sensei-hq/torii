@@ -949,6 +949,23 @@ pub(crate) fn validate_feature_write(
     }
 }
 
+/// §D Phase 4: resolve a feature `slug` (the stable API key) to its `governance.features.id`
+/// (feature_policies is keyed by the uuid FK after the fold). `Ok(None)` = no such feature (the
+/// caller decides 400 vs no-op); `Err` = a DB error surfaced as a 500 response.
+async fn resolve_feature_id(
+    state: &SharedState,
+    slug: &str,
+) -> Result<Option<Uuid>, Response> {
+    sqlx::query_scalar::<_, Uuid>("select id from governance.features where slug = $1")
+        .bind(slug)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("resolve_feature_id: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response()
+        })
+}
+
 /// `POST /rpc/governance/set-feature` — capability `feature.manage`. Upserts the
 /// 4-state feature-governance policy for a feature × scope (RW6). Bumps the tenant
 /// `config_version` (so subscribed devices re-resolve) and emits an actor-bound audit row.
@@ -966,17 +983,28 @@ pub async fn governance_set_feature(
     if let Err(reason) = validate_feature_write(&body.scope_type, body.scope_id, &body.state) {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": reason }))).into_response();
     }
+    // §D Phase 4: feature_policies is keyed by feature_id (FK→governance.features). Resolve the
+    // slug the API speaks to its id; an unknown slug is a clean 400 (the FK would otherwise reject
+    // the write). The frontend/API contract stays slug-based.
+    let feature_id = match resolve_feature_id(&state, &body.feature_key).await {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "unknown_feature" })))
+                .into_response()
+        }
+        Err(resp) => return resp,
+    };
     // A workspace-scope LOCK is broadest-wins — no narrower (space/role) override may be
     // written under it (it would be inert per the resolver, and silently accepting it is
     // misleading). Fail CLOSED: a read error blocks the write rather than allowing it.
     if body.scope_type != "workspace" {
         match sqlx::query_scalar::<_, bool>(
-            "select exists(select 1 from public.feature_policies \
-               where tenant_id = $1 and feature_key = $2 \
+            "select exists(select 1 from governance.feature_policies \
+               where tenant_id = $1 and feature_id = $2 \
                  and scope_type = 'workspace' and state = 'locked')",
         )
         .bind(tenant)
-        .bind(&body.feature_key)
+        .bind(feature_id)
         .fetch_one(&state.pool)
         .await
         {
@@ -998,23 +1026,23 @@ pub async fn governance_set_feature(
     let write = async {
         let mut tx = state.pool.begin().await?;
         sqlx::query(
-            "delete from public.feature_policies \
-              where tenant_id = $1 and feature_key = $2 and scope_type = $3::governance.feature_scope \
+            "delete from governance.feature_policies \
+              where tenant_id = $1 and feature_id = $2 and scope_type = $3::governance.feature_scope \
                 and scope_id is not distinct from $4",
         )
         .bind(tenant)
-        .bind(&body.feature_key)
+        .bind(feature_id)
         .bind(&body.scope_type)
         .bind(body.scope_id)
         .execute(&mut *tx)
         .await?;
         sqlx::query(
-            "insert into public.feature_policies \
-               (tenant_id, feature_key, scope_type, scope_id, state, modified_by) \
+            "insert into governance.feature_policies \
+               (tenant_id, feature_id, scope_type, scope_id, state, modified_by) \
              values ($1,$2,$3::governance.feature_scope,$4,$5::governance.feature_state,$6)",
         )
         .bind(tenant)
-        .bind(&body.feature_key)
+        .bind(feature_id)
         .bind(&body.scope_type)
         .bind(body.scope_id)
         .bind(&body.state)
@@ -1064,13 +1092,19 @@ pub async fn governance_clear_feature(
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad_scope_type" })))
             .into_response();
     }
+    // §D Phase 4: resolve slug→feature_id (clearing an unknown feature is a no-op, still idempotent).
+    let feature_id = match resolve_feature_id(&state, &body.feature_key).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return (StatusCode::OK, Json(json!({ "ok": true, "cleared": 0 }))).into_response(),
+        Err(resp) => return resp,
+    };
     let deleted = sqlx::query(
-        "delete from public.feature_policies \
-          where tenant_id = $1 and feature_key = $2 and scope_type = $3::governance.feature_scope \
+        "delete from governance.feature_policies \
+          where tenant_id = $1 and feature_id = $2 and scope_type = $3::governance.feature_scope \
             and scope_id is not distinct from $4",
     )
     .bind(tenant)
-    .bind(&body.feature_key)
+    .bind(feature_id)
     .bind(&body.scope_type)
     .bind(body.scope_id)
     .execute(&state.pool)
@@ -1113,12 +1147,16 @@ pub async fn governance_matrix(
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    // §D Phase 4: the full-matrix read spans ALL scopes (not just workspace), so it joins
+    // governance.features directly to expose `slug` as feature_key over the feature_id fold —
+    // the feature_governance_for_tenant shield only carries the workspace-resolved state.
     let rows: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.feature_key, t.scope_type), '[]'::json) from ( \
-           select feature_key, scope_type, scope_id, state, modified_at \
-             from public.feature_policies \
-            where tenant_id = $1 \
-              and ($2::uuid is null or scope_type <> 'space' or scope_id = $2)) t",
+           select f.slug as feature_key, p.scope_type, p.scope_id, p.state, p.modified_at \
+             from governance.feature_policies p \
+             join governance.features f on f.id = p.feature_id \
+            where p.tenant_id = $1 \
+              and ($2::uuid is null or p.scope_type <> 'space' or p.scope_id = $2)) t",
     )
     .bind(tenant)
     .bind(q.space_id)
@@ -2261,43 +2299,50 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let feat = "grounded-only";
+        // §D Phase 4: feature_policies is keyed by feature_id (FK→governance.features). Resolve a
+        // real seeded slug once; the invariants (state CHECK, workspace-lock existence, clear grain)
+        // are feature-agnostic.
+        let feat_id: Uuid =
+            sqlx::query_scalar("select id from governance.features where slug='cost-tracking'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
 
         // (1) the state CHECK rejects a non-4-state value.
         let bad = sqlx::query(
-            "insert into public.feature_policies (tenant_id, feature_key, scope_type, scope_id, state, modified_by) \
+            "insert into governance.feature_policies (tenant_id, feature_id, scope_type, scope_id, state, modified_by) \
              values ($1,$2,'workspace',null,'on','test')",
         )
-        .bind(t).bind(feat).execute(&pool).await;
+        .bind(t).bind(feat_id).execute(&pool).await;
         assert!(bad.is_err(), "state CHECK must reject 'on'");
 
         // no workspace lock yet → the set-feature 409 query is false.
-        let locked = |p: PgPool, t: Uuid| async move {
+        let locked = |p: PgPool, t: Uuid, fid: Uuid| async move {
             sqlx::query_scalar::<_, bool>(
-                "select exists(select 1 from public.feature_policies \
-                   where tenant_id=$1 and feature_key='grounded-only' \
+                "select exists(select 1 from governance.feature_policies \
+                   where tenant_id=$1 and feature_id=$2 \
                      and scope_type='workspace' and state='locked')",
             )
-            .bind(t).fetch_one(&p).await.unwrap()
+            .bind(t).bind(fid).fetch_one(&p).await.unwrap()
         };
-        assert!(!locked(pool.clone(), t).await, "no lock yet");
+        assert!(!locked(pool.clone(), t, feat_id).await, "no lock yet");
 
         // (2) write a workspace lock → the existence query flips true (the 409 guard fires).
         sqlx::query(
-            "insert into public.feature_policies (tenant_id, feature_key, scope_type, scope_id, state, modified_by) \
+            "insert into governance.feature_policies (tenant_id, feature_id, scope_type, scope_id, state, modified_by) \
              values ($1,$2,'workspace',null,'locked','test')",
         )
-        .bind(t).bind(feat).execute(&pool).await.unwrap();
-        assert!(locked(pool.clone(), t).await, "workspace lock now blocks narrower writes");
+        .bind(t).bind(feat_id).execute(&pool).await.unwrap();
+        assert!(locked(pool.clone(), t, feat_id).await, "workspace lock now blocks narrower writes");
 
         // (3) clear the workspace row (the clear-feature grain) → gone.
         let del = sqlx::query(
-            "delete from public.feature_policies \
-              where tenant_id=$1 and feature_key=$2 and scope_type='workspace' and scope_id is not distinct from null",
+            "delete from governance.feature_policies \
+              where tenant_id=$1 and feature_id=$2 and scope_type='workspace' and scope_id is not distinct from null",
         )
-        .bind(t).bind(feat).execute(&pool).await.unwrap();
+        .bind(t).bind(feat_id).execute(&pool).await.unwrap();
         assert_eq!(del.rows_affected(), 1, "clear removes exactly the workspace row");
-        assert!(!locked(pool.clone(), t).await, "lock cleared");
+        assert!(!locked(pool.clone(), t, feat_id).await, "lock cleared");
 
         sqlx::query("delete from core.tenants where id=$1").bind(t).execute(&pool).await.unwrap();
     }

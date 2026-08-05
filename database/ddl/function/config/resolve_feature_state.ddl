@@ -1,4 +1,4 @@
-set search_path to config, public, core, extensions;
+set search_path to governance, public, core, extensions;
 
 -- O3-2 (RW6 / DECISIONS §4): resolve the effective 4-state governance for a feature, for a caller
 -- (tenant + roles + optional space). Precedence:
@@ -20,6 +20,7 @@ language plpgsql
 stable
 as $$
 declare
+  v_feature_id uuid;
   v_default   boolean := false;
   v_mandatory boolean := false;
   v_locked    text;
@@ -27,9 +28,11 @@ declare
   v_scope     text;
 begin
   -- catalog base default + mandatory floor (a feature absent from the catalog is default-off,
-  -- but any explicit policy below is still honoured).
-  select f.enabled, f.mandatory into v_default, v_mandatory
-    from config.features f where f.slug = p_feature limit 1;
+  -- but any explicit policy below is still honoured). §D Phase 4: resolve the feature_id once from
+  -- the slug — feature_policies is keyed by feature_id (fold); an unknown slug leaves v_feature_id
+  -- NULL so every policy lookup below misses and we fall through to the catalog default.
+  select f.id, f.enabled, f.mandatory into v_feature_id, v_default, v_mandatory
+    from governance.features f where f.slug = p_feature limit 1;
   v_default := coalesce(v_default, false);
   v_mandatory := coalesce(v_mandatory, false);
 
@@ -39,14 +42,14 @@ begin
 
   -- 2. LOCKS broadest-wins: workspace > space > role. A lock is a hard OFF.
   v_locked := case
-    when exists(select 1 from public.feature_policies fp
-                 where fp.tenant_id = p_tenant and fp.feature_key = p_feature
+    when exists(select 1 from governance.feature_policies fp
+                 where fp.tenant_id = p_tenant and fp.feature_id = v_feature_id
                    and fp.state = 'locked' and fp.scope_type = 'workspace') then 'workspace'
-    when p_space is not null and exists(select 1 from public.feature_policies fp
-                 where fp.tenant_id = p_tenant and fp.feature_key = p_feature
+    when p_space is not null and exists(select 1 from governance.feature_policies fp
+                 where fp.tenant_id = p_tenant and fp.feature_id = v_feature_id
                    and fp.state = 'locked' and fp.scope_type = 'space' and fp.scope_id = p_space) then 'space'
-    when exists(select 1 from public.feature_policies fp
-                 where fp.tenant_id = p_tenant and fp.feature_key = p_feature
+    when exists(select 1 from governance.feature_policies fp
+                 where fp.tenant_id = p_tenant and fp.feature_id = v_feature_id
                    and fp.state = 'locked' and fp.scope_type = 'role' and fp.scope_id = any(p_role_ids)) then 'role'
     else null
   end;
@@ -57,8 +60,8 @@ begin
   -- 3. NON-LOCKED most-specific-wins: role > space > workspace; on a same-scope tie the more
   --    restrictive (default-off) wins.
   select fp.state::text, fp.scope_type::text into v_state, v_scope
-    from public.feature_policies fp
-   where fp.tenant_id = p_tenant and fp.feature_key = p_feature and fp.state <> 'locked'
+    from governance.feature_policies fp
+   where fp.tenant_id = p_tenant and fp.feature_id = v_feature_id and fp.state <> 'locked'
      and ( (fp.scope_type = 'role' and fp.scope_id = any(p_role_ids))
         or (fp.scope_type = 'space' and p_space is not null and fp.scope_id = p_space)
         or (fp.scope_type = 'workspace') )

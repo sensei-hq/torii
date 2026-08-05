@@ -646,9 +646,11 @@ pub async fn get_settings(
         Ok(t) => t,
         Err(resp) => return resp,
     };
+    // §D Phase 4: /v1/settings reads the workspace toggles via the settings_for_tenant shield
+    // (governance.settings absorbed tenant_settings) — {setting_key, enabled} contract preserved.
     let rows: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.setting_key), '[]'::json) from ( \
-           select setting_key, enabled from public.tenant_settings where tenant_id = $1) t",
+           select setting_key, enabled from governance.settings_for_tenant where tenant_id = $1) t",
     )
     .bind(tenant)
     .fetch_one(&state.pool)

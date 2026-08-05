@@ -169,9 +169,10 @@ async fn assemble_snapshot(pool: &sqlx::PgPool, tenant: Uuid) -> sqlx::Result<Va
     .fetch_one(pool)
     .await?;
 
+    // §D Phase 4: workspace toggles via the settings_for_tenant shield (tenant_settings absorbed).
     let settings: Value = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.setting_key), '[]'::json) from ( \
-           select setting_key, enabled from public.tenant_settings where tenant_id = $1) t",
+           select setting_key, enabled from governance.settings_for_tenant where tenant_id = $1) t",
     )
     .bind(tenant)
     .fetch_one(pool)
@@ -228,8 +229,10 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // §D Phase 4: workspace toggles live in governance.settings (scope='workspace', jsonb bool).
         sqlx::query(
-            "insert into public.tenant_settings (tenant_id, setting_key, enabled) values ($1,'masking',true)",
+            "insert into governance.settings (tenant_id, scope, key, value, modified_by) \
+             values ($1,'workspace','masking',to_jsonb(true),'cfg')",
         )
         .bind(tenant)
         .execute(&pool)

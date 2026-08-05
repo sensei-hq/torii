@@ -296,8 +296,10 @@ pub(crate) async fn ensure_model_enabled(
 /// workspace policy. Fail-safe: a DB read error keeps masking ON.
 pub(crate) async fn masking_enabled(state: &SharedState, tenant: Option<Uuid>) -> bool {
     let Some(tenant) = tenant else { return true };
+    // §D Phase 4: reads the workspace toggle via the settings_for_tenant shield (governance.settings
+    // absorbed tenant_settings). Fail-safe preserved: absent row → masking ON, DB error → ON.
     sqlx::query_scalar::<_, bool>(
-        "select coalesce((select enabled from public.tenant_settings \
+        "select coalesce((select enabled from governance.settings_for_tenant \
            where tenant_id = $1 and setting_key = 'masking'), true)",
     )
     .bind(tenant)
@@ -312,8 +314,9 @@ pub(crate) async fn masking_enabled(state: &SharedState, tenant: Option<Uuid>) -
 /// primary model. Fail-safe: a DB read error keeps fallback ON (preserves availability).
 pub(crate) async fn auto_fallback_enabled(state: &SharedState, tenant: Option<Uuid>) -> bool {
     let Some(tenant) = tenant else { return true };
+    // §D Phase 4: workspace toggle via the settings_for_tenant shield. Fail-safe: absent/DB error → ON.
     sqlx::query_scalar::<_, bool>(
-        "select coalesce((select enabled from public.tenant_settings \
+        "select coalesce((select enabled from governance.settings_for_tenant \
            where tenant_id = $1 and setting_key = 'autoFallback'), true)",
     )
     .bind(tenant)

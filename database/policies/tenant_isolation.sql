@@ -22,7 +22,7 @@ begin
     ('public', 'spaces'),
     ('public', 'space_members'),
     ('public', 'budget_nodes'),
-    ('public', 'settings'),
+    ('governance', 'settings'),
     -- devices: NOT tenant-wide — it has a bespoke own-vs-`device.manage` SELECT policy
     -- (devices_access in governance.sql). A generic `devices_read` here would OR with it
     -- and leak every in-tenant device to a plain member (O3-4).

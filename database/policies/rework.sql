@@ -11,7 +11,6 @@ begin
     ('core', 'service_accounts'),
     ('core', 'api_keys'),
     ('governance', 'feature_policies'),
-    ('public', 'tenant_settings'),
     ('audit', 'notification_channels'),
     ('public', 'alert_rules'),
     ('public', 'alert_events'),

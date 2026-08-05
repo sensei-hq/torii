@@ -1611,11 +1611,15 @@ pub async fn settings_set(
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    // §D Phase 4: workspace toggles live in governance.settings (scope='workspace', jsonb boolean
+    // value) after the tenant_settings absorb. Upsert on the (tenant, scope, space_id, key) unique;
+    // space_id is null for a workspace toggle. `to_jsonb($3::boolean)` stores a jsonb boolean the
+    // settings_for_tenant shield reads back.
     let write = sqlx::query(
-        "insert into public.tenant_settings (tenant_id, setting_key, enabled, modified_by) \
-         values ($1,$2,$3,$4) \
-         on conflict (tenant_id, setting_key) \
-         do update set enabled = excluded.enabled, modified_by = excluded.modified_by, modified_at = now()",
+        "insert into governance.settings (tenant_id, scope, space_id, key, value, modified_by) \
+         values ($1,'workspace',null,$2,to_jsonb($3::boolean),$4) \
+         on conflict (tenant_id, scope, space_id, key) \
+         do update set value = excluded.value, modified_by = excluded.modified_by, modified_at = now()",
     )
     .bind(tenant)
     .bind(&body.setting_key)
@@ -1627,15 +1631,7 @@ pub async fn settings_set(
         tracing::error!("settings_set: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
     }
-    audit(
-        &state,
-        tenant,
-        actor,
-        "settings.set",
-        "tenant_settings",
-        None,
-    )
-    .await;
+    audit(&state, tenant, actor, "settings.set", "settings", None).await;
     crate::routes::config::bump(&state.pool, tenant, "settings").await;
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
@@ -2194,7 +2190,7 @@ pub struct SetRetrievalConfig {
 }
 
 /// `POST /rpc/retrieval/set-config` — capability `retrieval.manage`. Upserts the per-space
-/// retrieval configuration into `public.settings(scope='space', space_id, key='retrieval')`.
+/// retrieval configuration into `governance.settings(scope='space', space_id, key='retrieval')`.
 /// Tenant + space scoped (404 if the space isn't the caller's tenant — no cross-tenant write).
 /// Audited. This is the WRITE seam; per-space read resolution at query time is a tracked
 /// follow-up (v1 retrieve uses `RetrievalConfig::default()`).
@@ -2221,7 +2217,7 @@ pub async fn retrieval_set_config(
         return (StatusCode::NOT_FOUND, "space not found in tenant").into_response();
     }
     let write = sqlx::query(
-        "insert into public.settings (tenant_id, scope, space_id, key, value, modified_by) \
+        "insert into governance.settings (tenant_id, scope, space_id, key, value, modified_by) \
          values ($1, 'space', $2, 'retrieval', $3::jsonb, $4) \
          on conflict (tenant_id, scope, space_id, key) \
          do update set value = excluded.value, modified_at = now(), modified_by = excluded.modified_by",

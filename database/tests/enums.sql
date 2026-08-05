@@ -493,11 +493,11 @@ end $$;
 
 do $$
 declare
-  -- §D Phase 4: feature_policies moved public→governance; settings stays public until Slice B.
+  -- §D Phase 4: feature_policies + settings both moved → governance.
   cols text[][] := array[
     ['governance','feature_policies','scope_type','feature_scope'],
     ['governance','feature_policies','state','feature_state'],
-    ['public','settings','scope','config_scope']];
+    ['governance','settings','scope','config_scope']];
   i int; s text; t text; c text; want text; udt text;
 begin
   for i in 1 .. array_length(cols,1) loop
@@ -508,7 +508,7 @@ begin
       raise exception 'FAIL: %.%.% udt=% (expected %)', s, t, c, coalesce(udt,'<none>'), want; end if;
   end loop;
   if exists (select 1 from pg_constraint where contype='c'
-              and conrelid in ('governance.feature_policies'::regclass,'public.settings'::regclass)
+              and conrelid in ('governance.feature_policies'::regclass,'governance.settings'::regclass)
               and (pg_get_constraintdef(oid) ilike '%scope_type%in%'
                 or pg_get_constraintdef(oid) ilike '%state%in%'
                 or pg_get_constraintdef(oid) ilike '%scope%in%')) then

@@ -1,5 +1,5 @@
--- database/ddl/table/public/settings.ddl
-set search_path to public, core, governance, extensions;
+-- database/ddl/table/governance/settings.ddl
+set search_path to governance, public, core, extensions;
 
 create table if not exists settings (
   tenant_id   uuid not null

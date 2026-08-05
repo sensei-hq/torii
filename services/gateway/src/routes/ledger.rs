@@ -252,21 +252,16 @@ pub async fn get_apikeys(
 /// the tenant hasn't connected is simply unavailable to them — so `connected` is joined
 /// against the caller's tenant only, and one tenant can never observe another's key.
 async fn tenant_connections(pool: &sqlx::PgPool, tenant: Uuid) -> sqlx::Result<Value> {
+    // §D §B: reads through the keyvault.connections_for_tenant shield view (booleans/timestamps
+    // only — ciphertext is structurally absent). The view is tenant-filtered here; json shape,
+    // column order, and `order by name` are preserved so the /v1/connections payload is byte-stable
+    // across the Phase 2 router_credentials → keyvault deny-all move.
     sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.name), '[]'::json) from ( \
-           select r.name, r.api_base_url, r.is_active, \
-                  (r.api_key_env_var is not null) as requires_key, \
-                  (k.id is not null)              as connected, \
-                  k.modified_at                   as connected_at, \
-                  (o.id is not null)              as oauth_connected, \
-                  o.modified_at                   as oauth_connected_at \
-             from catalog.routers r \
-             left join public.router_credentials k \
-               on k.router_id = r.id and k.tenant_id = $1 \
-              and k.is_active = true and k.credential_type = 'api_key' \
-             left join public.router_credentials o \
-               on o.router_id = r.id and o.tenant_id = $1 \
-              and o.is_active = true and o.credential_type = 'oauth') t",
+           select name, api_base_url, is_active, requires_key, \
+                  connected, connected_at, oauth_connected, oauth_connected_at \
+             from keyvault.connections_for_tenant \
+            where tenant_id = $1) t",
     )
     .bind(tenant)
     .fetch_one(pool)

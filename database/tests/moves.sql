@@ -343,4 +343,34 @@ begin
   raise notice 'M-catalog-4 model_overrides/provider_overrides/provider_health moved public→catalog, RLS + _read policy intact ✓';
 end $$;
 
+\echo '== §D Phase 2 shield (ahead of move): keyvault.connections_for_tenant =='
+
+-- M-keyvault-1 — the ★ top shield ships in Slice A, BEFORE router_credentials moves (Slice B). It
+-- must exist in keyvault with the exact Connections contract, expose NO ciphertext, and — since it
+-- carries every tenant's rows with no security_invoker — must NOT be granted to authenticated
+-- (a grant would be a PostgREST cross-tenant leak). router_credentials is still in public here.
+do $$
+declare missing text;
+begin
+  if not exists (select 1 from pg_views where schemaname='keyvault' and viewname='connections_for_tenant') then
+    raise exception 'FAIL: keyvault.connections_for_tenant view missing'; end if;
+  -- ciphertext must be structurally absent from the projection.
+  if exists (select 1 from information_schema.columns
+              where table_schema='keyvault' and table_name='connections_for_tenant'
+                and column_name in ('encrypted_api_key','encrypted_oauth','encrypted_dek')) then
+    raise exception 'FAIL: connections_for_tenant LEAKS a ciphertext column'; end if;
+  select string_agg(c, ', ') into missing from unnest(array[
+    'tenant_id','name','api_base_url','is_active','requires_key',
+    'connected','connected_at','oauth_connected','oauth_connected_at']) as c
+   where not exists (select 1 from information_schema.columns
+                      where table_schema='keyvault' and table_name='connections_for_tenant' and column_name=c);
+  if missing is not null then raise exception 'FAIL: connections_for_tenant missing columns: %', missing; end if;
+  -- deny-all discipline: gateway-internal, never exposed to authenticated/anon.
+  if has_table_privilege('authenticated','keyvault.connections_for_tenant','select') then
+    raise exception 'FAIL: authenticated can SELECT connections_for_tenant (cross-tenant leak)'; end if;
+  if has_table_privilege('anon','keyvault.connections_for_tenant','select') then
+    raise exception 'FAIL: anon can SELECT connections_for_tenant'; end if;
+  raise notice 'M-keyvault-1 connections_for_tenant shield (no ciphertext, deny-all) + contract ✓';
+end $$;
+
 \echo '== §D moves tests done =='

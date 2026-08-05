@@ -584,4 +584,32 @@ begin
   raise notice 'M-gov-3 feature_governance_for_tenant shield: slug contract + deny-all ✓';
 end $$;
 
+-- M-gov-4 — Slice B: public.settings relocated → governance, and public.tenant_settings ABSORBED
+-- into it (boolean toggles → scope='workspace' jsonb) then retired. The settings_for_tenant shield
+-- preserves the {setting_key, enabled} contract and is gateway-internal (deny-all).
+do $$
+declare missing text;
+begin
+  if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                  where n.nspname='governance' and c.relname='settings' and c.relkind='r') then
+    raise exception 'FAIL: governance.settings missing'; end if;
+  if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+              where n.nspname='public' and c.relname in ('settings','tenant_settings')) then
+    raise exception 'FAIL: public.settings/tenant_settings still exists'; end if;
+  if not (select relrowsecurity from pg_class where oid='governance.settings'::regclass) then
+    raise exception 'FAIL: RLS disabled on governance.settings'; end if;
+  -- shield exists with the toggle contract, deny-all.
+  if not exists (select 1 from pg_views where schemaname='governance' and viewname='settings_for_tenant') then
+    raise exception 'FAIL: settings_for_tenant view missing'; end if;
+  select string_agg(c, ', ') into missing from unnest(array['tenant_id','setting_key','enabled']) as c
+   where not exists (select 1 from information_schema.columns
+                      where table_schema='governance' and table_name='settings_for_tenant' and column_name=c);
+  if missing is not null then raise exception 'FAIL: settings_for_tenant missing columns: %', missing; end if;
+  if has_table_privilege('authenticated','governance.settings_for_tenant','select') then
+    raise exception 'FAIL: authenticated can SELECT settings_for_tenant (cross-tenant leak)'; end if;
+  -- the absorb round-trips: a workspace boolean written to settings surfaces via the shield.
+  perform 1;  -- (0 rows on dev; behavioral round-trip proven by the gateway settings_set test)
+  raise notice 'M-gov-4 settings → governance + tenant_settings absorbed/retired, settings_for_tenant shield deny-all ✓';
+end $$;
+
 \echo '== §D moves tests done =='

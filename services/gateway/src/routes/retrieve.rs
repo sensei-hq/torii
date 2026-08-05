@@ -56,7 +56,7 @@ pub async fn retrieve(
         Err(resp) => return resp,
     };
 
-    // no-hardcoded-ops: resolve the per-space RetrievalConfig from public.settings over the fallback
+    // no-hardcoded-ops: resolve the per-space RetrievalConfig from governance.settings over the fallback
     // defaults. (Merging a `session_only` override for THIS request only — never persisted — is a
     // tracked follow-up; today session_only is accepted and ignored.)
     let cfg = crate::rag::resolve_retrieval_config(&state.pool, tenant, Some(space_id)).await;

@@ -100,7 +100,7 @@ impl Default for ChunkConfig {
     }
 }
 
-/// Resolve the per-space retrieval config from `public.settings(scope='space', key='retrieval')`
+/// Resolve the per-space retrieval config from `governance.settings(scope='space', key='retrieval')`
 /// over the [`RetrievalConfig::default`] fallback (no-hardcoded-ops — an admin's
 /// `POST /rpc/retrieval/set-config` changes behaviour with no code change). Absent / malformed /
 /// no-space → the fallback (never panics; a config read must never break retrieval).
@@ -108,7 +108,7 @@ pub async fn resolve_retrieval_config(pool: &PgPool, tenant: Uuid, space: Option
     let mut cfg = RetrievalConfig::default();
     let Some(space) = space else { return cfg };
     let row: Option<(serde_json::Value,)> = sqlx::query_as(
-        "select value from public.settings \
+        "select value from governance.settings \
          where tenant_id = $1 and scope = 'space' and space_id = $2 and key = 'retrieval'",
     )
     .bind(tenant)
@@ -135,7 +135,7 @@ pub async fn resolve_chunk_config(pool: &PgPool, tenant: Uuid, space: Option<Uui
     let mut cfg = ChunkConfig::default();
     let Some(space) = space else { return cfg };
     let row: Option<(serde_json::Value,)> = sqlx::query_as(
-        "select value from public.settings \
+        "select value from governance.settings \
          where tenant_id = $1 and scope = 'space' and space_id = $2 and key = 'retrieval'",
     )
     .bind(tenant)

@@ -10,7 +10,7 @@ declare
 begin
   select id into v_platform_id from core.tenants where is_platform = true limit 1;
 
-  insert into public.fallback_chain_models(
+  insert into catalog.chain_models(
      tenant_id, fallback_chain_id, router_id, model_id
    , sequence_order, max_retries, is_active
    , modified_at, modified_by)
@@ -24,7 +24,7 @@ begin
        , coalesce(stg.modified_at, now())
        , coalesce(stg.modified_by, current_user)
     from staging.fallback_chain_models stg
-   inner join public.fallback_chains fcc
+   inner join catalog.chains fcc
       on fcc.tenant_id = v_platform_id
      and fcc.name      = trim(stg.chain_name)
    inner join catalog.routers rtr
@@ -33,7 +33,7 @@ begin
       on mdl.full_name = lower(trim(stg.model_full_name))
    where not exists (
      select 1
-       from public.fallback_chain_models fcm2
+       from catalog.chain_models fcm2
       where fcm2.tenant_id         = v_platform_id
         and fcm2.fallback_chain_id = fcc.id
         and fcm2.sequence_order    = stg.sequence_order

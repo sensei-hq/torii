@@ -38,22 +38,22 @@ end $$;
 do $$
 declare
   cols text[][] := array[
-    ['inference_calls','execution_location'],
-    ['messages','execution_location'],
-    ['gateway_tasks','execution_location'],
-    ['analytics_usage_daily','execution_location'],
-    ['fallback_chain_models','plane']];
+    ['public','inference_calls','execution_location'],
+    ['public','messages','execution_location'],
+    ['public','gateway_tasks','execution_location'],
+    ['public','analytics_usage_daily','execution_location'],
+    ['catalog','chain_models','plane']];   -- fallback_chain_models moved+renamed → catalog.chain_models (§D)
   i int;
-  t text; c text; udt text;
+  s text; t text; c text; udt text;
 begin
   for i in 1 .. array_length(cols, 1) loop
-    t := cols[i][1]; c := cols[i][2];
+    s := cols[i][1]; t := cols[i][2]; c := cols[i][3];
     select udt_name into udt from information_schema.columns
-     where table_schema = 'public' and table_name = t and column_name = c;
+     where table_schema = s and table_name = t and column_name = c;
     if udt is null then
-      raise exception 'FAIL: %.% not found', t, c; end if;
+      raise exception 'FAIL: %.%.% not found', s, t, c; end if;
     if udt is distinct from 'execution_location' then
-      raise exception 'FAIL: %.% udt=% (expected execution_location enum)', t, c, udt; end if;
+      raise exception 'FAIL: %.%.% udt=% (expected execution_location enum)', s, t, c, udt; end if;
   end loop;
   -- the leftover CHECK constraints must be gone (the enum supersedes them).
   if exists (select 1 from pg_constraint

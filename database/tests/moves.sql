@@ -245,7 +245,7 @@ begin
         where confrelid='catalog.capability_types'::regclass and contype='f'
           and conrelid in ('catalog.model_capabilities'::regclass,
                            'catalog.model_endpoints'::regclass,
-                           'public.fallback_chains'::regclass)) <> 3 then
+                           'catalog.chains'::regclass)) <> 3 then
     raise exception 'FAIL: not all 3 capability_id FKs resolve to catalog.capability_types'; end if;
   -- authenticated keeps SELECT on the reference catalog (carried by SET SCHEMA + grants.sql parity).
   if not has_table_privilege('authenticated','catalog.capability_types','select') then
@@ -277,10 +277,47 @@ begin
   if not exists (select 1 from pg_constraint where conrelid='catalog.model_endpoints'::regclass
                   and confrelid='catalog.routers'::regclass and contype='f') then
     raise exception 'FAIL: catalog.model_endpoints→catalog.routers FK lost'; end if;
-  if not exists (select 1 from pg_constraint where conrelid='public.fallback_chain_models'::regclass
+  if not exists (select 1 from pg_constraint where conrelid='catalog.chain_models'::regclass
                   and confrelid='catalog.models'::regclass and contype='f') then
-    raise exception 'FAIL: public.fallback_chain_models→catalog.models FK lost'; end if;
+    raise exception 'FAIL: catalog.chain_models→catalog.models FK lost'; end if;
   raise notice 'M-catalog-2 model catalog (routers/providers/models/model_capabilities/model_endpoints) moved config→catalog, FKs + grants intact ✓';
+end $$;
+
+\echo '== §D catalog rename+move: routing (chains/chain_models/chain_bindings/routing_policies) =='
+
+-- M-catalog-3 — public routing tables → catalog: fallback_chains→chains + fallback_chain_models→
+-- chain_models (RENAME+move), chain_bindings + routing_policies (move). Tenant-scoped: RLS survives,
+-- the carried-over fallback_chains_read/fallback_chain_models_read orphans are dropped (only
+-- chains_read/chain_models_read remain), and the composite chain FKs resolve to catalog.chains.
+do $$
+declare t text;
+begin
+  foreach t in array array['chains','chain_models','chain_bindings','routing_policies'] loop
+    if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                    where n.nspname='catalog' and c.relname=t and c.relkind='r') then
+      raise exception 'FAIL: catalog.% table missing', t; end if;
+    if not (select relrowsecurity from pg_class where oid=('catalog.'||t)::regclass) then
+      raise exception 'FAIL: RLS disabled on catalog.% after move', t; end if;
+  end loop;
+  foreach t in array array['fallback_chains','fallback_chain_models','chain_bindings','routing_policies'] loop
+    if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                where n.nspname='public' and c.relname=t) then
+      raise exception 'FAIL: public.% still exists (move incomplete)', t; end if;
+  end loop;
+  -- carried-over old-name read policies from the RENAMEs must be gone (orphan-policy footgun).
+  if exists (select 1 from pg_policies where schemaname='catalog'
+              and policyname in ('fallback_chains_read','fallback_chain_models_read')) then
+    raise exception 'FAIL: orphan fallback_chains_read/fallback_chain_models_read lingers on catalog'; end if;
+  if not exists (select 1 from pg_policies where schemaname='catalog' and tablename='chains' and policyname='chains_read') then
+    raise exception 'FAIL: chains_read policy missing'; end if;
+  if not exists (select 1 from pg_policies where schemaname='catalog' and tablename='chain_models' and policyname='chain_models_read') then
+    raise exception 'FAIL: chain_models_read policy missing'; end if;
+  -- composite FKs (chain_models/chain_bindings/routing_policies) all resolve to catalog.chains.
+  if (select count(*) from pg_constraint where confrelid='catalog.chains'::regclass and contype='f'
+        and conrelid in ('catalog.chain_models'::regclass,'catalog.chain_bindings'::regclass,
+                         'catalog.routing_policies'::regclass)) <> 3 then
+    raise exception 'FAIL: not all 3 composite FKs resolve to catalog.chains'; end if;
+  raise notice 'M-catalog-3 routing tables → catalog (2 renames + 2 moves), RLS + FKs + no orphan policy ✓';
 end $$;
 
 \echo '== §D moves tests done =='

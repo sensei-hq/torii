@@ -33,23 +33,23 @@ where m.full_name = 'mxbai-embed-large' and r.name = 'ollama' and c.name = 'embe
     where e.model_id = m.id and e.router_id = r.id and e.capability_id = c.id);
 
 -- 4. the platform-tenant 'embedding' chain.
-insert into public.fallback_chains
+insert into catalog.chains
   (tenant_id, name, capability_id, max_fallback_attempts, is_active, priority, description, modified_by)
 select '00000000-0000-0000-0000-000000000000', 'embedding', c.id, 3, true, 1,
        'C5 embedding chain — Ollama mxbai-embed-large (1024d)', 'seed:c5'
 from catalog.capability_types c
 where c.name = 'embedding'
   and not exists (
-    select 1 from public.fallback_chains
+    select 1 from catalog.chains
     where tenant_id = '00000000-0000-0000-0000-000000000000' and name = 'embedding');
 
 -- 5. bind the model into the chain.
-insert into public.fallback_chain_models
+insert into catalog.chain_models
   (tenant_id, fallback_chain_id, router_id, model_id, sequence_order, is_active, plane, modified_by)
 select '00000000-0000-0000-0000-000000000000', fc.id, r.id, m.id, 1, true, 'local', 'seed:c5'
-from public.fallback_chains fc, catalog.routers r, catalog.models m
+from catalog.chains fc, catalog.routers r, catalog.models m
 where fc.tenant_id = '00000000-0000-0000-0000-000000000000' and fc.name = 'embedding'
   and r.name = 'ollama' and m.full_name = 'mxbai-embed-large'
   and not exists (
-    select 1 from public.fallback_chain_models fcm
+    select 1 from catalog.chain_models fcm
     where fcm.fallback_chain_id = fc.id and fcm.model_id = m.id);

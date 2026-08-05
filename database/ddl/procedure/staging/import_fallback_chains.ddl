@@ -6,7 +6,7 @@ language plpgsql
 as
 $$
 begin
-  insert into public.fallback_chains(
+  insert into catalog.chains(
      tenant_id, name, capability_id
    , max_fallback_attempts, circuit_breaker_threshold, circuit_breaker_window_minutes
    , is_active, priority, description, modified_at, modified_by)
@@ -26,7 +26,7 @@ begin
       on cap.name = trim(stg.capability_name)
    where not exists (
      select 1
-       from public.fallback_chains fc
+       from catalog.chains fc
       where fc.tenant_id   = (select id from core.tenants where is_platform = true limit 1)
         and fc.name        = trim(stg.name)
         and fc.modified_at > coalesce(stg.modified_at, now())

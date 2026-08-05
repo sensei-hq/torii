@@ -19,8 +19,8 @@ select
 , fcm.max_retries
 , fcm.is_active
 , fcm.plane
-from public.fallback_chains fc
-join public.fallback_chain_models fcm
+from catalog.chains fc
+join catalog.chain_models fcm
   on  fcm.tenant_id         = fc.tenant_id
   and fcm.fallback_chain_id = fc.id
 where fc.is_active  = true
@@ -46,10 +46,10 @@ select
 , pfcm.plane
 from core.tenants t
 cross join core.tenants pt          -- one platform tenant expected; cross join is safe
-join public.fallback_chains pfc
+join catalog.chains pfc
   on  pfc.tenant_id = pt.id
   and pfc.is_active  = true
-join public.fallback_chain_models pfcm
+join catalog.chain_models pfcm
   on  pfcm.tenant_id         = pt.id
   and pfcm.fallback_chain_id = pfc.id
   and pfcm.is_active          = true
@@ -57,7 +57,7 @@ where pt.is_platform = true
   and t.is_platform  = false        -- exclude platform tenant from inheriting its own chains
   and not exists (
     select 1
-    from public.fallback_chains fc2
+    from catalog.chains fc2
     where fc2.tenant_id  = t.id
       and fc2.name       = pfc.name
       and fc2.is_active  = true     -- inactive overrides fall back to platform chain

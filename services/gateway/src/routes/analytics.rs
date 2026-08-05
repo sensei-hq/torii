@@ -734,10 +734,10 @@ mod gate {
         sqlx::query("insert into catalog.model_endpoints (id,model_id,router_id,capability_id,endpoint_url,cost_per_input_token,cost_per_output_token,is_active) \
                      values (gen_random_uuid(),$1,$2,$3,'http://t',0.00001,0.00003,true)")
             .bind(model).bind(router_id).bind(cap_id).execute(&pool).await.unwrap();
-        sqlx::query("insert into public.fallback_chains (id,tenant_id,name,capability_id,is_active,modified_by) \
+        sqlx::query("insert into catalog.chains (id,tenant_id,name,capability_id,is_active,modified_by) \
                      values ($1,$2,'gate-chain',$3,true,'test')")
             .bind(chain).bind(t).bind(cap_id).execute(&pool).await.unwrap();
-        sqlx::query("insert into public.fallback_chain_models (id,tenant_id,fallback_chain_id,router_id,model_id,sequence_order,plane,is_active,modified_by) \
+        sqlx::query("insert into catalog.chain_models (id,tenant_id,fallback_chain_id,router_id,model_id,sequence_order,plane,is_active,modified_by) \
                      values (gen_random_uuid(),$1,$2,$3,$4,1,'cloud',true,'test')")
             .bind(t).bind(chain).bind(router_id).bind(model).execute(&pool).await.unwrap();
         // ledger: 2 cloud calls + 1 local call, all attributed to the team (team_node_id set).
@@ -812,8 +812,8 @@ mod gate {
         // cleanup — free the config FKs first, then cascade the tenant.
         for q in [
             "delete from public.inference_calls where tenant_id=$1",
-            "delete from public.fallback_chain_models where tenant_id=$1",
-            "delete from public.fallback_chains where tenant_id=$1",
+            "delete from catalog.chain_models where tenant_id=$1",
+            "delete from catalog.chains where tenant_id=$1",
         ] { sqlx::query(q).bind(t).execute(&pool).await.unwrap(); }
         sqlx::query("delete from catalog.model_endpoints where model_id=$1").bind(model).execute(&pool).await.unwrap();
         sqlx::query("delete from catalog.models where id=$1").bind(model).execute(&pool).await.unwrap();

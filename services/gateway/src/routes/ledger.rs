@@ -589,8 +589,8 @@ pub async fn get_routing(
            select fcm.id, fc.name as chain_name, fcm.sequence_order, fcm.plane, fcm.is_active, \
                   coalesce(r.name, '—') as router, \
                   coalesce(m.full_name, '—') as model \
-             from public.fallback_chain_models fcm \
-             join public.fallback_chains fc on fc.id = fcm.fallback_chain_id \
+             from catalog.chain_models fcm \
+             join catalog.chains fc on fc.id = fcm.fallback_chain_id \
              left join catalog.models m on m.id = fcm.model_id \
              left join catalog.routers r on r.id = fcm.router_id \
             where fcm.tenant_id = $1) t",

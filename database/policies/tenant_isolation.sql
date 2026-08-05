@@ -13,6 +13,9 @@ declare r record;
 begin
   for r in select * from (values
     ('core',   'memberships'),
+    ('core',   'org_units'),      -- §D Phase 5: the ONE org tree (structure); tenant SELECT-only
+    ('core',   'unit_levels'),    -- §D Phase 5: per-tenant tier labels
+    ('core',   'unit_members'),   -- §D Phase 5: people→units (personal units seeded)
     ('core',   'roles'),
     ('core',   'role_permissions'),
     ('core',   'profile_roles'),

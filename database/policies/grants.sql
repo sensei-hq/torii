@@ -39,6 +39,9 @@ declare r record;
 begin
   for r in select * from (values
     ('core',   'memberships'),
+    ('core',   'org_units'),      -- §D Phase 5: org tree (structure) — SELECT-only, writes via gateway
+    ('core',   'unit_levels'),    -- §D Phase 5: tier labels
+    ('core',   'unit_members'),   -- §D Phase 5: people→units
     ('core',   'roles'),
     ('core',   'role_permissions'),
     ('core',   'profile_roles'),

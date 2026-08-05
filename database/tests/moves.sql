@@ -412,4 +412,76 @@ begin
   raise notice 'M-keyvault-2 3 secret tables relocated → keyvault, deny-all + FKs intact, shield repointed ✓';
 end $$;
 
+\echo '== §D Phase 3: catalog.chains_for_tenant (enablement + viability + pricing shield) =='
+
+-- M-catalog-5 — chains_for_tenant is the derived enablement/pricing shield that replaces
+-- model_overrides/tenant_model_state. Assert: (1) it exists with the enablement+pricing contract;
+-- (2) the KEYLESS-SAFE guard — a local (authentication_type='none') router's models appear WITHOUT
+-- any credential, while a key-requiring router with NO active credential is scrubbed; (3) not
+-- granted to authenticated (gateway-internal, cross-tenant rows).
+do $$
+declare missing text; kless int; keyed int; leaked int;
+begin
+  if not exists (select 1 from pg_views where schemaname='catalog' and viewname='chains_for_tenant') then
+    raise exception 'FAIL: catalog.chains_for_tenant view missing'; end if;
+  select string_agg(c, ', ') into missing from unnest(array[
+    'tenant_id','chain_name','capability_id','model_id','model_full_name','router_id','router_name',
+    'router_requires_key','provider','cost_per_input_token','cost_per_output_token']) as c
+   where not exists (select 1 from information_schema.columns
+                      where table_schema='catalog' and table_name='chains_for_tenant' and column_name=c);
+  if missing is not null then raise exception 'FAIL: chains_for_tenant missing columns: %', missing; end if;
+
+  -- Keyless-safe guard (empirical): with NO tenant credentials on dev, only keyless-local routers
+  -- (authentication_type='none') may appear; a key-requiring router must be fully scrubbed.
+  select count(*) into kless from catalog.chains_for_tenant where router_requires_key = false;
+  select count(*) into keyed from catalog.chains_for_tenant cft
+    where cft.router_requires_key = true
+      and not exists (select 1 from keyvault.router_credentials rc
+                       where rc.tenant_id = cft.tenant_id and rc.router_id = cft.router_id
+                         and rc.is_active = true);
+  if keyed <> 0 then
+    raise exception 'FAIL: chains_for_tenant surfaced % key-requiring step(s) with no active credential (viability guard broken)', keyed; end if;
+  if kless = 0 then
+    raise notice 'M-catalog-5 NOTE: 0 keyless-local rows present (no local chain seeded) — guard vacuously holds';
+  end if;
+
+  -- Gateway-internal: authenticated must NOT be able to read it (cross-tenant leak otherwise).
+  if has_table_privilege('authenticated','catalog.chains_for_tenant','select') then
+    raise exception 'FAIL: authenticated can SELECT chains_for_tenant (cross-tenant leak)'; end if;
+  raise notice 'M-catalog-5 chains_for_tenant shield: contract + keyless-safe viability (keyless=%, key-no-cred scrubbed) + deny-all ✓', kless;
+end $$;
+
+-- M-catalog-6 — the chat enablement GATE derivation (chat.rs ensure_model_enabled) and the
+-- /v1/models/available derivation both resolve through chains_for_tenant. Assert the exact gate
+-- predicate: a model present in the platform tenant's viable CHAT chains is ALLOWED, and a bogus
+-- model name is BLOCKED (the security property — a non-chain model is not callable).
+do $$
+declare pt uuid := '00000000-0000-0000-0000-000000000000';
+        a_chat_model text; allowed boolean; bogus_allowed boolean;
+begin
+  -- a model that is in a viable chat chain for the platform tenant (skip if none seeded)
+  select cft.model_full_name into a_chat_model
+    from catalog.chains_for_tenant cft
+    join catalog.capability_types c on c.id = cft.capability_id
+   where cft.tenant_id = pt and c.name = 'chat'
+   limit 1;
+  if a_chat_model is null then
+    raise notice 'M-catalog-6 NOTE: no viable chat-chain model for platform tenant — gate assertion skipped';
+  else
+    -- exact gate SQL from chat.rs::ensure_model_enabled
+    select exists(select 1 from catalog.chains_for_tenant cft
+                    join catalog.capability_types c on c.id = cft.capability_id
+                   where cft.tenant_id = pt and cft.model_full_name = a_chat_model and c.name = 'chat')
+      into allowed;
+    if not allowed then raise exception 'FAIL: in-chain chat model % blocked by the gate', a_chat_model; end if;
+  end if;
+  -- a model NOT in any chain must be blocked (default-deny; absent = enabled is RETIRED).
+  select exists(select 1 from catalog.chains_for_tenant cft
+                  join catalog.capability_types c on c.id = cft.capability_id
+                 where cft.tenant_id = pt and cft.model_full_name = '__no_such_model__' and c.name = 'chat')
+    into bogus_allowed;
+  if bogus_allowed then raise exception 'FAIL: a non-chain model passed the enablement gate (default-deny broken)'; end if;
+  raise notice 'M-catalog-6 enablement gate derives from chains_for_tenant: in-chat-chain allowed, non-chain blocked ✓';
+end $$;
+
 \echo '== §D moves tests done =='

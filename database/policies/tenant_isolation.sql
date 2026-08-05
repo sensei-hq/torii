@@ -31,8 +31,8 @@ begin
     -- and leak every in-tenant device to a plain member (O3-4).
     ('public', 'gateway_tasks'),
     ('public', 'gateway_task_logs'),
-    ('public', 'inference_calls'),
-    ('public', 'execution_traces')
+    ('metering', 'inference_calls'),   -- §D Phase 6: moved public→metering
+    ('metering', 'execution_traces')
   ) as x(sch, tbl)
   loop
     execute format('alter table %I.%I enable row level security', r.sch, r.tbl);

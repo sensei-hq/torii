@@ -104,7 +104,7 @@ impl GatewayStore for PgGatewayStore {
                   JOIN anc ON b.id = anc.parent_id
                  WHERE b.tenant_id = $1
             )
-            INSERT INTO public.inference_calls
+            INSERT INTO metering.inference_calls
                 (tenant_id, id, session_id, project_id, capability, chain_id,
                  adapter, model, api_model_id,
                  input_tokens, output_tokens, cost_usd, duration_ms,
@@ -162,7 +162,7 @@ impl GatewayStore for PgGatewayStore {
                    cost_usd::float8 AS cost_usd,
                    duration_ms, status::text AS status, error_type,
                    fallback_sequence, recorded_at
-            FROM public.inference_calls
+            FROM metering.inference_calls
             WHERE tenant_id = $1 AND session_id = $2
             ORDER BY recorded_at ASC
             "#,
@@ -184,7 +184,7 @@ impl GatewayStore for PgGatewayStore {
         let row = sqlx::query(
             r#"
             SELECT COALESCE(SUM(cost_usd), 0)::float8 AS total
-            FROM public.inference_calls
+            FROM metering.inference_calls
             WHERE tenant_id = $1 AND recorded_at >= $2
             "#,
         )
@@ -218,7 +218,7 @@ impl GatewayStore for PgGatewayStore {
         let rows = sqlx::query(
             r#"
             SELECT model, COALESCE(SUM(cost_usd), 0)::float8 AS total
-            FROM public.inference_calls
+            FROM metering.inference_calls
             WHERE tenant_id = $1 AND recorded_at >= $2
             GROUP BY model
             ORDER BY model ASC
@@ -248,7 +248,7 @@ impl GatewayStore for PgGatewayStore {
 
         sqlx::query(
             r#"
-            INSERT INTO public.execution_traces
+            INSERT INTO metering.execution_traces
                 (tenant_id, id, inference_call_id, trace, recorded_at)
             VALUES
                 ($1, $2, $3, $4, $5)
@@ -270,7 +270,7 @@ impl GatewayStore for PgGatewayStore {
         let row = sqlx::query(
             r#"
             SELECT id, inference_call_id, trace, recorded_at
-            FROM public.execution_traces
+            FROM metering.execution_traces
             WHERE tenant_id = $1 AND id = $2
             "#,
         )
@@ -293,7 +293,7 @@ impl GatewayStore for PgGatewayStore {
         let rows = sqlx::query(
             r#"
             SELECT id, inference_call_id, trace, recorded_at
-            FROM public.execution_traces
+            FROM metering.execution_traces
             WHERE tenant_id = $1 AND inference_call_id = $2
             ORDER BY recorded_at ASC
             "#,

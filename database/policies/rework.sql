@@ -23,8 +23,8 @@ begin
     ('public', 'dataset_columns'),
     ('device', 'tenant_mcp_servers'),
     ('device', 'tool_allow_lists'),
-    ('public', 'analytics_usage_daily'),
-    ('public', 'analytics_quality_daily'),
+    ('metering', 'usage_daily'),      -- §D Phase 6: was public.analytics_usage_daily
+    ('metering', 'quality_daily'),    -- §D Phase 6: was public.analytics_quality_daily
     ('config', 'config_versions')
   ) as x(sch, tbl)
   loop

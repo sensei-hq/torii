@@ -38,10 +38,10 @@ end $$;
 do $$
 declare
   cols text[][] := array[
-    ['public','inference_calls','execution_location'],
+    ['metering','inference_calls','execution_location'],  -- §D Phase 6: moved public→metering
     ['public','messages','execution_location'],
     ['public','gateway_tasks','execution_location'],
-    ['public','analytics_usage_daily','execution_location'],
+    ['metering','usage_daily','execution_location'],
     ['catalog','chain_models','plane']];   -- fallback_chain_models moved+renamed → catalog.chain_models (§D)
   i int;
   s text; t text; c text; udt text;
@@ -219,11 +219,11 @@ do $$
 declare udt text;
 begin
   select udt_name into udt from information_schema.columns
-   where table_schema='public' and table_name='inference_calls' and column_name='status';
+   where table_schema='metering' and table_name='inference_calls' and column_name='status';  -- §D Phase 6
   if udt is distinct from 'call_status' then
     raise exception 'FAIL: inference_calls.status udt=% (expected call_status enum)', coalesce(udt,'<none>'); end if;
   if exists (select 1 from pg_constraint
-              where conrelid='public.inference_calls'::regclass and contype='c'
+              where conrelid='metering.inference_calls'::regclass and contype='c'
                 and pg_get_constraintdef(oid) ilike '%status%in%') then
     raise exception 'FAIL: inference_calls still has a status CHECK constraint'; end if;
   raise notice 'M2 inference_calls.status is metering.call_status, no leftover CHECK ✓';

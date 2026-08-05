@@ -380,7 +380,6 @@ async fn main() -> anyhow::Result<()> {
             "/routing/set-step-active",
             post(routes::rpc::routing_set_step),
         )
-        .route("/models/set-enabled", post(routes::rpc::models_set_enabled))
         .route("/settings/set", post(routes::rpc::settings_set))
         .route("/mcp/set-enabled", post(routes::rpc::mcp_set_enabled))
         .route("/mcp/set-tool-grant", post(routes::rpc::mcp_set_tool_grant))

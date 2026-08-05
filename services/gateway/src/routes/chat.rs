@@ -244,14 +244,15 @@ pub(crate) async fn reserve_budget(
     Ok((tenant, node, hold))
 }
 
-/// Governance enforcement: a workspace can disable a catalog model
-/// (`tenant_model_state.enabled = false`, surfaced on the admin Models screen).
-/// When a caller names a model explicitly, a disabled one is refused (403) BEFORE
-/// reserving budget or hitting a provider — otherwise the admin's toggle would be
-/// cosmetic. Absent row = enabled (the catalog is global; workspaces opt OUT).
-/// Chain-routed calls (no explicit model) are governed instead by per-step
-/// activation on the Routing screen, resolved inside the engine. Fail-closed on a
-/// DB error (honest 500, not a misleading "disabled").
+/// Governance enforcement (§D Phase 3): model enablement is DERIVED from chain membership —
+/// a model is usable iff it's in one of the tenant's active, key-configured CHAT chains
+/// (catalog.chains_for_tenant). When a caller names a model explicitly, one that is in no viable
+/// chat chain (never configured, or its router has no key) is refused (403) BEFORE reserving budget
+/// or hitting a provider — a clean early block instead of a later no-key failure. This default-DENY
+/// replaces the retired `tenant_model_state` toggle ('absent row = enabled' is gone); the admin
+/// Models screen surfaces the same derived `enabled` read-only. Chain-routed calls (no explicit
+/// model) are governed by per-step activation on the Routing screen, resolved inside the engine.
+/// Fail-closed on a DB error (honest 500, not a misleading "disabled").
 pub(crate) async fn ensure_model_enabled(
     state: &SharedState,
     claims: &Claims,

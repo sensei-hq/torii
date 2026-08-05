@@ -324,8 +324,8 @@ begin
 end $$;
 
 -- ═════════════════════════════════════════════════════════════════════════
--- catalog enums: router_type, auth_type (catalog.routers) · override_scope
--- (model_overrides.scope_type) · breaker_state (provider_health.state).
+-- catalog enums: router_type, auth_type (catalog.routers) · breaker_state
+-- (provider_health.state). [override_scope retired with model_overrides — §D Phase 3.]
 -- ═════════════════════════════════════════════════════════════════════════
 \echo '== enum conversion: catalog enums =='
 
@@ -334,7 +334,6 @@ declare
   specs text[][] := array[
     ['router_type','direct,aggregator,local'],
     ['auth_type','api_key,aws_signature,oauth2,bearer_token,custom,none'],
-    ['override_scope','tenant,space,role'],
     ['breaker_state','closed,open,half-open']];
   i int; nm text; want text; got text;
 begin
@@ -348,7 +347,7 @@ begin
      where n.nspname='catalog' and t.typname=nm;
     if got is distinct from want then raise exception 'FAIL: catalog.% = %, expected %', nm, got, want; end if;
   end loop;
-  raise notice 'K1 four catalog enums exist with expected values ✓';
+  raise notice 'K1 three catalog enums exist with expected values ✓';
 end $$;
 
 do $$
@@ -356,7 +355,6 @@ declare
   cols text[][] := array[
     ['catalog','routers','router_type','router_type'],
     ['catalog','routers','authentication_type','auth_type'],
-    ['catalog','model_overrides','scope_type','override_scope'],
     ['catalog','provider_health','state','breaker_state']];
   i int; s text; t text; c text; want text; udt text;
 begin
@@ -368,13 +366,12 @@ begin
       raise exception 'FAIL: %.%.% udt=% (expected %)', s, t, c, coalesce(udt,'<none>'), want; end if;
   end loop;
   if exists (select 1 from pg_constraint where contype='c'
-              and conrelid in ('catalog.routers'::regclass,'catalog.model_overrides'::regclass,'catalog.provider_health'::regclass)
+              and conrelid in ('catalog.routers'::regclass,'catalog.provider_health'::regclass)
               and (pg_get_constraintdef(oid) ilike '%router_type%in%'
                 or pg_get_constraintdef(oid) ilike '%authentication_type%in%'
-                or pg_get_constraintdef(oid) ilike '%scope_type%in%'
                 or pg_get_constraintdef(oid) ilike '%state%in%')) then
     raise exception 'FAIL: a leftover catalog CHECK still exists'; end if;
-  raise notice 'K2 four catalog columns are the enums, no leftover CHECK ✓';
+  raise notice 'K2 three catalog columns are the enums, no leftover CHECK ✓';
 end $$;
 
 do $$

@@ -1,5 +1,5 @@
--- database/ddl/table/public/inference_calls.ddl
-set search_path to public, core, metering, extensions;
+-- database/ddl/table/metering/inference_calls.ddl
+set search_path to metering, public, core, extensions;  -- §D Phase 6: moved public→metering (public kept for the sessions FK)
 
 create table if not exists inference_calls (
   tenant_id          uuid         not null

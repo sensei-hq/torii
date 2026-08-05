@@ -15,7 +15,7 @@ begin
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
     where c.relkind = 'r'
-      and n.nspname in ('core', 'public', 'audit', 'device', 'catalog', 'keyvault', 'governance')
+      and n.nspname in ('core', 'public', 'audit', 'device', 'catalog', 'keyvault', 'governance', 'metering')
       and exists (
         select 1 from pg_attribute a
         where a.attrelid = c.oid and a.attname = 'tenant_id' and not a.attisdropped
@@ -25,7 +25,7 @@ begin
      or (
        -- deny-all, service_role-only tables: RLS on + 0 policies is the correct posture
        t.tablename not in ('router_credentials', 'tenant_keys', 'tenant_key_archive', 'siem_cursors',
-                           'analytics_applied_calls')  -- O2: internal apply-marker, service_role-only
+                           'applied_calls')  -- O2 internal apply-marker, service_role-only (§D Phase 6: was analytics_applied_calls)
        and not exists (
          select 1 from pg_policies p
          where p.schemaname = t.schemaname and p.tablename = t.tablename
@@ -54,7 +54,7 @@ begin;
 
   -- inference ledger rows owned by tenant B — the platform (tenant A) user below
   -- must NOT see them (cross-tenant isolation).
-  insert into public.inference_calls(
+  insert into metering.inference_calls(
       tenant_id, id, capability, adapter, model,
       cost_usd, duration_ms, status, fallback_sequence, recorded_at
   ) values (
@@ -64,7 +64,7 @@ begin;
       0.003, 1200, 'success', 0, now()
   );
 
-  insert into public.execution_traces(
+  insert into metering.execution_traces(
       tenant_id, id, inference_call_id, trace, recorded_at
   ) values (
       '99999999-9999-9999-9999-999999999999',
@@ -104,13 +104,13 @@ begin;
     -- Assert on the foreign tenant's rows specifically — the platform tenant may
     -- legitimately hold its own inference_calls, so a bare count(*)=0 is non-hermetic
     -- (it only passed on an empty table). RLS must hide the 99999999… rows.
-    if exists (select 1 from public.inference_calls
+    if exists (select 1 from metering.inference_calls
                 where tenant_id = '99999999-9999-9999-9999-999999999999') then
       raise exception 'FAIL cross-tenant: platform user can see another tenant''s inference_calls';
     end if;
 
     -- execution_traces: same invariant — cannot see the other tenant's traces.
-    if exists (select 1 from public.execution_traces
+    if exists (select 1 from metering.execution_traces
                 where tenant_id = '99999999-9999-9999-9999-999999999999') then
       raise exception 'FAIL cross-tenant: platform user can see another tenant''s execution_traces';
     end if;

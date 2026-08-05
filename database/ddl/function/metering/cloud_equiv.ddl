@@ -1,4 +1,4 @@
-set search_path to public, config, core, extensions;
+set search_path to metering, public, config, core, extensions;
 
 -- O2 §8 (bullet 1) / §6 flow-3 — the cloud-equivalent savings baseline. For a chain,
 -- price the call's ACTUAL tokens at the CHEAPEST cloud step bound in that chain (the
@@ -11,7 +11,7 @@ set search_path to public, config, core, extensions;
 -- Chain resolution mirrors effective_chain_models (tenant override → platform inherit);
 -- pricing comes from catalog.model_endpoints for the step's (model, router, capability).
 -- Called at rollup time so the figure is snapshotted (a later price edit → A4 reconcile).
-create or replace function public.analytics_cloud_equiv(
+create or replace function metering.cloud_equiv(
   p_tenant uuid,
   p_chain  text,
   p_in     bigint,
@@ -20,7 +20,7 @@ create or replace function public.analytics_cloud_equiv(
 language sql
 stable
 security definer
-set search_path = public, config, core, extensions
+set search_path = metering, public, config, core, extensions
 as $$
   with cloud_steps as (
     select ecm.model_id, ecm.router_id, ecm.capability_id
@@ -48,10 +48,10 @@ as $$
       and (select step_cost from priced) is null )        as is_unpriced;
 $$;
 
-revoke execute on function public.analytics_cloud_equiv(uuid, text, bigint, bigint) from public;
-grant  execute on function public.analytics_cloud_equiv(uuid, text, bigint, bigint) to service_role;
+revoke execute on function metering.cloud_equiv(uuid, text, bigint, bigint) from public;
+grant  execute on function metering.cloud_equiv(uuid, text, bigint, bigint) to service_role;
 
-comment on function public.analytics_cloud_equiv is
+comment on function metering.cloud_equiv is
 'O2 §8: cloud-equivalent baseline — cheapest priced cloud step in the chain, on the
 call''s actual tokens. Returns (cloud_equiv_usd, is_local_only, is_unpriced).
 Conservative floor; unpriced/local-only surfaced, never guessed. service_role only.';

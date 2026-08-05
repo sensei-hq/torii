@@ -1,5 +1,5 @@
--- database/ddl/table/public/execution_traces.ddl
-set search_path to public, core, extensions;
+-- database/ddl/table/metering/execution_traces.ddl
+set search_path to metering, core, extensions;  -- §D Phase 6: moved public→metering (inference_calls FK now intra-metering)
 
 create table if not exists execution_traces (
   tenant_id           uuid        not null

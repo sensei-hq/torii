@@ -155,7 +155,7 @@ const CLOUD_EQUIV_EXPR: &str = "case \
      else coalesce(ce.cloud_equiv_usd,0) end";
 
 // LEFT JOIN LATERAL onto the baseline helper for local rows only (cloud rows → ce = NULL).
-const CE_LATERAL: &str = "left join lateral public.analytics_cloud_equiv( \
+const CE_LATERAL: &str = "left join lateral metering.cloud_equiv( \
        ic.tenant_id, ic.chain_id, coalesce(ic.input_tokens,0), coalesce(ic.output_tokens,0)) ce \
      on coalesce(ic.execution_location,'cloud') = 'local'";
 
@@ -205,7 +205,7 @@ pub async fn get_overview(
                     - (sum(cost_usd) filter (where day between current_date - 28 and current_date - 15)/nullif(sum(calls) filter (where day between current_date - 28 and current_date - 15),0))) \
                     / nullif((sum(cost_usd) filter (where day between current_date - 28 and current_date - 15)/nullif(sum(calls) filter (where day between current_date - 28 and current_date - 15),0)),0))::numeric,1) else null end as blended_delta, \
           coalesce(sum(savings_usd) filter (where day > current_date - 14),0)::float8 as savings14 \
-        from public.analytics_usage_daily \
+        from metering.usage_daily \
         where tenant_id = $1 and ($2::uuid[] is null or budget_node_id = any($2))) s";
     match sqlx::query_scalar::<_, Value>(q)
         .bind(tenant)
@@ -249,14 +249,14 @@ pub async fn get_cost_trend(
                     round((cost_usd/nullif(calls,0))::numeric,6)::float8 as blended_cost_per_call, \
                     cost_usd::float8 as cost_usd, calls, savings_usd::float8 as savings_usd \
                from ( select day, sum(cost_usd) cost_usd, sum(calls) calls, sum(savings_usd) savings_usd \
-                        from public.analytics_usage_daily \
+                        from metering.usage_daily \
                        where tenant_id = $1 and day > current_date - $2 \
                          and ($3::uuid[] is null or budget_node_id = any($3)) \
                        group by day) d) x) as series, \
           ( select round((100.0*((sum(cost_usd) filter (where day > current_date - ($2/2)) / nullif(sum(calls) filter (where day > current_date - ($2/2)),0)) \
                    - (sum(cost_usd) filter (where day <= current_date - ($2/2)) / nullif(sum(calls) filter (where day <= current_date - ($2/2)),0))) \
                    / nullif((sum(cost_usd) filter (where day <= current_date - ($2/2)) / nullif(sum(calls) filter (where day <= current_date - ($2/2)),0)),0))::numeric,1) \
-              from public.analytics_usage_daily where tenant_id = $1 and day > current_date - $2 \
+              from metering.usage_daily where tenant_id = $1 and day > current_date - $2 \
                 and ($3::uuid[] is null or budget_node_id = any($3))) as delta \
         ) t";
     match sqlx::query_scalar::<_, Value>(sql)
@@ -296,7 +296,7 @@ pub async fn get_model_mix(
                sum(calls) as calls, \
                round((100.0*sum(calls)/nullif(sum(sum(calls)) over (),0))::numeric,1)::float8 as share_pct, \
                sum(cost_usd)::float8 as cost_usd, sum(savings_usd)::float8 as savings_usd \
-          from public.analytics_usage_daily \
+          from metering.usage_daily \
          where tenant_id = $1 and day > current_date - $2 \
            and ($3::uuid[] is null or budget_node_id = any($3)) \
          group by served_model, provider, execution_location) t";
@@ -327,7 +327,7 @@ fn plane_split_sql() -> String {
         "with pc as ( \
            select coalesce(ic.execution_location,'cloud') as plane, ic.recorded_at::date as day, \
                   coalesce(ic.cost_usd,0) as cost_usd, {ce} as cloud_equiv, {sav} as savings \
-             from public.inference_calls ic {lat} \
+             from metering.inference_calls ic {lat} \
             where ic.tenant_id = $1 \
               and ic.recorded_at >= now() - make_interval(days => $2) \
               and ($3::uuid[] is null or ic.budget_node_id = any($3)) \
@@ -391,7 +391,7 @@ fn spend_sql(group: SpendGroup) -> String {
     let per_call = format!(
         "with pc as ( \
            select ic.{col} as grp, coalesce(ic.cost_usd,0) as cost_usd, {sav} as savings \
-             from public.inference_calls ic {lat} \
+             from metering.inference_calls ic {lat} \
             where ic.tenant_id = $1 \
               and ic.recorded_at >= now() - make_interval(days => $2) \
               and ($3::uuid[] is null or ic.budget_node_id = any($3)) \
@@ -477,7 +477,7 @@ pub async fn get_quality(
                round(avg(rating_avg)::numeric,2)::float8 as rating_avg, \
                sum(rated_calls) as rated_calls, \
                (sum(thumb_up) + sum(thumb_down) + sum(accept_calls) + sum(edit_calls) + sum(retry_calls)) as interactions \
-          from public.analytics_quality_daily \
+          from metering.quality_daily \
          where tenant_id = $1 and day > current_date - $2 \
            and ($3::uuid[] is null or budget_node_id = any($3)) \
          group by served_model) t";
@@ -526,7 +526,7 @@ pub async fn get_export(
             "select json_build_object('rows', coalesce(json_agg(t), '[]'::json)) from ( \
                select coalesce(ic.execution_location,'cloud') as plane, \
                       count(*) as calls, sum(coalesce(ic.cost_usd,0))::float8 as cost_usd \
-                 from public.inference_calls ic \
+                 from metering.inference_calls ic \
                 where ic.tenant_id = $1 and ic.recorded_at >= now() - make_interval(days => $2) \
                   and ($3::uuid[] is null or ic.budget_node_id = any($3)) \
                 group by coalesce(ic.execution_location,'cloud')) t"
@@ -535,7 +535,7 @@ pub async fn get_export(
             "select json_build_object('rows', coalesce(json_agg(t), '[]'::json)) from ( \
                select served_model as model, provider, execution_location, \
                       sum(calls) as calls, sum(cost_usd)::float8 as cost_usd, sum(savings_usd)::float8 as savings_usd \
-                 from public.analytics_usage_daily \
+                 from metering.usage_daily \
                 where tenant_id = $1 and day > current_date - $2 \
                   and ($3::uuid[] is null or budget_node_id = any($3)) \
                 group by served_model, provider, execution_location) t"
@@ -761,7 +761,7 @@ mod gate {
             (Uuid::new_v4(), "local", 0.0),
         ] {
             sqlx::query(
-                "insert into public.inference_calls \
+                "insert into metering.inference_calls \
                    (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence, \
                     recorded_at,input_tokens,output_tokens,execution_location,chain_id, \
                     budget_node_id,team_node_id) \
@@ -825,7 +825,7 @@ mod gate {
 
         // cleanup — free the config FKs first, then cascade the tenant.
         for q in [
-            "delete from public.inference_calls where tenant_id=$1",
+            "delete from metering.inference_calls where tenant_id=$1",
             "delete from catalog.chain_models where tenant_id=$1",
             "delete from catalog.chains where tenant_id=$1",
         ] { sqlx::query(q).bind(t).execute(&pool).await.unwrap(); }

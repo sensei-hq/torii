@@ -212,7 +212,7 @@ begin;
     values ('99999999-9999-9999-9999-999999999999', 'TestB', 'testb', false, 'active', 'test')
     on conflict (id) do nothing;
   -- one usage-rollup row per tenant (superuser write; the grid columns are all NOT NULL).
-  insert into public.analytics_usage_daily
+  insert into metering.usage_daily
     (tenant_id, day, budget_node_id, served_model, provider, capability, execution_location, calls, cost_usd) values
     ('00000000-0000-0000-0000-000000000000','2026-07-30','b0de0000-0000-0000-0000-0000000000f1','claude','anthropic','text_chat','cloud',1,0.01),
     ('99999999-9999-9999-9999-999999999999','2026-07-30','b0de0000-0000-0000-0000-0000000000f2','claude','anthropic','text_chat','cloud',1,0.02);
@@ -223,8 +223,8 @@ begin;
   begin
     select string_agg(table_name||'.'||column_name, ', ') into bad
       from information_schema.columns
-     where table_schema='public'
-       and table_name in ('analytics_usage_daily','analytics_quality_daily','analytics_applied_calls')
+     where table_schema='metering'
+       and table_name in ('usage_daily','quality_daily','applied_calls')
        and column_name ~ '(content|prompt|response|secret|body|message|payload|api_key|token_text)';
     if bad is not null then
       raise exception 'FAIL A8: analytics rollups expose a content/secret column: %', bad; end if;
@@ -236,27 +236,27 @@ begin;
   do $$
   begin
     -- (b) cross-tenant isolation: tenant A sees ONLY its own rollup row, never tenant B's.
-    if (select count(*) from public.analytics_usage_daily) <> 1 then
+    if (select count(*) from metering.usage_daily) <> 1 then
       raise exception 'FAIL A8: tenant A sees % analytics rows (expected 1 — B leaked)',
-        (select count(*) from public.analytics_usage_daily); end if;
-    if (select count(*) from public.analytics_usage_daily
+        (select count(*) from metering.usage_daily); end if;
+    if (select count(*) from metering.usage_daily
           where tenant_id='99999999-9999-9999-9999-999999999999') <> 0 then
       raise exception 'FAIL A8: tenant A can read tenant B analytics rows'; end if;
 
     -- (c) no client write on the rollups (grant revoked → insufficient_privilege).
     begin
-      insert into public.analytics_usage_daily
+      insert into metering.usage_daily
         (tenant_id, day, budget_node_id, served_model, provider, capability, execution_location)
         values ('00000000-0000-0000-0000-000000000000','2026-07-31','b0de0000-0000-0000-0000-0000000000f1','x','x','x','cloud');
       raise exception 'FAIL A8: authenticated could INSERT analytics_usage_daily';
     exception when insufficient_privilege then null; end;
     -- MVs + the apply-marker are not readable by authenticated at all (no RLS on MVs).
     begin
-      perform 1 from public.analytics_model_mix_daily;
+      perform 1 from metering.model_mix_daily;
       raise exception 'FAIL A8: authenticated could SELECT analytics_model_mix_daily (MV → no RLS)';
     exception when insufficient_privilege then null; end;
     begin
-      perform 1 from public.analytics_applied_calls;
+      perform 1 from metering.applied_calls;
       raise exception 'FAIL A8: authenticated could SELECT analytics_applied_calls (internal marker)';
     exception when insufficient_privilege then null; end;
     raise notice 'A8 analytics tenant-isolation + write-denied + MV/marker-locked ✓';

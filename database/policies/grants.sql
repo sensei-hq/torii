@@ -56,8 +56,8 @@ begin
     ('public', 'document_embeddings'),   -- gateway-produced (ingestion); never client-written
     ('public', 'document_versions'),     -- gateway-produced
     ('public', 'document_assets'),       -- gateway-produced
-    ('public', 'inference_calls'),       -- service_role-only ledger
-    ('public', 'execution_traces'),      -- service_role-only ledger
+    ('metering', 'inference_calls'),     -- §D Phase 6: service_role-only ledger (moved public→metering)
+    ('metering', 'execution_traces'),    -- §D Phase 6: service_role-only ledger
     ('public', 'gateway_tasks'),
     ('public', 'gateway_task_logs')
   ) as x(sch, tbl)

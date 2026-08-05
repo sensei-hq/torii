@@ -1,4 +1,4 @@
--- RLS · O2 analytics rollup lockdown (spec §5).
+-- RLS · O2 analytics rollup lockdown (spec §5). §D Phase 6: relocated public→metering.
 -- Rollup TABLES: tenant-scoped SELECT for `authenticated`; every write is
 -- service_role (the refresh functions) — INSERT/UPDATE/DELETE revoked. Belt-and-
 -- suspenders: even a mis-granted write is denied by the SELECT-only RLS policy.
@@ -11,16 +11,16 @@
 do $$
 declare r record;
 begin
-  for r in select unnest(array['analytics_usage_daily','analytics_quality_daily']) as tbl
+  for r in select unnest(array['usage_daily','quality_daily']) as tbl
   loop
-    execute format('alter table public.%I enable row level security', r.tbl);
-    execute format('drop policy if exists %I on public.%I', r.tbl || '_read', r.tbl);
+    execute format('alter table metering.%I enable row level security', r.tbl);
+    execute format('drop policy if exists %I on metering.%I', r.tbl || '_read', r.tbl);
     execute format(
-      'create policy %I on public.%I for select to authenticated '
+      'create policy %I on metering.%I for select to authenticated '
       || 'using (tenant_id = (auth.jwt() ->> %L)::uuid)',
       r.tbl || '_read', r.tbl, 'tenant_id');
-    execute format('grant select on public.%I to authenticated', r.tbl);
-    execute format('revoke insert, update, delete on public.%I from authenticated, anon', r.tbl);
+    execute format('grant select on metering.%I to authenticated', r.tbl);
+    execute format('revoke insert, update, delete on metering.%I from authenticated, anon', r.tbl);
   end loop;
 end $$;
 
@@ -30,11 +30,11 @@ do $$
 declare r record;
 begin
   for r in select unnest(array[
-             'analytics_model_mix_daily','analytics_overview_current','analytics_applied_calls'
+             'model_mix_daily','overview_current','applied_calls'
            ]) as obj
   loop
-    execute format('revoke all on public.%I from authenticated, anon', r.obj);
+    execute format('revoke all on metering.%I from authenticated, anon', r.obj);
   end loop;
   -- defense-in-depth: RLS on the marker table (service_role bypasses; no policy → deny).
-  execute 'alter table public.analytics_applied_calls enable row level security';
+  execute 'alter table metering.applied_calls enable row level security';
 end $$;

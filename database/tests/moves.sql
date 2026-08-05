@@ -747,4 +747,68 @@ begin
   raise notice 'M-org-4 budget_nodes→governance.nodes: reshaped + DC-1 (id==org_unit_id) + FK/UNIQUE/CHECK, dependent FKs follow, shield+unit_kind, 1:1 backfill ✓';
 end $$;
 
+\echo '== §D Phase 6: metering domain relocation (P6-2) =='
+
+-- M-meter-1 — the ledger + rollup tables + MVs relocated public→metering (analytics_ prefix dropped),
+-- and public is empty of the moved set.
+do $$
+declare o text;
+begin
+  select string_agg(c.relname, ', ') into o
+    from pg_class c join pg_namespace n on n.oid=c.relnamespace
+   where n.nspname='public'
+     and c.relname in ('inference_calls','execution_traces','analytics_usage_daily','analytics_quality_daily',
+                       'analytics_applied_calls','analytics_model_mix_daily','analytics_overview_current');
+  if o is not null then raise exception 'FAIL: public still has moved objects: %', o; end if;
+  foreach o in array array['inference_calls','execution_traces','usage_daily','quality_daily','applied_calls'] loop
+    if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                    where n.nspname='metering' and c.relname=o and c.relkind='r') then
+      raise exception 'FAIL: metering.% table missing', o; end if;
+  end loop;
+  foreach o in array array['model_mix_daily','overview_current'] loop
+    if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                    where n.nspname='metering' and c.relname=o and c.relkind='m') then
+      raise exception 'FAIL: metering.% matview missing', o; end if;
+  end loop;
+  raise notice 'M-meter-1 ledger+rollups+MVs relocated public→metering (prefix dropped) ✓';
+end $$;
+
+-- M-meter-2 — the 6 rollup functions in metering + the 2 fan-out triggers wired (metering.fanout on
+-- metering.inference_calls + public.quality_signals), and no orphan analytics_*_read policy.
+do $$
+declare fn text;
+begin
+  foreach fn in array array['rollup_apply','rollup_reconcile','cloud_equiv','refresh_mviews','fanout','rollup_usage_daily'] loop
+    if not exists (select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+                    where n.nspname='metering' and p.proname=fn) then
+      raise exception 'FAIL: metering.% function missing', fn; end if;
+  end loop;
+  if not exists (select 1 from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace
+                  where t.tgname='inference_calls_analytics_ai' and n.nspname='metering' and c.relname='inference_calls' and not t.tgisinternal) then
+    raise exception 'FAIL: inference_calls_analytics_ai trigger missing on metering.inference_calls'; end if;
+  if not exists (select 1 from pg_trigger t join pg_class c on c.oid=t.tgrelid
+                  where t.tgname='quality_signals_analytics_ai' and c.relname='quality_signals' and not t.tgisinternal) then
+    raise exception 'FAIL: quality_signals_analytics_ai trigger missing'; end if;
+  if exists (select 1 from pg_policies where schemaname='metering'
+              and policyname in ('analytics_usage_daily_read','analytics_quality_daily_read')) then
+    raise exception 'FAIL: orphan analytics_*_read policy lingers in metering'; end if;
+  if not exists (select 1 from pg_policies where schemaname='metering' and tablename='usage_daily' and policyname='usage_daily_read') then
+    raise exception 'FAIL: usage_daily_read policy missing'; end if;
+  raise notice 'M-meter-2 6 rollup fns + 2 triggers wired to metering.fanout + no orphan policy ✓';
+end $$;
+
+-- M-meter-3 — MVs deny-all to authenticated (MVs cannot carry RLS); the ledger is tenant SELECT-only,
+-- service_role-write. Posture assertion (the A8/A1.c harness asserts the behavior).
+do $$
+begin
+  if has_table_privilege('authenticated','metering.model_mix_daily','select')
+     or has_table_privilege('authenticated','metering.overview_current','select') then
+    raise exception 'FAIL: an authenticated user can SELECT a metering MV (cross-tenant leak)'; end if;
+  if not has_table_privilege('authenticated','metering.inference_calls','select') then
+    raise exception 'FAIL: authenticated lost SELECT on metering.inference_calls'; end if;
+  if has_table_privilege('authenticated','metering.inference_calls','insert') then
+    raise exception 'FAIL: authenticated can INSERT metering.inference_calls (service_role-only ledger)'; end if;
+  raise notice 'M-meter-3 MVs deny-all + ledger SELECT-only posture ✓';
+end $$;
+
 \echo '== §D moves tests done =='

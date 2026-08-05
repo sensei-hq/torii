@@ -1,5 +1,5 @@
--- database/ddl/table/public/analytics_usage_daily.ddl
-set search_path to public, core, extensions;
+-- database/ddl/table/metering/usage_daily.ddl
+set search_path to metering, core, extensions;  -- §D Phase 6: was public.analytics_usage_daily
 
 -- O2 §3.2: daily usage/cost/savings rollup over the authoritative inference_calls
 -- ledger. A reconstructable cache (never a parallel source of truth) — dropping and
@@ -7,7 +7,7 @@ set search_path to public, core, extensions;
 -- Grain = (tenant, day, budget_node, served_model, provider, capability, plane).
 -- A1 superseded the RW15 shell (grain/column change applied once on the empty cache). Idempotent
 -- `if not exists` — a drop+create in versioned DDL would WIPE this rollup on any re-apply/reconcile.
-create table if not exists analytics_usage_daily (
+create table if not exists usage_daily (
   tenant_id             uuid          not null references core.tenants(id) on delete cascade
 , day                   date          not null
 , budget_node_id        uuid          not null                    -- GH-5 attribution (no FK: cache)
@@ -30,14 +30,14 @@ create table if not exists analytics_usage_daily (
 , primary key (tenant_id, day, budget_node_id, served_model, provider, capability, execution_location)
 );
 
-create index if not exists idx_analytics_usage_day
-  on analytics_usage_daily(tenant_id, day);
-create index if not exists idx_analytics_usage_node_day
-  on analytics_usage_daily(tenant_id, budget_node_id, day);
-create index if not exists idx_analytics_usage_model_day
-  on analytics_usage_daily(tenant_id, served_model, day);
+create index if not exists idx_usage_daily_day
+  on usage_daily(tenant_id, day);
+create index if not exists idx_usage_daily_node_day
+  on usage_daily(tenant_id, budget_node_id, day);
+create index if not exists idx_usage_daily_model_day
+  on usage_daily(tenant_id, served_model, day);
 
-comment on table analytics_usage_daily is
-'O2 §3.2: daily usage/cost/savings rollup over inference_calls, grouped by
-budget_node/served_model/provider/capability/plane. Reconstructable cache,
-reconciled against the immutable ledger. service_role-write only.';
+comment on table usage_daily is
+'O2 §3.2 (§D Phase 6, was analytics_usage_daily): daily usage/cost/savings rollup over
+metering.inference_calls, grouped by budget_node/served_model/provider/capability/plane.
+Reconstructable cache, reconciled against the immutable ledger. service_role-write only.';

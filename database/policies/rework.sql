@@ -141,6 +141,11 @@ grant select on all tables in schema config to authenticated;
 -- readable by authenticated on a FRESH build (the config bulk grant above no longer reaches them).
 grant usage on schema catalog to authenticated;
 grant select on all tables in schema catalog to authenticated;
+-- ...EXCEPT the gateway-internal shield views: `grant ... on all tables` sweeps in views too, and
+-- catalog.chains_for_tenant carries EVERY tenant's resolved chains/pricing with no security_invoker
+-- (owner-rights view) — exposing it to authenticated would be a cross-tenant leak. Carve it back out
+-- (mirrors the core.api_keys hashed_secret revoke above). It is read only by the service_role gateway.
+revoke select on catalog.chains_for_tenant from authenticated;
 grant select on core.tenants to authenticated;
 alter table core.tenants enable row level security;
 drop policy if exists tenants_self on core.tenants;

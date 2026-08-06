@@ -474,7 +474,7 @@ pub async fn get_quality(
         Err(e) => return e.into_response(),
     };
     // Call-weighted aggregates over the quality rollup, per served model.
-    let sql = "select json_build_object('rows', coalesce(json_agg(t order by t.calls desc), '[]'::json)) from ( \
+    let sql = "select json_build_object('rows', coalesce(json_agg(t order by t.rated_calls desc), '[]'::json)) from ( \
         select served_model as model, \
                round(avg(grounding_avg)::numeric,1)::float8 as grounding_avg, \
                round(avg(judge_score_avg)::numeric,1)::float8 as judge_score_avg, \

@@ -15,7 +15,14 @@ select
   n.tenant_id
 , n.id
 , ou.parent_id
-, core.unit_kind(ou.level)          as kind
+  -- §D: the fixed tier map INLINED (twin of core.unit_kind) — a view body may not call a function that
+  -- dbd's apply-order can't sequence before it (dbd tracks table/view deps, NOT function refs → on a
+  -- from-scratch `dbd apply` the view lands before core.unit_kind → "function does not exist"). The map is
+  -- frozen (0=org…4=service); keep in sync with core.unit_kind (its runtime twin, used by gateway spend_sql).
+, case ou.level
+    when 0 then 'org' when 1 then 'dept' when 2 then 'team' when 3 then 'user' when 4 then 'service'
+    else 'unit'
+  end                                as kind
 , ou.name
 , n.cap_amount
 , n.spent_amount

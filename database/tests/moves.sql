@@ -950,11 +950,7 @@ begin
   if not exists (select 1 from pg_constraint where conrelid='metering.inference_calls'::regclass
                   and confrelid='core.org_units'::regclass and contype='f') then
     raise exception 'FAIL: inference_calls → core.org_units FK missing'; end if;
-  -- budget_node_id + the 4 *_node_id cols are STILL present this slice (spend-by-tier unchanged).
-  if not exists (select 1 from information_schema.columns
-                  where table_schema='metering' and table_name='inference_calls' and column_name='budget_node_id') then
-    raise exception 'FAIL: budget_node_id dropped early (should retire in LN-3c-2)'; end if;
-  raise notice 'M-ln-3c1 inference_calls.org_unit_id + FK→core.org_units (additive; budget_node_id/*_node_id intact) ✓';
+  raise notice 'M-ln-3c1 inference_calls.org_unit_id + FK→core.org_units (additive) ✓';
 end $$;
 
 -- M-ln-3c2a — the ROLLUP-side budget_node_id → org_unit_id rename (usage_daily/quality_daily grain +
@@ -973,10 +969,27 @@ begin
   -- footgun guard: the budget-machinery budget_node_id MUST survive.
   if not exists (select 1 from information_schema.columns where table_schema='public' and table_name='budget_holds' and column_name='budget_node_id') then
     raise exception 'FAIL: budget_holds.budget_node_id was wrongly renamed (budget-machinery corrupted)'; end if;
-  -- the LEDGER keeps budget_node_id this slice (retires in LN-3c-2b).
-  if not exists (select 1 from information_schema.columns where table_schema='metering' and table_name='inference_calls' and column_name='budget_node_id') then
-    raise exception 'FAIL: inference_calls.budget_node_id dropped early (LN-3c-2b territory)'; end if;
-  raise notice 'M-ln-3c2a rollup budget_node_id→org_unit_id (ledger + machinery budget_node_id intact) ✓';
+  raise notice 'M-ln-3c2a rollup budget_node_id→org_unit_id (machinery budget_node_id intact) ✓';
+end $$;
+
+-- M-ln-3c2b — the P12 REVERSAL: inference_calls budget_node_id + the 4 *_node_id denorm cols DROPPED;
+-- org_unit_id remains; core.org_unit_ancestor_at_level backs spend-by-tier; the requests_ledger shield
+-- still exposes budget_node_id (= org_unit_id) for the RequestRow contract; budget-machinery intact.
+do $$
+declare leftover text;
+begin
+  select string_agg(col,', ') into leftover from unnest(array['budget_node_id','org_node_id','dept_node_id','team_node_id','user_node_id']) as col
+   where exists (select 1 from information_schema.columns where table_schema='metering' and table_name='inference_calls' and column_name=col);
+  if leftover is not null then raise exception 'FAIL: inference_calls still has denorm cols: %', leftover; end if;
+  if not exists (select 1 from information_schema.columns where table_schema='metering' and table_name='inference_calls' and column_name='org_unit_id') then
+    raise exception 'FAIL: inference_calls.org_unit_id missing'; end if;
+  if not exists (select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='core' and p.proname='org_unit_ancestor_at_level') then
+    raise exception 'FAIL: core.org_unit_ancestor_at_level missing (spend-by-tier has no walker)'; end if;
+  if not exists (select 1 from information_schema.columns where table_schema='metering' and table_name='requests_ledger_for_tenant' and column_name='budget_node_id') then
+    raise exception 'FAIL: requests_ledger_for_tenant lost budget_node_id (RequestRow contract broke)'; end if;
+  if not exists (select 1 from information_schema.columns where table_schema='public' and table_name='budget_holds' and column_name='budget_node_id') then
+    raise exception 'FAIL: budget_holds.budget_node_id wrongly dropped (budget-machinery corrupted)'; end if;
+  raise notice 'M-ln-3c2b P12 reversal: denorm cols dropped, org_unit_id + ancestor fn + shield alias + machinery intact ✓';
 end $$;
 
 \echo '== §D moves tests done =='

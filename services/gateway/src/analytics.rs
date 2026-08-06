@@ -104,27 +104,36 @@ impl SpendGroup {
         })
     }
 
-    /// The `inference_calls` column this dimension groups by. For node dims these are the
-    /// **GH-5 denormalized path columns** — grouping by them needs NO recursive CTE, which
-    /// is exactly the P12 gate. Returns a compile-time-fixed identifier (injection-safe).
-    pub fn column(self) -> &'static str {
+    /// §D Ledger Normalize LN-3c-2b (the P12 REVERSAL): node dims no longer map to a denormalized
+    /// `*_node_id` column (those were dropped). A node dim is now a TIER LEVEL (org=0…user=3); spend_sql
+    /// resolves each call's leaf `org_unit_id` to its ancestor at that level via
+    /// `core.org_unit_ancestor_at_level` (a per-call tree walk — the deliberate perf-for-simplicity trade).
+    /// Attribute dims (model/provider/capability) still group by a scalar ledger column.
+    pub fn level(self) -> Option<i32> {
         match self {
-            SpendGroup::Org => "org_node_id",
-            SpendGroup::Dept => "dept_node_id",
-            SpendGroup::Team => "team_node_id",
-            SpendGroup::User => "user_node_id",
-            SpendGroup::Model => "model",
-            SpendGroup::Provider => "adapter",
-            SpendGroup::Capability => "capability",
+            SpendGroup::Org => Some(0),
+            SpendGroup::Dept => Some(1),
+            SpendGroup::Team => Some(2),
+            SpendGroup::User => Some(3),
+            _ => None,
         }
     }
 
-    /// True for the org→dept→team→user tree dims (joined to core.org_units + governance.nodes for name/cap).
+    /// The scalar `inference_calls` column for ATTRIBUTE dims (node dims resolve via level()).
+    /// Returns a compile-time-fixed identifier (injection-safe).
+    pub fn attr_column(self) -> &'static str {
+        match self {
+            SpendGroup::Model => "model",
+            SpendGroup::Provider => "adapter",
+            SpendGroup::Capability => "capability",
+            _ => "", // node dims → resolved via level(); attr_column is never used for them
+        }
+    }
+
+    /// True for the org→dept→team→user tree dims (resolved via the org-tree ancestor walk + joined to
+    /// core.org_units + governance.nodes for name/cap).
     pub fn is_node(self) -> bool {
-        matches!(
-            self,
-            SpendGroup::Org | SpendGroup::Dept | SpendGroup::Team | SpendGroup::User
-        )
+        self.level().is_some()
     }
 }
 
@@ -232,23 +241,22 @@ mod tests {
     }
 
     #[test]
-    fn spend_group_maps_node_dims_to_denormalized_columns() {
-        // The gate: tree dims resolve to denormalized *_node_id columns → no recursion.
-        assert_eq!(SpendGroup::parse("team").unwrap().column(), "team_node_id");
-        assert_eq!(SpendGroup::parse("user").unwrap().column(), "user_node_id");
-        assert_eq!(SpendGroup::parse("dept").unwrap().column(), "dept_node_id");
-        assert_eq!(SpendGroup::parse("org").unwrap().column(), "org_node_id");
+    fn spend_group_node_dims_map_to_tier_levels() {
+        // §D LN-3c-2b (P12 reversal): tree dims are now TIER LEVELS (org=0…user=3); spend_sql resolves
+        // each call's leaf org_unit to its ancestor at that level via core.org_unit_ancestor_at_level.
+        assert_eq!(SpendGroup::parse("org").unwrap().level(), Some(0));
+        assert_eq!(SpendGroup::parse("dept").unwrap().level(), Some(1));
+        assert_eq!(SpendGroup::parse("team").unwrap().level(), Some(2));
+        assert_eq!(SpendGroup::parse("user").unwrap().level(), Some(3));
         assert!(SpendGroup::parse("team").unwrap().is_node());
     }
 
     #[test]
     fn spend_group_maps_attribute_dims() {
-        assert_eq!(SpendGroup::parse("model").unwrap().column(), "model");
-        assert_eq!(SpendGroup::parse("provider").unwrap().column(), "adapter");
-        assert_eq!(
-            SpendGroup::parse("capability").unwrap().column(),
-            "capability"
-        );
+        assert_eq!(SpendGroup::parse("model").unwrap().attr_column(), "model");
+        assert_eq!(SpendGroup::parse("provider").unwrap().attr_column(), "adapter");
+        assert_eq!(SpendGroup::parse("capability").unwrap().attr_column(), "capability");
+        assert_eq!(SpendGroup::parse("model").unwrap().level(), None);
         assert!(!SpendGroup::parse("model").unwrap().is_node());
     }
 

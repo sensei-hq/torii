@@ -85,44 +85,25 @@ impl GatewayStore for PgGatewayStore {
             "cloud"
         };
 
-        // GH-5 attribution (§D Phase 5): `subject_id` is the resolved node id → `budget_node_id`,
-        // which == its `org_unit_id` (DC-1). The recursive CTE walks that unit's ancestor path over
-        // `core.org_units.parent_id` and denormalizes it into `{org,dept,team,user}_node_id` (by tier
-        // `level`: 0=org, 1=dept, 2=team, 3/4=user/service) so the per-scope spend rollups (P12) need no
-        // recursive join. The stored ids are org_unit ids (== node ids), so historical ledger rows stay
-        // valid — no data migration; P6 renames the column to org_unit_id. NULL subject → empty CTE →
-        // NULL path columns (aggregate over 0 rows).
+        // Budget attribution (§D LN-3c-2b): `subject_id` ($18) is the resolved cap-bearing unit →
+        // `org_unit_id` directly. The old budget_node_id + the 4 GH-5 `*_node_id` denorm columns were
+        // dropped (analytics spend-by-tier now walks the org tree via core.org_unit_ancestor_at_level),
+        // so the write is a plain INSERT — no recursive CTE. session_id/project_id stay vestigial (retire
+        // with the crate change in LN-4 → conversation_id).
         sqlx::query(
             r#"
-            WITH RECURSIVE anc AS (
-                SELECT id, parent_id, level
-                  FROM core.org_units
-                 WHERE tenant_id = $1 AND id = $18
-                UNION ALL
-                SELECT b.id, b.parent_id, b.level
-                  FROM core.org_units b
-                  JOIN anc ON b.id = anc.parent_id
-                 WHERE b.tenant_id = $1
-            )
             INSERT INTO metering.inference_calls
                 (tenant_id, id, session_id, project_id, capability, chain_id,
                  adapter, model, api_model_id,
                  input_tokens, output_tokens, cost_usd, duration_ms,
                  status, error_type, fallback_sequence, recorded_at,
-                 budget_node_id, org_node_id, dept_node_id, team_node_id, user_node_id,
                  org_unit_id, execution_location)
-            SELECT
-                $1, $2, $3, $4, $5, $6,
-                $7, $8, $9,
-                $10, $11, $12, $13,
-                $14::metering.call_status, $15, $16, $17,
-                $18,
-                (SELECT id FROM anc WHERE level = 0 LIMIT 1),
-                (SELECT id FROM anc WHERE level = 1 LIMIT 1),
-                (SELECT id FROM anc WHERE level = 2 LIMIT 1),
-                (SELECT id FROM anc WHERE level IN (3, 4) LIMIT 1),
-                $18,  -- §D LN-3c: org_unit_id = the resolved unit (== budget_node_id under DC-1)
-                $19::core.execution_location
+            VALUES
+                ($1, $2, $3, $4, $5, $6,
+                 $7, $8, $9,
+                 $10, $11, $12, $13,
+                 $14::metering.call_status, $15, $16, $17,
+                 $18, $19::core.execution_location)
             "#,
         )
         .bind(self.tenant_id)

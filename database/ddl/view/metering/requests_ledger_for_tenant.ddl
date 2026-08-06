@@ -16,7 +16,7 @@ select
 , chain_id
 , adapter
 , model
-, budget_node_id
+, org_unit_id as budget_node_id   -- §D LN-3c-2b: budget_node_id col dropped; RequestRow keeps the name (= org_unit_id)
 , execution_location
 , input_tokens
 , output_tokens

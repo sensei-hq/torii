@@ -104,14 +104,14 @@ impl GatewayStore for PgGatewayStore {
                  endpoint_id, model_id, router_id,
                  input_tokens, output_tokens, cost_usd, duration_ms,
                  status, error_type, fallback_sequence, recorded_at,
-                 org_unit_id, execution_location)
+                 org_unit_id, execution_location, cost_estimated)
             SELECT
                 $1, $2, $3, $4, $5, $6,
                 $7, $8, $9,
                 ep.id, ep.model_id, ep.router_id,
                 $10, $11, $12, $13,
                 $14::metering.call_status, $15, $16, $17,
-                $18, $19::core.execution_location
+                $18, $19::core.execution_location, $20
             FROM (SELECT 1) one
             LEFT JOIN LATERAL (
                 SELECT me.id, me.model_id, me.router_id
@@ -142,6 +142,7 @@ impl GatewayStore for PgGatewayStore {
         .bind(call.recorded_at)
         .bind(call.subject_id)
         .bind(execution_location)
+        .bind(call.cost_estimated)
         .execute(&self.pool)
         .await
         .map_err(db_err)?;
@@ -336,6 +337,8 @@ fn row_to_inference_call(row: &sqlx::postgres::PgRow) -> Result<InferenceCall, G
         input_tokens: input_tokens.map(|v| v as u32),
         output_tokens: output_tokens.map(|v| v as u32),
         cost_usd: row.try_get("cost_usd").map_err(db_err)?,
+        // trace-detail read path (get_inference_calls_by_session) doesn't select cost_estimated.
+        cost_estimated: None,
         duration_ms: duration_ms as u64,
         status: str_to_status(&status_str_val),
         error_type: row.try_get("error_type").map_err(db_err)?,
@@ -389,6 +392,7 @@ mod tests {
             input_tokens: Some(10),
             output_tokens: Some(20),
             cost_usd: 0.01,
+            cost_estimated: None,
             duration_ms: 100,
             status: CallStatus::Success,
             error_type: None,
@@ -466,6 +470,20 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(ep3, None, "NULL api_model_id resolves to NULL endpoint (fail-soft)");
+
+        // §D LN-4: cost_estimated snapshots the gateway's pre-call estimate alongside actual cost_usd.
+        let mut est = call("anthropic", "claude", Some("claude-3-5-sonnet-20241022"));
+        est.cost_estimated = Some(0.042);
+        store.insert_inference_call(&est).await.expect("insert with estimate");
+        let (ce,): (Option<f64>,) = sqlx::query_as(
+            "select cost_estimated::float8 from metering.inference_calls where tenant_id=$1 and id=$2",
+        )
+        .bind(t)
+        .bind(est.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(ce, Some(0.042), "cost_estimated persists the gateway pre-call estimate");
 
         sqlx::query("delete from core.tenants where id=$1").bind(t).execute(&pool).await.unwrap();
     }

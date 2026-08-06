@@ -841,6 +841,7 @@ mod trace_roundtrip {
             input_tokens: Some(10),
             output_tokens: Some(20),
             cost_usd: 0.0,
+            cost_estimated: None,
             duration_ms: 900,
             status: CallStatus::Success,
             error_type: None,

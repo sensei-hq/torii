@@ -24,7 +24,8 @@ create table if not exists inference_calls (
 , router_id          uuid                                              -- catalog.routers (== adapter)
 , input_tokens       integer                                           -- nullable; Option<u32>
 , output_tokens      integer                                           -- nullable; Option<u32>
-, cost_usd           numeric(12,6) not null default 0                 -- f64 mapped to numeric for precision
+, cost_usd           numeric(12,6) not null default 0                 -- f64 mapped to numeric for precision (LN-4b → cost_actual)
+, cost_estimated     numeric(14,6)                                     -- §D LN-4: gateway pre-call cost estimate (USD); nullable — some paths (C6 judge) produce none
 , duration_ms        bigint       not null                             -- u64; bigint avoids overflow for long calls
 , status             metering.call_status not null                     -- CallStatus {success,failed}
 , error_type         text                                              -- nullable; Option<String>

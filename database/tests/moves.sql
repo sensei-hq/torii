@@ -1042,4 +1042,21 @@ begin
   raise notice 'M-ln-3b1 FK-normalize additive: endpoint/model/router_id + 3 catalog FKs (on delete set null) + resolution lateral hit/miss + free-text kept ✓';
 end $$;
 
+-- M-ln-4a — cost_estimated (the crate-coupled slice): inference_calls snapshots the gateway's pre-call
+-- cost estimate alongside the actual cost_usd; the requests_ledger shield exposes it (appended at END for
+-- CREATE OR REPLACE idempotency). cost_estimated nullable (some paths — the C6 judge — produce no estimate).
+do $$
+begin
+  if not exists (select 1 from information_schema.columns
+                  where table_schema='metering' and table_name='inference_calls' and column_name='cost_estimated') then
+    raise exception 'FAIL: inference_calls.cost_estimated missing (LN-4 crate field not landed)'; end if;
+  if (select is_nullable from information_schema.columns
+       where table_schema='metering' and table_name='inference_calls' and column_name='cost_estimated') <> 'YES' then
+    raise exception 'FAIL: cost_estimated must be nullable (fail-soft — some paths have no estimate)'; end if;
+  if not exists (select 1 from information_schema.columns
+                  where table_schema='metering' and table_name='requests_ledger_for_tenant' and column_name='cost_estimated') then
+    raise exception 'FAIL: requests_ledger_for_tenant does not expose cost_estimated'; end if;
+  raise notice 'M-ln-4a cost_estimated on inference_calls (nullable) + requests_ledger shield ✓';
+end $$;
+
 \echo '== §D moves tests done =='

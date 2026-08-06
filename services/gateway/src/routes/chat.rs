@@ -517,6 +517,7 @@ pub async fn post_chat(
             input_tokens,
             output_tokens,
             cost_usd,
+            cost_estimated: resp.estimated_cost.as_ref().map(|e| e.estimated), // §D LN-4
             duration_ms,
             status: if resp.success {
                 CallStatus::Success
@@ -744,6 +745,7 @@ pub async fn post_chat_stream(
                         input_tokens: resp.usage.as_ref().map(|u| u.input_tokens),
                         output_tokens: resp.usage.as_ref().map(|u| u.output_tokens),
                         cost_usd,
+                        cost_estimated: resp.estimated_cost.as_ref().map(|e| e.estimated), // §D LN-4
                         duration_ms,
                         status: CallStatus::Success,
                         error_type: None,
@@ -1050,6 +1052,7 @@ impl ModelTurn for GatewayModelTurn<'_> {
             input_tokens: resp.usage.as_ref().map(|u| u.input_tokens),
             output_tokens: resp.usage.as_ref().map(|u| u.output_tokens),
             cost_usd: cost,
+            cost_estimated: resp.estimated_cost.as_ref().map(|e| e.estimated), // §D LN-4
             duration_ms,
             status: if resp.success {
                 CallStatus::Success

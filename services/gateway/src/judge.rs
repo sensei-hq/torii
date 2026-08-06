@@ -212,6 +212,7 @@ pub async fn judge_response(
         input_tokens: run.input_tokens,
         output_tokens: run.output_tokens,
         cost_usd: run.cost,
+        cost_estimated: None, // §D LN-4: the C6 judge is a $0 local call with no pre-call estimate
         duration_ms: run.duration_ms,
         status: if run.success {
             CallStatus::Success

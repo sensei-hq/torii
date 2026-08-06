@@ -384,6 +384,7 @@ pub async fn ask(
         input_tokens,
         output_tokens,
         cost_usd,
+        cost_estimated: resp.estimated_cost.as_ref().map(|e| e.estimated), // §D LN-4
         duration_ms,
         status: if resp.success {
             CallStatus::Success

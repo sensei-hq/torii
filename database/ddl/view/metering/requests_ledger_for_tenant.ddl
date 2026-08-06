@@ -25,6 +25,7 @@ select
 , status
 , fallback_sequence
 , recorded_at
+, cost_estimated                   -- §D LN-4: gateway pre-call estimate (USD), snapshotted alongside actual cost_usd. Appended at END so CREATE OR REPLACE stays idempotent (can't reorder existing view cols).
 from metering.inference_calls;
 
 comment on view requests_ledger_for_tenant is

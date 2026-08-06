@@ -35,7 +35,7 @@ declare
 begin
   select * into v_call from metering.inference_calls
    where tenant_id = p_tenant and id = p_call_id;
-  if not found or v_call.budget_node_id is null then
+  if not found or v_call.org_unit_id is null then
     return;  -- no such call, or unattributed (P5 fail-closes to an org root) → skip
   end if;
   v_day := v_call.recorded_at::date;
@@ -67,17 +67,17 @@ begin
 
   if v_first then
     insert into metering.usage_daily
-      (tenant_id, day, budget_node_id, served_model, provider, capability, execution_location,
+      (tenant_id, day, org_unit_id, served_model, provider, capability, execution_location,
        calls, input_tokens, output_tokens, cost_usd, cloud_equiv_usd, savings_usd,
        fallback_calls, latency_ms_sum, latency_ms_count, local_only_calls, savings_unpriced_calls)
     values
-      (v_call.tenant_id, v_day, v_call.budget_node_id, v_call.model, v_call.adapter,
+      (v_call.tenant_id, v_day, v_call.org_unit_id, v_call.model, v_call.adapter,
        v_call.capability, coalesce(v_call.execution_location, 'cloud'),
        1, coalesce(v_call.input_tokens, 0), coalesce(v_call.output_tokens, 0),
        coalesce(v_call.cost_usd, 0), v_cloud_equiv, v_savings,
        case when v_call.fallback_sequence > 0 then 1 else 0 end,
        coalesce(v_call.duration_ms, 0), 1, v_local_only, v_unpriced)
-    on conflict (tenant_id, day, budget_node_id, served_model, provider, capability, execution_location)
+    on conflict (tenant_id, day, org_unit_id, served_model, provider, capability, execution_location)
     do update set
        calls                  = usage_daily.calls + 1,
        input_tokens           = usage_daily.input_tokens  + coalesce(v_call.input_tokens, 0),
@@ -94,11 +94,11 @@ begin
 
   -- QUALITY: absolute recompute of the call's (day,node,model) bucket from signals.
   insert into metering.quality_daily
-    (tenant_id, day, budget_node_id, served_model,
+    (tenant_id, day, org_unit_id, served_model,
      grounding_avg, judge_score_avg, retrieval_precision_avg, retrieval_recall_avg,
      guardrail_hit_calls, redaction_hit_calls, rated_calls, rating_avg,
      thumb_up, thumb_down, accept_calls, edit_calls, retry_calls)
-  select v_call.tenant_id, v_day, v_call.budget_node_id, v_call.model,
+  select v_call.tenant_id, v_day, v_call.org_unit_id, v_call.model,
      avg(qs.value_num)                     filter (where qs.signal_key = 'grounding'),
      avg(qs.value_num)                     filter (where qs.signal_key = 'judge_score'),
      avg(qs.value_num)                     filter (where qs.signal_key = 'retrieval_precision'),
@@ -112,16 +112,16 @@ begin
      count(distinct qs.inference_call_id)  filter (where qs.signal_key = 'accept'),
      count(distinct qs.inference_call_id)  filter (where qs.signal_key = 'edit'),
      count(distinct qs.inference_call_id)  filter (where qs.signal_key = 'retry')
-    from public.quality_signals qs
+    from metering.quality_signals qs
     join metering.inference_calls ic
       on ic.tenant_id = qs.tenant_id and ic.id = qs.inference_call_id
    where ic.tenant_id  = v_call.tenant_id
      and ic.recorded_at >= v_day
      and ic.recorded_at <  v_day + interval '1 day'
-     and ic.budget_node_id = v_call.budget_node_id
+     and ic.org_unit_id = v_call.org_unit_id
      and ic.model = v_call.model
   having count(qs.id) > 0
-  on conflict (tenant_id, day, budget_node_id, served_model)
+  on conflict (tenant_id, day, org_unit_id, served_model)
   do update set
      grounding_avg           = excluded.grounding_avg,
      judge_score_avg         = excluded.judge_score_avg,

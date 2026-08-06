@@ -160,13 +160,13 @@ use uuid::Uuid;
 pub enum ScopeFilter {
     /// Tenant-wide — no node filter (only an `audit.read` holder gets this).
     All,
-    /// Confined to these `budget_node_id`s (a node's subtree). Empty ⇒ sees nothing.
+    /// Confined to these `org_unit_id`s (a node's subtree). Empty ⇒ sees nothing.
     Nodes(Vec<Uuid>),
 }
 
 impl ScopeFilter {
     /// The bind value for the `= any($n)` predicate: `None` for `All` (predicate is a
-    /// no-op), else the node-id set. Every scoped query filters `budget_node_id`.
+    /// no-op), else the node-id set. Every scoped query filters `org_unit_id`.
     pub fn bind(&self) -> Option<Vec<Uuid>> {
         match self {
             ScopeFilter::All => None,

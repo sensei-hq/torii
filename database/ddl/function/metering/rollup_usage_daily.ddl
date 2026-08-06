@@ -19,12 +19,12 @@ begin
    where tenant_id = p_tenant and day = p_day;
 
   insert into metering.usage_daily
-    (tenant_id, day, budget_node_id, served_model, provider, capability, execution_location,
+    (tenant_id, day, org_unit_id, served_model, provider, capability, execution_location,
      calls, input_tokens, output_tokens, cost_usd,
      fallback_calls, latency_ms_sum, latency_ms_count)
   select ic.tenant_id,
          p_day,
-         ic.budget_node_id,
+         ic.org_unit_id,
          ic.model,
          ic.adapter,
          ic.capability,
@@ -40,8 +40,8 @@ begin
    where ic.tenant_id = p_tenant
      and ic.recorded_at >= p_day
      and ic.recorded_at <  p_day + interval '1 day'
-     and ic.budget_node_id is not null
-   group by ic.tenant_id, ic.budget_node_id, ic.model, ic.adapter, ic.capability,
+     and ic.org_unit_id is not null
+   group by ic.tenant_id, ic.org_unit_id, ic.model, ic.adapter, ic.capability,
             coalesce(ic.execution_location, 'cloud');
 end;
 $$;

@@ -29,13 +29,13 @@ begin
   -- logic as the fan-out); p95 via percentile_cont over the day's durations.
   delete from metering.usage_daily where tenant_id = p_tenant and day = p_day;
   insert into metering.usage_daily
-    (tenant_id, day, budget_node_id, served_model, provider, capability, execution_location,
+    (tenant_id, day, org_unit_id, served_model, provider, capability, execution_location,
      calls, input_tokens, output_tokens, cost_usd, cloud_equiv_usd, savings_usd,
      fallback_calls, latency_ms_sum, latency_ms_count, latency_ms_p95,
      local_only_calls, savings_unpriced_calls)
   with per_call as (
     select
-      ic.tenant_id, ic.budget_node_id, ic.model as served_model, ic.adapter as provider,
+      ic.tenant_id, ic.org_unit_id, ic.model as served_model, ic.adapter as provider,
       ic.capability, coalesce(ic.execution_location, 'cloud') as plane,
       coalesce(ic.input_tokens, 0)  as in_tok,
       coalesce(ic.output_tokens, 0) as out_tok,
@@ -57,26 +57,26 @@ begin
     where ic.tenant_id = p_tenant
       and ic.recorded_at >= p_day
       and ic.recorded_at <  p_day + interval '1 day'
-      and ic.budget_node_id is not null
+      and ic.org_unit_id is not null
   )
   select
-    tenant_id, p_day, budget_node_id, served_model, provider, capability, plane,
+    tenant_id, p_day, org_unit_id, served_model, provider, capability, plane,
     count(*), sum(in_tok), sum(out_tok), sum(cost_usd), sum(ce_usd), sum(sav_usd),
     count(*) filter (where fallback_sequence > 0),
     sum(duration_ms), count(*),
     percentile_cont(0.95) within group (order by duration_ms)::integer,
     sum(lo), sum(up)
   from per_call
-  group by tenant_id, budget_node_id, served_model, provider, capability, plane;
+  group by tenant_id, org_unit_id, served_model, provider, capability, plane;
 
   -- QUALITY: recompute from quality_signals (same signal_key → column map as the fan-out).
   delete from metering.quality_daily where tenant_id = p_tenant and day = p_day;
   insert into metering.quality_daily
-    (tenant_id, day, budget_node_id, served_model,
+    (tenant_id, day, org_unit_id, served_model,
      grounding_avg, judge_score_avg, retrieval_precision_avg, retrieval_recall_avg,
      guardrail_hit_calls, redaction_hit_calls, rated_calls, rating_avg,
      thumb_up, thumb_down, accept_calls, edit_calls, retry_calls)
-  select ic.tenant_id, p_day, ic.budget_node_id, ic.model,
+  select ic.tenant_id, p_day, ic.org_unit_id, ic.model,
      avg(qs.value_num)                    filter (where qs.signal_key = 'grounding'),
      avg(qs.value_num)                    filter (where qs.signal_key = 'judge_score'),
      avg(qs.value_num)                    filter (where qs.signal_key = 'retrieval_precision'),
@@ -90,13 +90,13 @@ begin
      count(distinct qs.inference_call_id) filter (where qs.signal_key = 'accept'),
      count(distinct qs.inference_call_id) filter (where qs.signal_key = 'edit'),
      count(distinct qs.inference_call_id) filter (where qs.signal_key = 'retry')
-    from public.quality_signals qs
+    from metering.quality_signals qs
     join metering.inference_calls ic
       on ic.tenant_id = qs.tenant_id and ic.id = qs.inference_call_id
    where ic.tenant_id  = p_tenant
      and ic.recorded_at >= p_day and ic.recorded_at < p_day + interval '1 day'
-     and ic.budget_node_id is not null
-   group by ic.tenant_id, ic.budget_node_id, ic.model;
+     and ic.org_unit_id is not null
+   group by ic.tenant_id, ic.org_unit_id, ic.model;
 
   -- Mark every reconciled call so a later incremental apply cannot re-add it.
   insert into metering.applied_calls (tenant_id, inference_call_id)

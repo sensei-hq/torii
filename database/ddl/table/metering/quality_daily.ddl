@@ -9,7 +9,7 @@ set search_path to metering, core, extensions;  -- §D Phase 6: was public.analy
 create table if not exists quality_daily (
   tenant_id               uuid          not null references core.tenants(id) on delete cascade
 , day                     date          not null
-, budget_node_id          uuid          not null
+, org_unit_id          uuid          not null
 , served_model            text          not null
 , grounding_avg           numeric(6,3)
 , judge_score_avg         numeric(6,3)
@@ -24,7 +24,7 @@ create table if not exists quality_daily (
 , accept_calls            bigint        not null default 0
 , edit_calls              bigint        not null default 0
 , retry_calls             bigint        not null default 0
-, primary key (tenant_id, day, budget_node_id, served_model)
+, primary key (tenant_id, day, org_unit_id, served_model)
 );
 
 create index if not exists idx_quality_daily_day

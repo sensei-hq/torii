@@ -10,7 +10,7 @@ set search_path to metering, core, extensions;  -- §D Phase 6: was public.analy
 create table if not exists usage_daily (
   tenant_id             uuid          not null references core.tenants(id) on delete cascade
 , day                   date          not null
-, budget_node_id        uuid          not null                    -- GH-5 attribution (no FK: cache)
+, org_unit_id        uuid          not null                    -- GH-5 attribution (no FK: cache)
 , served_model          text          not null                    -- inference_calls.model
 , provider              text          not null                    -- inference_calls.adapter
 , capability            text          not null
@@ -27,13 +27,13 @@ create table if not exists usage_daily (
 , latency_ms_p95        integer                                   -- nullable; per-day p95 at reconcile (A4)
 , local_only_calls      bigint        not null default 0          -- local calls with no cloud counterfactual
 , savings_unpriced_calls bigint       not null default 0          -- local calls whose cloud step is unpriced
-, primary key (tenant_id, day, budget_node_id, served_model, provider, capability, execution_location)
+, primary key (tenant_id, day, org_unit_id, served_model, provider, capability, execution_location)
 );
 
 create index if not exists idx_usage_daily_day
   on usage_daily(tenant_id, day);
 create index if not exists idx_usage_daily_node_day
-  on usage_daily(tenant_id, budget_node_id, day);
+  on usage_daily(tenant_id, org_unit_id, day);
 create index if not exists idx_usage_daily_model_day
   on usage_daily(tenant_id, served_model, day);
 

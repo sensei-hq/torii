@@ -20,7 +20,7 @@ declare missing text;
 begin
   select string_agg(c, ', ') into missing
   from unnest(array[
-    'tenant_id','day','budget_node_id','served_model','provider','capability','execution_location',
+    'tenant_id','day','org_unit_id','served_model','provider','capability','execution_location',
     'calls','input_tokens','output_tokens','cost_usd','cloud_equiv_usd','savings_usd',
     'fallback_calls','latency_ms_sum','latency_ms_count','latency_ms_p95',
     'local_only_calls','savings_unpriced_calls']) as c
@@ -32,7 +32,7 @@ begin
 
   select string_agg(c, ', ') into missing
   from unnest(array[
-    'tenant_id','day','budget_node_id','served_model',
+    'tenant_id','day','org_unit_id','served_model',
     'grounding_avg','judge_score_avg','retrieval_precision_avg','retrieval_recall_avg',
     'guardrail_hit_calls','redaction_hit_calls','rated_calls','rating_avg',
     'thumb_up','thumb_down','accept_calls','edit_calls','retry_calls']) as c
@@ -89,10 +89,22 @@ end $$;
 -- A1.d — batch daily rollup populates the new grain; idempotent.
 -- ─────────────────────────────────────────────────────────────────────────
 \echo '== O2 analytics: A1 rollup logic =='
+
+-- §D Ledger Normalize LN-3c: inference_calls.org_unit_id now FKs → core.org_units, so the test
+-- attribution ids must exist. Seed them (idempotent) for the platform tenant; level 0 (seeded in
+-- unit_levels by P5). Harmless persistence (no node/member → invisible to budget_tree/org reads).
+insert into core.org_units (tenant_id, id, parent_id, level, name, modified_by)
+select '00000000-0000-0000-0000-000000000000', v.id::uuid, null, 0, 'test-unit', 'test'
+from (values ('b0de0000-0000-0000-0000-000000000001'),('b0de0000-0000-0000-0000-000000000002'),
+             ('b0de0000-0000-0000-0000-0000000000a1'),('b0de0000-0000-0000-0000-0000000000a2'),
+             ('b0de0000-0000-0000-0000-0000000000a3'),('b0de0000-0000-0000-0000-0000000000a4'),
+             ('b0de0000-0000-0000-0000-0000000000b1'),('b0de0000-0000-0000-0000-0000000000b2')) as v(id)
+on conflict (tenant_id, id) do nothing;
+
 begin;
   insert into metering.inference_calls
     (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence,
-     recorded_at,input_tokens,output_tokens,execution_location,budget_node_id) values
+     recorded_at,input_tokens,output_tokens,execution_location,org_unit_id) values
     ('00000000-0000-0000-0000-000000000000','a11a0000-0000-0000-0000-0000000000f1','text_chat','anthropic','claude',0.01,100,'success',0,'2026-07-24T10:00:00Z',100,50,'cloud','b0de0000-0000-0000-0000-000000000001'),
     ('00000000-0000-0000-0000-000000000000','a11a0000-0000-0000-0000-0000000000f2','text_chat','anthropic','claude',0.02,120,'success',1,'2026-07-24T11:00:00Z',200,80,'cloud','b0de0000-0000-0000-0000-000000000001'),
     ('00000000-0000-0000-0000-000000000000','a11a0000-0000-0000-0000-0000000000f3','text_chat','ollama','gemma',0,90,'success',0,'2026-07-24T12:00:00Z',50,30,'local','b0de0000-0000-0000-0000-000000000001');
@@ -136,7 +148,7 @@ begin;
   --     with no application code path; replay is idempotent (no double-count).
   insert into metering.inference_calls
     (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence,
-     recorded_at,input_tokens,output_tokens,execution_location,budget_node_id) values
+     recorded_at,input_tokens,output_tokens,execution_location,org_unit_id) values
     ('00000000-0000-0000-0000-000000000000','a22a0000-0000-0000-0000-0000000000c1',
      'text_chat','anthropic','sonnet-4.6',0.0041,200,'success',0,
      '2026-07-25T09:00:00Z',120,60,'cloud','b0de0000-0000-0000-0000-000000000002');
@@ -144,7 +156,7 @@ begin;
   begin
     if coalesce((select calls from metering.usage_daily
           where served_model='sonnet-4.6' and execution_location='cloud'
-            and budget_node_id='b0de0000-0000-0000-0000-000000000002'), -1) <> 1
+            and org_unit_id='b0de0000-0000-0000-0000-000000000002'), -1) <> 1
        or coalesce((select cost_usd from metering.usage_daily
              where served_model='sonnet-4.6' and execution_location='cloud'), -1) <> 0.0041
        or coalesce((select latency_ms_sum from metering.usage_daily
@@ -164,17 +176,17 @@ begin;
   -- (2) quality_signals AFTER INSERT → recompute the call's quality bucket. Signals
   --     land AFTER the ledger row, so the quality path is driven by the signal insert,
   --     not the call insert; recompute is absolute → weighted averages are exact.
-  insert into public.quality_signals
-    (tenant_id,id,inference_call_id,signal_key,signal_class,value_num,source) values
-    ('00000000-0000-0000-0000-000000000000',gen_random_uuid(),
+  insert into metering.quality_signals
+    (tenant_id,id,subject_type,inference_call_id,signal_key,signal_class,value_num,source) values
+    ('00000000-0000-0000-0000-000000000000',gen_random_uuid(),'call',
      'a22a0000-0000-0000-0000-0000000000c1','grounding','implicit',0.86,'test'),
-    ('00000000-0000-0000-0000-000000000000',gen_random_uuid(),
+    ('00000000-0000-0000-0000-000000000000',gen_random_uuid(),'call',
      'a22a0000-0000-0000-0000-0000000000c1','judge_score','implicit',0.91,'test');
   do $$
   begin
     if coalesce((select round(grounding_avg,2) from metering.quality_daily
           where served_model='sonnet-4.6'
-            and budget_node_id='b0de0000-0000-0000-0000-000000000002'), -1) <> 0.86
+            and org_unit_id='b0de0000-0000-0000-0000-000000000002'), -1) <> 0.86
        or coalesce((select round(judge_score_avg,2) from metering.quality_daily
              where served_model='sonnet-4.6'), -1) <> 0.91 then
       raise exception 'FAIL A2: quality_signals fan-out did not populate weighted averages'; end if;
@@ -223,7 +235,7 @@ begin;
   -- four LOCAL calls (cost 0, in=512 out=128), one per chain, distinct budget nodes.
   insert into metering.inference_calls
     (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence,
-     recorded_at,input_tokens,output_tokens,execution_location,chain_id,budget_node_id) values
+     recorded_at,input_tokens,output_tokens,execution_location,chain_id,org_unit_id) values
     ('00000000-0000-0000-0000-000000000000','a33c0000-0000-0000-0000-000000000001','text_chat','ollama','local-x',0,90,'success',0,'2026-07-26T09:00:00Z',512,128,'local','sav-cloud',   'b0de0000-0000-0000-0000-0000000000a1'),
     ('00000000-0000-0000-0000-000000000000','a33c0000-0000-0000-0000-000000000002','text_chat','ollama','local-x',0,90,'success',0,'2026-07-26T09:00:00Z',512,128,'local','sav-local',   'b0de0000-0000-0000-0000-0000000000a2'),
     ('00000000-0000-0000-0000-000000000000','a33c0000-0000-0000-0000-000000000003','text_chat','ollama','local-x',0,90,'success',0,'2026-07-26T09:00:00Z',512,128,'local','sav-unpriced','b0de0000-0000-0000-0000-0000000000a3'),
@@ -234,29 +246,29 @@ begin;
   begin
     -- case 1: priced cloud step → 512·0.00001 + 128·0.00003 = 0.00896
     select cloud_equiv_usd, savings_usd into c1, s1 from metering.usage_daily
-      where budget_node_id='b0de0000-0000-0000-0000-0000000000a1' and execution_location='local';
+      where org_unit_id='b0de0000-0000-0000-0000-0000000000a1' and execution_location='local';
     if coalesce(c1,-1) <> 0.00896 or coalesce(s1,-1) <> 0.00896 then
       raise exception 'FAIL A3 priced: cloud_equiv=% savings=% (want 0.00896)', c1, s1; end if;
 
     -- case 2: local-only chain → no counterfactual, counted separately
     select local_only_calls into lo2 from metering.usage_daily
-      where budget_node_id='b0de0000-0000-0000-0000-0000000000a2' and execution_location='local';
+      where org_unit_id='b0de0000-0000-0000-0000-0000000000a2' and execution_location='local';
     if coalesce(lo2,-1) <> 1
        or coalesce((select savings_usd from metering.usage_daily
-                     where budget_node_id='b0de0000-0000-0000-0000-0000000000a2'),-1) <> 0 then
+                     where org_unit_id='b0de0000-0000-0000-0000-0000000000a2'),-1) <> 0 then
       raise exception 'FAIL A3 local-only: local_only_calls=% (want 1, savings 0)', lo2; end if;
 
     -- case 3: unpriced counterfactual → excluded, surfaced, never guessed
     select savings_unpriced_calls into up3 from metering.usage_daily
-      where budget_node_id='b0de0000-0000-0000-0000-0000000000a3' and execution_location='local';
+      where org_unit_id='b0de0000-0000-0000-0000-0000000000a3' and execution_location='local';
     if coalesce(up3,-1) <> 1
        or coalesce((select savings_usd from metering.usage_daily
-                     where budget_node_id='b0de0000-0000-0000-0000-0000000000a3'),-1) <> 0 then
+                     where org_unit_id='b0de0000-0000-0000-0000-0000000000a3'),-1) <> 0 then
       raise exception 'FAIL A3 unpriced: savings_unpriced_calls=% (want 1, savings 0)', up3; end if;
 
     -- case 4: cheapest-of-two wins → 0.00896 (< the dear step's 0.01792)
     select savings_usd into s4 from metering.usage_daily
-      where budget_node_id='b0de0000-0000-0000-0000-0000000000a4' and execution_location='local';
+      where org_unit_id='b0de0000-0000-0000-0000-0000000000a4' and execution_location='local';
     if coalesce(s4,-1) <> 0.00896 or s4 >= 0.01792 then
       raise exception 'FAIL A3 conservative floor: savings=% (want cheapest 0.00896)', s4; end if;
 
@@ -292,7 +304,7 @@ begin;
   -- 3 cloud calls (one bucket; latencies 100/200/300) + 1 local call (savings bucket)
   insert into metering.inference_calls
     (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence,
-     recorded_at,input_tokens,output_tokens,execution_location,chain_id,budget_node_id) values
+     recorded_at,input_tokens,output_tokens,execution_location,chain_id,org_unit_id) values
     ('00000000-0000-0000-0000-000000000000','a44c0000-0000-0000-0000-000000000001','text_chat','anthropic','sonnet-4.6',0.01,100,'success',0,'2026-07-27T09:00:00Z',100,50,'cloud','recon-chain','b0de0000-0000-0000-0000-0000000000b1'),
     ('00000000-0000-0000-0000-000000000000','a44c0000-0000-0000-0000-000000000002','text_chat','anthropic','sonnet-4.6',0.01,200,'success',0,'2026-07-27T10:00:00Z',100,50,'cloud','recon-chain','b0de0000-0000-0000-0000-0000000000b1'),
     ('00000000-0000-0000-0000-000000000000','a44c0000-0000-0000-0000-000000000003','text_chat','anthropic','sonnet-4.6',0.01,300,'success',0,'2026-07-27T11:00:00Z',100,50,'cloud','recon-chain','b0de0000-0000-0000-0000-0000000000b1'),
@@ -303,9 +315,9 @@ begin;
   begin
     -- incremental (trigger-produced) figures
     select calls, cost_usd into pre_calls, pre_cost from metering.usage_daily
-      where budget_node_id='b0de0000-0000-0000-0000-0000000000b1' and execution_location='cloud';
+      where org_unit_id='b0de0000-0000-0000-0000-0000000000b1' and execution_location='cloud';
     select savings_usd into pre_sav from metering.usage_daily
-      where budget_node_id='b0de0000-0000-0000-0000-0000000000b2' and execution_location='local';
+      where org_unit_id='b0de0000-0000-0000-0000-0000000000b2' and execution_location='local';
     if coalesce(pre_calls,-1) <> 3 or coalesce(pre_cost,-1) <> 0.03 or coalesce(pre_sav,-1) <> 0.00896 then
       raise exception 'A4 setup wrong: pre calls=% cost=% sav=%', pre_calls, pre_cost, pre_sav; end if;
 
@@ -313,13 +325,13 @@ begin;
     delete from metering.usage_daily   where tenant_id='00000000-0000-0000-0000-000000000000' and day='2026-07-27';
     delete from metering.quality_daily where tenant_id='00000000-0000-0000-0000-000000000000' and day='2026-07-27';
     perform metering.rollup_reconcile('00000000-0000-0000-0000-000000000000','2026-07-27');
-    if coalesce((select calls    from metering.usage_daily where budget_node_id='b0de0000-0000-0000-0000-0000000000b1' and execution_location='cloud'),-1) <> 3
-       or coalesce((select cost_usd from metering.usage_daily where budget_node_id='b0de0000-0000-0000-0000-0000000000b1'),-1) <> 0.03
-       or coalesce((select savings_usd from metering.usage_daily where budget_node_id='b0de0000-0000-0000-0000-0000000000b2'),-1) <> 0.00896 then
+    if coalesce((select calls    from metering.usage_daily where org_unit_id='b0de0000-0000-0000-0000-0000000000b1' and execution_location='cloud'),-1) <> 3
+       or coalesce((select cost_usd from metering.usage_daily where org_unit_id='b0de0000-0000-0000-0000-0000000000b1'),-1) <> 0.03
+       or coalesce((select savings_usd from metering.usage_daily where org_unit_id='b0de0000-0000-0000-0000-0000000000b2'),-1) <> 0.00896 then
       raise exception 'FAIL A4 reconstructability: figures not rebuilt from the ledger alone'; end if;
     -- p95 computed at reconcile: percentile_cont(0.95) over {100,200,300} = 290
     if coalesce((select latency_ms_p95 from metering.usage_daily
-                  where budget_node_id='b0de0000-0000-0000-0000-0000000000b1'),-1) <> 290 then
+                  where org_unit_id='b0de0000-0000-0000-0000-0000000000b1'),-1) <> 290 then
       raise exception 'FAIL A4: latency_ms_p95 not computed at reconcile'; end if;
     raise notice 'A4 reconstructability + p95 ✓';
 
@@ -327,10 +339,10 @@ begin;
     select count(*) into n0 from audit.audit_events
       where tenant_id='00000000-0000-0000-0000-000000000000' and action='analytics.reconciled';
     update metering.usage_daily set calls = calls + 100
-      where budget_node_id='b0de0000-0000-0000-0000-0000000000b1';
+      where org_unit_id='b0de0000-0000-0000-0000-0000000000b1';
     perform metering.rollup_reconcile('00000000-0000-0000-0000-000000000000','2026-07-27');
     if coalesce((select calls from metering.usage_daily
-                  where budget_node_id='b0de0000-0000-0000-0000-0000000000b1'),-1) <> 3 then
+                  where org_unit_id='b0de0000-0000-0000-0000-0000000000b1'),-1) <> 3 then
       raise exception 'FAIL A4 drift: corrupted bucket not corrected'; end if;
     if (select count(*) from audit.audit_events
           where tenant_id='00000000-0000-0000-0000-000000000000' and action='analytics.reconciled') <> n0 + 1 then

@@ -213,7 +213,7 @@ begin;
     on conflict (id) do nothing;
   -- one usage-rollup row per tenant (superuser write; the grid columns are all NOT NULL).
   insert into metering.usage_daily
-    (tenant_id, day, budget_node_id, served_model, provider, capability, execution_location, calls, cost_usd) values
+    (tenant_id, day, org_unit_id, served_model, provider, capability, execution_location, calls, cost_usd) values
     ('00000000-0000-0000-0000-000000000000','2026-07-30','b0de0000-0000-0000-0000-0000000000f1','claude','anthropic','text_chat','cloud',1,0.01),
     ('99999999-9999-9999-9999-999999999999','2026-07-30','b0de0000-0000-0000-0000-0000000000f2','claude','anthropic','text_chat','cloud',1,0.02);
 
@@ -246,7 +246,7 @@ begin;
     -- (c) no client write on the rollups (grant revoked → insufficient_privilege).
     begin
       insert into metering.usage_daily
-        (tenant_id, day, budget_node_id, served_model, provider, capability, execution_location)
+        (tenant_id, day, org_unit_id, served_model, provider, capability, execution_location)
         values ('00000000-0000-0000-0000-000000000000','2026-07-31','b0de0000-0000-0000-0000-0000000000f1','x','x','x','cloud');
       raise exception 'FAIL A8: authenticated could INSERT analytics_usage_daily';
     exception when insufficient_privilege then null; end;

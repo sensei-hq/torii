@@ -957,4 +957,26 @@ begin
   raise notice 'M-ln-3c1 inference_calls.org_unit_id + FK→core.org_units (additive; budget_node_id/*_node_id intact) ✓';
 end $$;
 
+-- M-ln-3c2a — the ROLLUP-side budget_node_id → org_unit_id rename (usage_daily/quality_daily grain +
+-- rollup fns + analytics reads). Unambiguous (rollup attribution only); the LEDGER budget_node_id +
+-- the budget-MACHINERY budget_node_id (holds/reserve/service_accounts) are UNTOUCHED. Spend-by-tier
+-- still groups by *_node_id (the P12 reversal is LN-3c-2b).
+do $$
+declare t text;
+begin
+  foreach t in array array['usage_daily','quality_daily'] loop
+    if not exists (select 1 from information_schema.columns where table_schema='metering' and table_name=t and column_name='org_unit_id') then
+      raise exception 'FAIL: metering.%.org_unit_id missing (rollup rename incomplete)', t; end if;
+    if exists (select 1 from information_schema.columns where table_schema='metering' and table_name=t and column_name='budget_node_id') then
+      raise exception 'FAIL: metering.%.budget_node_id still present (should be renamed)', t; end if;
+  end loop;
+  -- footgun guard: the budget-machinery budget_node_id MUST survive.
+  if not exists (select 1 from information_schema.columns where table_schema='public' and table_name='budget_holds' and column_name='budget_node_id') then
+    raise exception 'FAIL: budget_holds.budget_node_id was wrongly renamed (budget-machinery corrupted)'; end if;
+  -- the LEDGER keeps budget_node_id this slice (retires in LN-3c-2b).
+  if not exists (select 1 from information_schema.columns where table_schema='metering' and table_name='inference_calls' and column_name='budget_node_id') then
+    raise exception 'FAIL: inference_calls.budget_node_id dropped early (LN-3c-2b territory)'; end if;
+  raise notice 'M-ln-3c2a rollup budget_node_id→org_unit_id (ledger + machinery budget_node_id intact) ✓';
+end $$;
+
 \echo '== §D moves tests done =='

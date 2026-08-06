@@ -54,7 +54,7 @@ enum ScopeErr {
 /// P12 no-recursive-CTE gate is about the spend GROUP BY, which stays recursion-free).
 async fn subtree_ids(pool: &sqlx::PgPool, tenant: Uuid, root: Uuid) -> Result<Vec<Uuid>, sqlx::Error> {
     // §D Phase 5: the subtree is over the org tree (core.org_units.parent_id). The ids are org_unit
-    // ids == the ledger's budget_node_id values (DC-1), so the `budget_node_id = any(subtree)` filter
+    // ids == the ledger's org_unit_id values (DC-1), so the `org_unit_id = any(subtree)` filter
     // on analytics rows still matches.
     sqlx::query_scalar(
         "with recursive sub as ( \
@@ -110,7 +110,7 @@ async fn scope_filter_for(
 /// Own-subtree reads need no capability; tenant-wide / cross-subtree needs `audit.read`
 /// (analytics observability shares O1's audit gate). Returns `(tenant, ScopeFilter)` or a
 /// mapped `401`/`403` response. The returned filter is bound to every query as the
-/// `budget_node_id = any($n)` predicate.
+/// `org_unit_id = any($n)` predicate.
 async fn resolve_scope(
     state: &SharedState,
     claims: &Claims,
@@ -206,7 +206,7 @@ pub async fn get_overview(
                     / nullif((sum(cost_usd) filter (where day between current_date - 28 and current_date - 15)/nullif(sum(calls) filter (where day between current_date - 28 and current_date - 15),0)),0))::numeric,1) else null end as blended_delta, \
           coalesce(sum(savings_usd) filter (where day > current_date - 14),0)::float8 as savings14 \
         from metering.usage_daily \
-        where tenant_id = $1 and ($2::uuid[] is null or budget_node_id = any($2))) s";
+        where tenant_id = $1 and ($2::uuid[] is null or org_unit_id = any($2))) s";
     match sqlx::query_scalar::<_, Value>(q)
         .bind(tenant)
         .bind(scope.bind())
@@ -251,13 +251,13 @@ pub async fn get_cost_trend(
                from ( select day, sum(cost_usd) cost_usd, sum(calls) calls, sum(savings_usd) savings_usd \
                         from metering.usage_daily \
                        where tenant_id = $1 and day > current_date - $2 \
-                         and ($3::uuid[] is null or budget_node_id = any($3)) \
+                         and ($3::uuid[] is null or org_unit_id = any($3)) \
                        group by day) d) x) as series, \
           ( select round((100.0*((sum(cost_usd) filter (where day > current_date - ($2/2)) / nullif(sum(calls) filter (where day > current_date - ($2/2)),0)) \
                    - (sum(cost_usd) filter (where day <= current_date - ($2/2)) / nullif(sum(calls) filter (where day <= current_date - ($2/2)),0))) \
                    / nullif((sum(cost_usd) filter (where day <= current_date - ($2/2)) / nullif(sum(calls) filter (where day <= current_date - ($2/2)),0)),0))::numeric,1) \
               from metering.usage_daily where tenant_id = $1 and day > current_date - $2 \
-                and ($3::uuid[] is null or budget_node_id = any($3))) as delta \
+                and ($3::uuid[] is null or org_unit_id = any($3))) as delta \
         ) t";
     match sqlx::query_scalar::<_, Value>(sql)
         .bind(tenant)
@@ -298,7 +298,7 @@ pub async fn get_model_mix(
                sum(cost_usd)::float8 as cost_usd, sum(savings_usd)::float8 as savings_usd \
           from metering.usage_daily \
          where tenant_id = $1 and day > current_date - $2 \
-           and ($3::uuid[] is null or budget_node_id = any($3)) \
+           and ($3::uuid[] is null or org_unit_id = any($3)) \
          group by served_model, provider, execution_location) t";
     match sqlx::query_scalar::<_, Value>(sql)
         .bind(tenant)
@@ -330,8 +330,8 @@ fn plane_split_sql() -> String {
              from metering.inference_calls ic {lat} \
             where ic.tenant_id = $1 \
               and ic.recorded_at >= now() - make_interval(days => $2) \
-              and ($3::uuid[] is null or ic.budget_node_id = any($3)) \
-              and ic.budget_node_id is not null) \
+              and ($3::uuid[] is null or ic.org_unit_id = any($3)) \
+              and ic.org_unit_id is not null) \
          select json_build_object( \
            'local', json_build_object('calls', l.calls, 'cost_usd', l.cost, 'cloud_equiv_usd', l.ce), \
            'cloud', json_build_object('calls', c.calls, 'cost_usd', c.cost, 'cloud_equiv_usd', c.ce), \
@@ -394,7 +394,7 @@ fn spend_sql(group: SpendGroup) -> String {
              from metering.inference_calls ic {lat} \
             where ic.tenant_id = $1 \
               and ic.recorded_at >= now() - make_interval(days => $2) \
-              and ($3::uuid[] is null or ic.budget_node_id = any($3)) \
+              and ($3::uuid[] is null or ic.org_unit_id = any($3)) \
               and ic.{col} is not null)",
         col = col, sav = SAVINGS_EXPR, lat = CE_LATERAL
     );
@@ -479,7 +479,7 @@ pub async fn get_quality(
                (sum(thumb_up) + sum(thumb_down) + sum(accept_calls) + sum(edit_calls) + sum(retry_calls)) as interactions \
           from metering.quality_daily \
          where tenant_id = $1 and day > current_date - $2 \
-           and ($3::uuid[] is null or budget_node_id = any($3)) \
+           and ($3::uuid[] is null or org_unit_id = any($3)) \
          group by served_model) t";
     match sqlx::query_scalar::<_, Value>(sql)
         .bind(tenant)
@@ -528,7 +528,7 @@ pub async fn get_export(
                       count(*) as calls, sum(coalesce(ic.cost_usd,0))::float8 as cost_usd \
                  from metering.inference_calls ic \
                 where ic.tenant_id = $1 and ic.recorded_at >= now() - make_interval(days => $2) \
-                  and ($3::uuid[] is null or ic.budget_node_id = any($3)) \
+                  and ($3::uuid[] is null or ic.org_unit_id = any($3)) \
                 group by coalesce(ic.execution_location,'cloud')) t"
         }
         _ => {
@@ -537,7 +537,7 @@ pub async fn get_export(
                       sum(calls) as calls, sum(cost_usd)::float8 as cost_usd, sum(savings_usd)::float8 as savings_usd \
                  from metering.usage_daily \
                 where tenant_id = $1 and day > current_date - $2 \
-                  and ($3::uuid[] is null or budget_node_id = any($3)) \
+                  and ($3::uuid[] is null or org_unit_id = any($3)) \
                 group by served_model, provider, execution_location) t"
         }
     };
@@ -764,7 +764,7 @@ mod gate {
                 "insert into metering.inference_calls \
                    (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence, \
                     recorded_at,input_tokens,output_tokens,execution_location,chain_id, \
-                    budget_node_id,team_node_id) \
+                    org_unit_id,team_node_id) \
                  values ($1,$2,'text_chat','anthropic','m',$3,100,'success',0,now(),512,128,$4::core.execution_location,'gate-chain',$5,$5)")
                 .bind(t).bind(id).bind(cost).bind(plane).bind(team)
                 .execute(&pool).await.unwrap();
@@ -791,7 +791,7 @@ mod gate {
         assert!(!plan.to_lowercase().contains("recursive"),
                 "spend-by-scope must not use a recursive CTE:\n{plan}");
 
-        // A7 scope filter (the `budget_node_id = any($3)` predicate): binding the team's
+        // A7 scope filter (the `org_unit_id = any($3)` predicate): binding the team's
         // subtree keeps its row; binding a foreign node id yields no rows.
         let in_scope: Value = sqlx::query_scalar(&spend_sql(SpendGroup::Team))
             .bind(t).bind(3650_i32).bind(Some(vec![team]))

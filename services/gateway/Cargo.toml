@@ -47,13 +47,13 @@ htmd = "0.5"
 image = "0.25"
 csv = "1"
 # MIG-1: real package is `sensei-gateway` (v0.4.6); alias to `gateway` so imports stay short.
-gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", tag = "v0.5.0" }
+gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", tag = "v0.5.1" }
 # X1 (P11): the Torii-owned MCP tool runtime — allow-list enforcement, SSRF egress, tool-egress
 # redaction, discovery, the agentic loop. db + net features (central plane).
 tools = { path = "../../crates/tools" }
 # V5: shared BYOK credential vault (envelope crypto / KEK / store / Vault / TenantKeyCache).
 # `sqlx` = the Postgres store adapter. Aliased to `vault`; dev resolves via the workspace [patch].
-vault = { package = "sensei-vault", git = "https://github.com/sensei-hq/gateway", tag = "v0.5.0", features = ["sqlx"] }
+vault = { package = "sensei-vault", git = "https://github.com/sensei-hq/gateway", tag = "v0.5.1", features = ["sqlx"] }
 # DB auto-provision on startup: dbd deploy (fetch schema from a GitHub ref → apply + import +
 # RLS policies) via the dbd-core library — same as the sensei daemon. `deploy` is a default feature.
 dbd-core = { git = "https://github.com/sensei-hq/dbd", tag = "v0.8.1" }

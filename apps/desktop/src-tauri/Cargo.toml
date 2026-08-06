@@ -36,7 +36,7 @@ tauri-plugin-playwright = { version = "0.2", optional = true }
 # opts into the in-process local wing via the `local-llama-cpp` feature — no direct
 # `sensei-local-*` deps. That surfaces `gateway::local::{EmbeddedLlamaAdapter, ChainedResolver,
 # ManagedResolver, OllamaResolver}` (in-process llama.cpp GGUF — no daemon).
-gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", tag = "v0.5.0", features = ["local-llama-cpp", "local-hf-download"] }
+gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", tag = "v0.5.1", features = ["local-llama-cpp", "local-hf-download"] }
 tokio            = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 # Device inventory (RAM / disk / CPU brand) for the local-models management screen.
 # Pinned to the same 0.39 line local-engine already resolves so the tree carries one copy;

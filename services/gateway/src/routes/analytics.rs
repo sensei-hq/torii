@@ -387,16 +387,21 @@ pub struct SpendQ {
 /// the closed `SpendGroup` enum (never raw input) → injection-safe; for tree dims it is a
 /// **denormalized `*_node_id`** path column, so the GROUP BY needs no recursive tree walk.
 fn spend_sql(group: SpendGroup) -> String {
-    let col = group.column();
+    // §D LN-3c-2b (P12 reversal): node dims resolve each call's leaf org_unit to its ancestor at the
+    // tier level via core.org_unit_ancestor_at_level (a per-call tree walk); attribute dims group by a
+    // scalar ledger column. `grp` is a uuid (node) or text (attribute) — one shape per generated query.
+    let grp = match group.level() {
+        Some(lvl) => format!("core.org_unit_ancestor_at_level(ic.tenant_id, ic.org_unit_id, {lvl})"),
+        None => format!("ic.{}", group.attr_column()),
+    };
     let per_call = format!(
         "with pc as ( \
-           select ic.{col} as grp, coalesce(ic.cost_usd,0) as cost_usd, {sav} as savings \
+           select {grp} as grp, coalesce(ic.cost_usd,0) as cost_usd, {sav} as savings \
              from metering.inference_calls ic {lat} \
             where ic.tenant_id = $1 \
               and ic.recorded_at >= now() - make_interval(days => $2) \
-              and ($3::uuid[] is null or ic.org_unit_id = any($3)) \
-              and ic.{col} is not null)",
-        col = col, sav = SAVINGS_EXPR, lat = CE_LATERAL
+              and ($3::uuid[] is null or ic.org_unit_id = any($3)))",
+        grp = grp, sav = SAVINGS_EXPR, lat = CE_LATERAL
     );
     if group.is_node() {
         format!(
@@ -407,8 +412,9 @@ fn spend_sql(group: SpendGroup) -> String {
                       n.cap_amount::float8 as cap_usd, \
                       case when n.cap_amount > 0 then round((100.0*sum(pc.cost_usd)/n.cap_amount)::numeric,1)::float8 else null end as pct_of_cap \
                  from pc \
-                 left join core.org_units ou on ou.tenant_id = $1 and ou.id = (pc.grp)::uuid \
+                 join core.org_units ou on ou.tenant_id = $1 and ou.id = pc.grp \
                  left join governance.nodes n on n.tenant_id = $1 and n.org_unit_id = ou.id \
+                where pc.grp is not null \
                 group by pc.grp, ou.name, ou.level, n.cap_amount) t"
         )
     } else {
@@ -418,7 +424,7 @@ fn spend_sql(group: SpendGroup) -> String {
                select (pc.grp)::text as node_id, (pc.grp)::text as node_name, null::text as kind, \
                       sum(pc.cost_usd)::float8 as cost_usd, count(*) as calls, sum(pc.savings)::float8 as savings_usd, \
                       null::float8 as cap_usd, null::float8 as pct_of_cap \
-                 from pc group by pc.grp) t"
+                 from pc where pc.grp is not null group by pc.grp) t"
         )
     }
 }
@@ -719,7 +725,7 @@ mod gate {
 
     #[tokio::test]
     #[ignore = "requires local Supabase (55322)"]
-    async fn p12_gate_spend_no_recursion_and_plane_split_savings() {
+    async fn spend_by_tier_rolls_up_org_tree_and_plane_split_savings() {
         let pool = pool().await;
         let t = Uuid::new_v4();
         let team = Uuid::new_v4();
@@ -754,7 +760,7 @@ mod gate {
         sqlx::query("insert into catalog.chain_models (id,tenant_id,fallback_chain_id,router_id,model_id,sequence_order,plane,is_active,modified_by) \
                      values (gen_random_uuid(),$1,$2,$3,$4,1,'cloud',true,'test')")
             .bind(t).bind(chain).bind(router_id).bind(model).execute(&pool).await.unwrap();
-        // ledger: 2 cloud calls + 1 local call, all attributed to the team (team_node_id set).
+        // ledger: 2 cloud calls + 1 local call, all attributed to the team unit (org_unit_id).
         for (id, plane, cost) in [
             (Uuid::new_v4(), "cloud", 0.01_f64),
             (Uuid::new_v4(), "cloud", 0.01),
@@ -763,14 +769,13 @@ mod gate {
             sqlx::query(
                 "insert into metering.inference_calls \
                    (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence, \
-                    recorded_at,input_tokens,output_tokens,execution_location,chain_id, \
-                    org_unit_id,team_node_id) \
-                 values ($1,$2,'text_chat','anthropic','m',$3,100,'success',0,now(),512,128,$4::core.execution_location,'gate-chain',$5,$5)")
+                    recorded_at,input_tokens,output_tokens,execution_location,chain_id,org_unit_id) \
+                 values ($1,$2,'text_chat','anthropic','m',$3,100,'success',0,now(),512,128,$4::core.execution_location,'gate-chain',$5)")
                 .bind(t).bind(id).bind(cost).bind(plane).bind(team)
                 .execute(&pool).await.unwrap();
         }
 
-        // ── gate half 1: spend by team, grouped by the denormalized column ──
+        // ── gate half 1: spend by team, rolled up the org tree via the ancestor walk ──
         let spend: Value = sqlx::query_scalar(&spend_sql(SpendGroup::Team))
             .bind(t).bind(3650_i32).bind(None::<Vec<Uuid>>)
             .fetch_one(&pool).await.expect("spend query runs");
@@ -778,18 +783,9 @@ mod gate {
         let row = rows.iter().find(|r| r["node_id"] == team.to_string())
             .expect("a row for the team");
         assert_eq!(row["node_name"], "Gate Team");
-        assert_eq!(row["calls"].as_i64(), Some(3), "3 calls attributed to the team");
+        assert_eq!(row["calls"].as_i64(), Some(3), "3 calls attributed directly to the team");
         assert!(approx(&row["cost_usd"], 0.02), "cost = 2 cloud calls @0.01 = {}", row["cost_usd"]);
         assert!(approx(&row["savings_usd"], 0.00896), "savings from the local call = {}", row["savings_usd"]);
-
-        // EXPLAIN must show NO recursive CTE (the whole point of GH-5 denormalization).
-        let explain = format!("explain {}", spend_sql(SpendGroup::Team));
-        let plan: String = sqlx::query(&explain)
-            .bind(t).bind(3650_i32).bind(None::<Vec<Uuid>>)
-            .fetch_all(&pool).await.expect("explain runs")
-            .iter().map(|r| r.get::<String, _>(0)).collect::<Vec<_>>().join("\n");
-        assert!(!plan.to_lowercase().contains("recursive"),
-                "spend-by-scope must not use a recursive CTE:\n{plan}");
 
         // A7 scope filter (the `org_unit_id = any($3)` predicate): binding the team's
         // subtree keeps its row; binding a foreign node id yields no rows.
@@ -814,6 +810,38 @@ mod gate {
         assert_eq!(ps["cloud"]["calls"].as_i64(), Some(2));
         assert!(approx(&ps["savings_usd"], 0.00896), "savings = Σ cloud_equiv(local) = {}", ps["savings_usd"]);
         assert_eq!(ps["baseline"], "cheapest_cloud_in_chain");
+
+        // §D LN-3c-2b (P12 reversal): spend-by-tier ROLLS UP the org tree via
+        // core.org_unit_ancestor_at_level (the GH-5 *_node_id denorm cols were dropped). Add a personal
+        // unit UNDER the team + a call attributed to it; the team's spend must now absorb it (the walk
+        // maps a level-3 leaf up to its level-2 ancestor), while spend-by-user keeps it on the leaf.
+        // (Placed after the plane-split gate so that gate keeps the pristine 2-cloud/1-local set.)
+        let personal = Uuid::new_v4();
+        sqlx::query("insert into core.org_units (tenant_id, id, parent_id, level, name, is_personal, modified_by) \
+                     values ($1,$2,$3,3,'Gate Person',true,'test')")
+            .bind(t).bind(personal).bind(team).execute(&pool).await.unwrap();
+        sqlx::query("insert into metering.inference_calls \
+                       (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence, \
+                        recorded_at,input_tokens,output_tokens,execution_location,chain_id,org_unit_id) \
+                     values ($1,$2,'text_chat','anthropic','m',0.03,100,'success',0,now(),10,5,'cloud'::core.execution_location,'gate-chain',$3)")
+            .bind(t).bind(Uuid::new_v4()).bind(personal).execute(&pool).await.unwrap();
+
+        let rolled: Value = sqlx::query_scalar(&spend_sql(SpendGroup::Team))
+            .bind(t).bind(3650_i32).bind(None::<Vec<Uuid>>)
+            .fetch_one(&pool).await.expect("rolled-up spend runs");
+        let team_row = rolled["rows"].as_array().unwrap().iter().find(|r| r["node_id"] == team.to_string())
+            .expect("team row after rollup");
+        assert_eq!(team_row["calls"].as_i64(), Some(4), "team spend rolls up the personal-unit call (3 direct + 1 descendant)");
+        assert!(approx(&team_row["cost_usd"], 0.05), "team cost absorbs the $0.03 personal call = {}", team_row["cost_usd"]);
+
+        let by_user: Value = sqlx::query_scalar(&spend_sql(SpendGroup::User))
+            .bind(t).bind(3650_i32).bind(None::<Vec<Uuid>>)
+            .fetch_one(&pool).await.expect("spend-by-user runs");
+        let user_rows = by_user["rows"].as_array().unwrap();
+        assert!(user_rows.iter().any(|r| r["node_id"] == personal.to_string()),
+                "the personal (level-3) call groups under the personal unit");
+        assert!(!user_rows.iter().any(|r| r["node_id"] == team.to_string()),
+                "the level-2 team is not a user-tier node (no level-3 ancestor → dropped)");
 
         // A8 no-secret-surface: the ledger-reading endpoints return only metadata — no key
         // anywhere in the response may name prompt/response content or a credential.

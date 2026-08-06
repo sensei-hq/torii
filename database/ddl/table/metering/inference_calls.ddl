@@ -20,15 +20,9 @@ create table if not exists inference_calls (
 , error_type         text                                              -- nullable; Option<String>
 , fallback_sequence  smallint     not null default 0                  -- u8 (0-255); which attempt in the chain
 , recorded_at        timestamptz  not null default now()
-  -- RW7: budget attribution + split-plane columns on the authoritative ledger.
-, budget_node_id     uuid
-, org_node_id        uuid
-, dept_node_id       uuid
-, team_node_id       uuid
-, user_node_id       uuid
-  -- §D Ledger Normalize LN-3c: the cap-bearing unit (== budget_node_id under P5 DC-1). Added additively;
-  -- LN-3c-2 migrates the analytics/rollup reads to it, reverses the P12 denorm (spend walks the org
-  -- tree), then drops budget_node_id + the 4 *_node_id denorm cols.
+  -- §D Ledger Normalize: budget attribution = the cap-bearing unit. LN-3c-2b DROPPED budget_node_id +
+  -- the 4 GH-5 *_node_id denorm cols (org/dept/team/user_node_id) — the P12 reversal: analytics
+  -- spend-by-tier now walks the org tree via core.org_unit_ancestor_at_level instead of the denorm.
 , org_unit_id        uuid
 , execution_location core.execution_location                       -- {local,cloud} enum (nullable)
 , hold_id            uuid

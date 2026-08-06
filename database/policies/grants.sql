@@ -58,6 +58,7 @@ begin
     ('public', 'document_assets'),       -- gateway-produced
     ('metering', 'inference_calls'),     -- §D Phase 6: service_role-only ledger (moved public→metering)
     ('metering', 'execution_traces'),    -- §D Phase 6: service_role-only ledger
+    ('metering', 'routing_attempts'),    -- §D Ledger Normalize: normalized trace (trigger-written)
     ('public', 'gateway_tasks'),
     ('public', 'gateway_task_logs')
   ) as x(sch, tbl)

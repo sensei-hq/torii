@@ -32,7 +32,8 @@ begin
     ('public', 'gateway_tasks'),
     ('public', 'gateway_task_logs'),
     ('metering', 'inference_calls'),   -- §D Phase 6: moved public→metering
-    ('metering', 'execution_traces')
+    ('metering', 'execution_traces'),
+    ('metering', 'routing_attempts')   -- §D Ledger Normalize: normalized trace (service_role-write via trigger)
   ) as x(sch, tbl)
   loop
     execute format('alter table %I.%I enable row level security', r.sch, r.tbl);

@@ -867,4 +867,31 @@ begin
   raise notice 'M-ln-2a signal_subject enum + feedback (owner-INSERT, exactly-one-subject CHECK, no U/D) ✓';
 end $$;
 
+-- M-ln-2b — routing_attempts (normalized trace) + the execution_traces populate trigger + RLS SELECT-only.
+do $$
+declare missing text;
+begin
+  if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                  where n.nspname='metering' and c.relname='routing_attempts' and c.relkind='r') then
+    raise exception 'FAIL: metering.routing_attempts table missing'; end if;
+  select string_agg(col,', ') into missing from unnest(array[
+    'tenant_id','id','inference_call_id','attempt_no','adapter','model','api_model_id','plane',
+    'latency_ms','outcome','cost_usd','error','fallback_triggered']) as col
+   where not exists (select 1 from information_schema.columns where table_schema='metering' and table_name='routing_attempts' and column_name=col);
+  if missing is not null then raise exception 'FAIL: routing_attempts missing columns: %', missing; end if;
+  if not exists (select 1 from pg_constraint where conrelid='metering.routing_attempts'::regclass
+                  and confrelid='metering.inference_calls'::regclass and contype='f') then
+    raise exception 'FAIL: routing_attempts → inference_calls FK missing'; end if;
+  if not exists (select 1 from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace
+                  where t.tgname='execution_traces_routing_attempts_ai' and n.nspname='metering' and c.relname='execution_traces' and not t.tgisinternal) then
+    raise exception 'FAIL: execution_traces_routing_attempts_ai trigger missing'; end if;
+  if not (select relrowsecurity from pg_class where oid='metering.routing_attempts'::regclass) then
+    raise exception 'FAIL: RLS disabled on metering.routing_attempts'; end if;
+  if not exists (select 1 from pg_policies where schemaname='metering' and tablename='routing_attempts' and policyname='routing_attempts_read') then
+    raise exception 'FAIL: routing_attempts_read policy missing'; end if;
+  if has_table_privilege('authenticated','metering.routing_attempts','insert') then
+    raise exception 'FAIL: authenticated can INSERT routing_attempts (service_role-only)'; end if;
+  raise notice 'M-ln-2b routing_attempts + populate trigger + RLS SELECT-only ✓';
+end $$;
+
 \echo '== §D moves tests done =='

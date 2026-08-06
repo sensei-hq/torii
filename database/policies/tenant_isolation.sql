@@ -80,3 +80,14 @@ alter table core.permissions enable row level security;
 drop policy if exists permissions_read on core.permissions;
 create policy permissions_read on core.permissions for select to authenticated
   using (true);
+
+-- (5) metering.feedback (§D Ledger Normalize §7-#4) — user-written explicit signals. OWNER-INSERT
+-- (actor_id = auth.uid(), in-tenant) so the interaction loop can write, + tenant SELECT. No U/D
+-- (immutable interaction record; a correction is a new row). service_role bypasses for rollups.
+alter table metering.feedback enable row level security;
+drop policy if exists feedback_owner_insert on metering.feedback;
+create policy feedback_owner_insert on metering.feedback for insert to authenticated
+  with check (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid and actor_id = auth.uid());
+drop policy if exists feedback_read on metering.feedback;
+create policy feedback_read on metering.feedback for select to authenticated
+  using (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid);

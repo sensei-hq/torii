@@ -832,4 +832,39 @@ begin
   raise notice 'M-ln-1 requests_ledger_for_tenant shield: RequestRow contract + deny-all ✓';
 end $$;
 
+\echo '== §D Ledger Normalize: signal_subject enum + feedback (LN-2a) =='
+
+-- M-ln-2a — the typed-subject enum + the NEW user-feedback table (split out of quality_signals).
+-- feedback is owner-INSERT (with check actor=auth.uid()) + tenant SELECT, no U/D; the exactly-one-per-
+-- subject CHECK encodes the resolved 'event' subtype (event = no call/message/conversation, target in json).
+do $$
+declare vals text; missing text;
+begin
+  select string_agg(e.enumlabel,',' order by e.enumsortorder) into vals
+    from pg_enum e join pg_type t on t.oid=e.enumtypid join pg_namespace n on n.oid=t.typnamespace
+   where n.nspname='metering' and t.typname='signal_subject';
+  if vals is distinct from 'call,message,conversation,event' then
+    raise exception 'FAIL: metering.signal_subject = % (expected call,message,conversation,event)', coalesce(vals,'<none>'); end if;
+  if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                  where n.nspname='metering' and c.relname='feedback' and c.relkind='r') then
+    raise exception 'FAIL: metering.feedback table missing'; end if;
+  select string_agg(col,', ') into missing from unnest(array[
+    'tenant_id','id','subject_type','inference_call_id','message_id','conversation_id','actor_id','kind','value','created_at']) as col
+   where not exists (select 1 from information_schema.columns where table_schema='metering' and table_name='feedback' and column_name=col);
+  if missing is not null then raise exception 'FAIL: feedback missing columns: %', missing; end if;
+  if (select udt_name from information_schema.columns where table_schema='metering' and table_name='feedback' and column_name='subject_type')
+     is distinct from 'signal_subject' then raise exception 'FAIL: feedback.subject_type is not the signal_subject enum'; end if;
+  if not exists (select 1 from pg_constraint where conrelid='metering.feedback'::regclass and contype='c' and conname='feedback_subject_one') then
+    raise exception 'FAIL: feedback exactly-one-subject CHECK missing'; end if;
+  if not (select relrowsecurity from pg_class where oid='metering.feedback'::regclass) then
+    raise exception 'FAIL: RLS disabled on metering.feedback'; end if;
+  if not exists (select 1 from pg_policies where schemaname='metering' and tablename='feedback' and cmd='INSERT') then
+    raise exception 'FAIL: feedback owner-INSERT policy missing'; end if;
+  if not exists (select 1 from pg_policies where schemaname='metering' and tablename='feedback' and cmd='SELECT') then
+    raise exception 'FAIL: feedback tenant SELECT policy missing'; end if;
+  if has_table_privilege('authenticated','metering.feedback','update') or has_table_privilege('authenticated','metering.feedback','delete') then
+    raise exception 'FAIL: authenticated can UPDATE/DELETE feedback (should be insert-own + select only)'; end if;
+  raise notice 'M-ln-2a signal_subject enum + feedback (owner-INSERT, exactly-one-subject CHECK, no U/D) ✓';
+end $$;
+
 \echo '== §D moves tests done =='

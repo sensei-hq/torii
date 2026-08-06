@@ -91,3 +91,8 @@ grant select on catalog.capability_types to authenticated;  -- model-capability 
 -- UPDATE/DELETE are never granted to authenticated.
 grant select, insert on audit.audit_events to authenticated;
 revoke update, delete on audit.audit_events from authenticated;
+
+-- §D Ledger Normalize §7-#4: metering.feedback is owner-INSERT + tenant SELECT (RLS with-check binds
+-- actor_id=auth.uid() in tenant_isolation.sql). No U/D — an interaction record is immutable.
+grant select, insert on metering.feedback to authenticated;
+revoke update, delete on metering.feedback from authenticated;

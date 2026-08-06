@@ -44,9 +44,7 @@ begin;
   insert into core.tenants(id, name, slug, is_platform, status, modified_by)
     values ('99999999-9999-9999-9999-999999999999', 'TestB', 'testb', false, 'active', 'test')
     on conflict (id) do nothing;
-  insert into public.sessions(tenant_id, user_id, module_id) values
-    ('00000000-0000-0000-0000-000000000000', 'plat', (select id from governance.modules limit 1)),
-    ('99999999-9999-9999-9999-999999999999', 'b',    (select id from governance.modules limit 1));
+  -- §D LN-3a: sessions retired; the documents/inference_calls/execution_traces cross-tenant checks below carry the isolation assertion.
   insert into public.spaces(tenant_id, id, name, classification, owner_id, modified_by)
     values ('00000000-0000-0000-0000-000000000000', '5face999-0000-0000-0000-000000000099', 'S', 'confidential', 'aaaaaaaa-0000-0000-0000-000000000001', 't');
   insert into public.documents(tenant_id, id, original_filename, content_type, space_id, classification)
@@ -80,10 +78,6 @@ begin;
 
   do $$
   begin
-    if (select count(*) from public.sessions) <> 1 then
-      raise exception 'FAIL cross-tenant: platform user sees % sessions (expected 1)', (select count(*) from public.sessions);
-    end if;
-
     if (select count(*) from public.documents where classification = 'confidential') <> 0 then
       raise exception 'FAIL confidential: non-member can see confidential documents';
     end if;

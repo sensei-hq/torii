@@ -29,8 +29,6 @@ begin
     -- devices: NOT tenant-wide — it has a bespoke own-vs-`device.manage` SELECT policy
     -- (devices_access in governance.sql). A generic `devices_read` here would OR with it
     -- and leak every in-tenant device to a plain member (O3-4).
-    ('public', 'gateway_tasks'),
-    ('public', 'gateway_task_logs'),
     ('metering', 'inference_calls'),   -- §D Phase 6: moved public→metering
     ('metering', 'execution_traces'),
     ('metering', 'routing_attempts')   -- §D Ledger Normalize: normalized trace (service_role-write via trigger)
@@ -53,9 +51,7 @@ do $$
 declare r record;
 begin
   for r in select * from (values
-    ('public', 'sessions'),
-    ('public', 'session_logs'),
-    ('public', 'document_collections')
+    ('public', 'document_collections')  -- §D Ledger Normalize LN-3a: sessions/session_logs retired
   ) as x(sch, tbl)
   loop
     execute format('alter table %I.%I enable row level security', r.sch, r.tbl);

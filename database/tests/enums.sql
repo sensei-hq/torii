@@ -40,8 +40,7 @@ declare
   cols text[][] := array[
     ['metering','inference_calls','execution_location'],  -- §D Phase 6: moved public→metering
     ['public','messages','execution_location'],
-    ['public','gateway_tasks','execution_location'],
-    ['metering','usage_daily','execution_location'],
+    ['metering','usage_daily','execution_location'],   -- §D LN-3a: gateway_tasks retired
     ['catalog','chain_models','plane']];   -- fallback_chain_models moved+renamed → catalog.chain_models (§D)
   i int;
   s text; t text; c text; udt text;
@@ -405,10 +404,10 @@ begin
   if vals is distinct from 'explicit,implicit,system' then
     raise exception 'FAIL: metering.signal_class = %, expected explicit,implicit,system', coalesce(vals,'<none>'); end if;
   select udt_name into udt from information_schema.columns
-   where table_schema='public' and table_name='quality_signals' and column_name='signal_class';
+   where table_schema='metering' and table_name='quality_signals' and column_name='signal_class';  -- §D Ledger Normalize: moved public→metering
   if udt is distinct from 'signal_class' then
     raise exception 'FAIL: quality_signals.signal_class udt=% (expected signal_class enum)', coalesce(udt,'<none>'); end if;
-  if exists (select 1 from pg_constraint where conrelid='public.quality_signals'::regclass and contype='c'
+  if exists (select 1 from pg_constraint where conrelid='metering.quality_signals'::regclass and contype='c'
               and pg_get_constraintdef(oid) ilike '%signal_class%in%') then
     raise exception 'FAIL: quality_signals still has a signal_class CHECK'; end if;
   raise notice 'S1 metering.signal_class enum + column, no leftover CHECK ✓';

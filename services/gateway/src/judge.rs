@@ -237,10 +237,10 @@ pub async fn judge_response(
                 "raw": run.raw.chars().take(120).collect::<String>(),
             });
             let _ = sqlx::query(
-                "insert into public.quality_signals \
-                   (tenant_id, id, inference_call_id, signal_key, signal_class, \
+                "insert into metering.quality_signals \
+                   (tenant_id, id, subject_type, inference_call_id, signal_key, signal_class, \
                     value_num, value_json, unit, source, actor_id, schema_version) \
-                 values ($1, gen_random_uuid(), $2, 'judge_score', 'implicit', \
+                 values ($1, gen_random_uuid(), 'call', $2, 'judge_score', 'implicit', \
                          $3::numeric, $4::jsonb, 'score', 'judge', $5, 1)",
             )
             .bind(tenant)

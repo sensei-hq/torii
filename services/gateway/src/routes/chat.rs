@@ -590,10 +590,10 @@ pub async fn post_chat(
                 "classification": "internal",
             });
             let _ = sqlx::query(
-                "insert into public.quality_signals \
-                   (tenant_id, id, inference_call_id, signal_key, signal_class, \
+                "insert into metering.quality_signals \
+                   (tenant_id, id, subject_type, inference_call_id, signal_key, signal_class, \
                     value_json, source, actor_id, schema_version) \
-                 values ($1, gen_random_uuid(), $2, 'governance', 'implicit', \
+                 values ($1, gen_random_uuid(), 'call', $2, 'governance', 'implicit', \
                          $3::jsonb, 'gateway', $4, 1)",
             )
             .bind(tenant)

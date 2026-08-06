@@ -1,5 +1,5 @@
 -- database/ddl/table/metering/inference_calls.ddl
-set search_path to metering, public, core, extensions;  -- §D Phase 6: moved public→metering (public kept for the sessions FK)
+set search_path to metering, core, extensions;  -- §D Phase 6 (moved public→metering); LN-3a dropped the sessions FK
 
 create table if not exists inference_calls (
   tenant_id          uuid         not null
@@ -29,9 +29,8 @@ create table if not exists inference_calls (
 , execution_location core.execution_location                       -- {local,cloud} enum (nullable)
 , hold_id            uuid
 , primary key (tenant_id, id)
-, constraint inference_calls_session_fkey
-    foreign key (tenant_id, session_id)
-    references sessions(tenant_id, id) on delete set null             -- NULL-safe composite FK
+  -- §D Ledger Normalize LN-3a: sessions retired → the composite FK is gone. session_id/project_id
+  -- remain vestigial (bare uuids) until the LN-3b reshape drops them (→ conversation_id).
 );
 
 create index if not exists idx_inference_calls_recorded

@@ -894,4 +894,47 @@ begin
   raise notice 'M-ln-2b routing_attempts + populate trigger + RLS SELECT-only ✓';
 end $$;
 
+-- M-ln-2c — quality_signals reshaped + moved public→metering: typed subject_type + exactly-one-per-type
+-- CHECK (event-aware), old polymorphic CHECK gone; the fanout trigger now sits on metering.quality_signals.
+do $$
+begin
+  if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                  where n.nspname='metering' and c.relname='quality_signals' and c.relkind='r') then
+    raise exception 'FAIL: metering.quality_signals table missing'; end if;
+  if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+              where n.nspname='public' and c.relname='quality_signals') then
+    raise exception 'FAIL: public.quality_signals still exists (move incomplete)'; end if;
+  if (select udt_name from information_schema.columns where table_schema='metering' and table_name='quality_signals' and column_name='subject_type')
+     is distinct from 'signal_subject' then raise exception 'FAIL: quality_signals.subject_type is not the signal_subject enum'; end if;
+  if (select is_nullable from information_schema.columns where table_schema='metering' and table_name='quality_signals' and column_name='subject_type')
+     is distinct from 'NO' then raise exception 'FAIL: quality_signals.subject_type nullable'; end if;
+  if not exists (select 1 from pg_constraint where conrelid='metering.quality_signals'::regclass and contype='c' and conname='quality_signals_subject_one') then
+    raise exception 'FAIL: quality_signals exactly-one-subject CHECK missing'; end if;
+  if exists (select 1 from pg_constraint where conrelid='metering.quality_signals'::regclass and conname='quality_signals_target') then
+    raise exception 'FAIL: old polymorphic quality_signals_target CHECK lingers'; end if;
+  if not exists (select 1 from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace
+                  where t.tgname='quality_signals_analytics_ai' and n.nspname='metering' and c.relname='quality_signals' and not t.tgisinternal) then
+    raise exception 'FAIL: quality_signals_analytics_ai trigger not on metering.quality_signals'; end if;
+  raise notice 'M-ln-2c quality_signals → metering + typed subject_type + exactly-one CHECK + trigger ✓';
+end $$;
+
+\echo '== §D Ledger Normalize: legacy retirement (LN-3a) =='
+
+-- M-ln-3a — sessions/session_logs/gateway_tasks/gateway_task_logs RETIRED (dropped). The
+-- inference_calls→sessions FK is necessarily gone (you can't drop sessions while an inbound FK exists);
+-- session_id/project_id remain vestigial on inference_calls until the LN-3b reshape drops them.
+do $$
+declare t text;
+begin
+  foreach t in array array['sessions','session_logs','gateway_tasks','gateway_task_logs'] loop
+    if exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+                where n.nspname='public' and c.relname=t) then
+      raise exception 'FAIL: public.% still exists (legacy retire incomplete)', t; end if;
+  end loop;
+  if exists (select 1 from pg_constraint where conrelid='metering.inference_calls'::regclass
+              and contype='f' and conname='inference_calls_session_fkey') then
+    raise exception 'FAIL: inference_calls_session_fkey still present'; end if;
+  raise notice 'M-ln-3a legacy sessions/gateway_tasks retired, inference_calls→sessions FK dropped ✓';
+end $$;
+
 \echo '== §D moves tests done =='

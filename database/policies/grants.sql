@@ -58,9 +58,7 @@ begin
     ('public', 'document_assets'),       -- gateway-produced
     ('metering', 'inference_calls'),     -- §D Phase 6: service_role-only ledger (moved public→metering)
     ('metering', 'execution_traces'),    -- §D Phase 6: service_role-only ledger
-    ('metering', 'routing_attempts'),    -- §D Ledger Normalize: normalized trace (trigger-written)
-    ('public', 'gateway_tasks'),
-    ('public', 'gateway_task_logs')
+    ('metering', 'routing_attempts')     -- §D Ledger Normalize: normalized trace (trigger-written)
   ) as x(sch, tbl)
   loop
     execute format('grant select on %I.%I to authenticated', r.sch, r.tbl);
@@ -74,9 +72,7 @@ declare r record;
 begin
   for r in select * from (values
     ('public', 'documents'),             -- own drafts (classification change is service_role, knowledge.sql)
-    ('public', 'document_collections'),  -- own/space collections
-    ('public', 'sessions'),
-    ('public', 'session_logs')
+    ('public', 'document_collections')   -- own/space collections (§D LN-3a: sessions/session_logs retired)
   ) as x(sch, tbl)
   loop
     execute format('grant select, insert, update, delete on %I.%I to authenticated', r.sch, r.tbl);

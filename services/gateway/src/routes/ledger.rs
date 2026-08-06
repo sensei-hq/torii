@@ -125,7 +125,7 @@ pub async fn get_requests(
            select id, chain_id, adapter, model, budget_node_id, execution_location, \
                   input_tokens, output_tokens, cost_usd::float8 as cost_usd, \
                   duration_ms, status, fallback_sequence, recorded_at \
-             from metering.inference_calls where tenant_id = $1 \
+             from metering.requests_ledger_for_tenant where tenant_id = $1 \
             order by recorded_at desc limit $2) t",
     )
     .bind(tenant)

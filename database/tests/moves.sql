@@ -992,4 +992,54 @@ begin
   raise notice 'M-ln-3c2b P12 reversal: denorm cols dropped, org_unit_id + ancestor fn + shield alias + machinery intact ✓';
 end $$;
 
+-- M-ln-3b1 — FK-normalize (ADDITIVE): inference_calls gains endpoint_id/model_id/router_id → catalog
+-- (ON DELETE SET NULL, fail-soft), resolved at write via the is_default desc / priority asc lateral.
+-- adapter/model/chain_id free-text are KEPT (dual-write snapshot; the drop is LN-3b-2). Also proves the
+-- resolution lateral lands a real seeded endpoint and MISSES (null) on a bogus api_model_id.
+do $$
+declare
+  missing  text;
+  bad_del  text;
+  resolved uuid;
+  miss     uuid;
+begin
+  -- (a) the 3 FK cols exist
+  select string_agg(col,', ') into missing from unnest(array['endpoint_id','model_id','router_id']) as col
+   where not exists (select 1 from information_schema.columns
+                      where table_schema='metering' and table_name='inference_calls' and column_name=col);
+  if missing is not null then raise exception 'FAIL: inference_calls missing LN-3b FK cols: %', missing; end if;
+
+  -- (b) all 3 FKs target the catalog and are ON DELETE SET NULL (confdeltype 'n') — never cascade-delete
+  -- billing history when a catalog endpoint/model/router is retired.
+  select string_agg(conname,', ') into bad_del from pg_constraint c
+    join pg_class t on t.oid=c.conrelid join pg_namespace n on n.oid=t.relnamespace
+   where n.nspname='metering' and t.relname='inference_calls' and c.contype='f'
+     and conname in ('inference_calls_endpoint_id_fkey','inference_calls_model_id_fkey','inference_calls_router_id_fkey')
+     and c.confdeltype <> 'n';
+  if bad_del is not null then raise exception 'FAIL: LN-3b FK not ON DELETE SET NULL: %', bad_del; end if;
+  if (select count(*) from pg_constraint c join pg_class t on t.oid=c.conrelid join pg_namespace n on n.oid=t.relnamespace
+       where n.nspname='metering' and t.relname='inference_calls' and c.contype='f'
+         and conname in ('inference_calls_endpoint_id_fkey','inference_calls_model_id_fkey','inference_calls_router_id_fkey')) <> 3 then
+    raise exception 'FAIL: LN-3b expects exactly 3 catalog FKs on inference_calls'; end if;
+
+  -- (c) free-text snapshot KEPT (LN-3b-1 is additive dual-write; dropping adapter/model/chain_id is LN-3b-2)
+  if not exists (select 1 from information_schema.columns where table_schema='metering' and table_name='inference_calls' and column_name='adapter')
+     or not exists (select 1 from information_schema.columns where table_schema='metering' and table_name='inference_calls' and column_name='model') then
+    raise exception 'FAIL: LN-3b-1 must KEEP adapter/model free-text (dual-write snapshot)'; end if;
+
+  -- (d) resolution lateral (the store.rs write-resolution): a real seeded pair resolves; a bogus one misses.
+  select ep.id into resolved from (select 1) o left join lateral (
+    select me.id from catalog.model_endpoints me join catalog.routers r on r.id=me.router_id
+     where r.name='anthropic' and me.router_model_id='claude-3-5-sonnet-20241022' and me.is_active
+     order by me.is_default desc, me.priority asc limit 1) ep on true;
+  if resolved is null then raise exception 'FAIL: LN-3b resolution found no seeded anthropic endpoint (catalog api_model_id mapping absent)'; end if;
+  select ep.id into miss from (select 1) o left join lateral (
+    select me.id from catalog.model_endpoints me join catalog.routers r on r.id=me.router_id
+     where r.name='anthropic' and me.router_model_id='no-such-api-model-zzz' and me.is_active
+     order by me.is_default desc, me.priority asc limit 1) ep on true;
+  if miss is not null then raise exception 'FAIL: LN-3b resolution must MISS (null) on a bogus api_model_id'; end if;
+
+  raise notice 'M-ln-3b1 FK-normalize additive: endpoint/model/router_id + 3 catalog FKs (on delete set null) + resolution lateral hit/miss + free-text kept ✓';
+end $$;
+
 \echo '== §D moves tests done =='

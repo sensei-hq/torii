@@ -86,24 +86,41 @@ impl GatewayStore for PgGatewayStore {
         };
 
         // Budget attribution (§D LN-3c-2b): `subject_id` ($18) is the resolved cap-bearing unit →
-        // `org_unit_id` directly. The old budget_node_id + the 4 GH-5 `*_node_id` denorm columns were
-        // dropped (analytics spend-by-tier now walks the org tree via core.org_unit_ancestor_at_level),
-        // so the write is a plain INSERT — no recursive CTE. session_id/project_id stay vestigial (retire
-        // with the crate change in LN-4 → conversation_id).
+        // `org_unit_id` directly. session_id/project_id stay vestigial (retire with the crate change in
+        // LN-4 → conversation_id).
+        //
+        // §D LN-3b: FK-normalize the routing identity at write. The `ep` LATERAL resolves the winning
+        // catalog endpoint from (adapter=$7 → routers.name, api_model_id=$9 → model_endpoints.router_model_id)
+        // using the is_default desc / priority asc tiebreak — the SAME lateral config_loader uses to *derive*
+        // api_model_id, so a recorded api_model_id resolves back to the identical endpoint by construction.
+        // LEFT JOIN LATERAL over a 1-row source ⇒ a no-match still inserts the call with NULL endpoint/model/
+        // router_id (fail-soft — a resolution miss NEVER blocks a call). adapter/model/chain_id free-text are
+        // still written (point-in-time snapshot); LN-3b-2 will swap reads to the FKs.
         sqlx::query(
             r#"
             INSERT INTO metering.inference_calls
                 (tenant_id, id, session_id, project_id, capability, chain_id,
                  adapter, model, api_model_id,
+                 endpoint_id, model_id, router_id,
                  input_tokens, output_tokens, cost_usd, duration_ms,
                  status, error_type, fallback_sequence, recorded_at,
                  org_unit_id, execution_location)
-            VALUES
-                ($1, $2, $3, $4, $5, $6,
-                 $7, $8, $9,
-                 $10, $11, $12, $13,
-                 $14::metering.call_status, $15, $16, $17,
-                 $18, $19::core.execution_location)
+            SELECT
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9,
+                ep.id, ep.model_id, ep.router_id,
+                $10, $11, $12, $13,
+                $14::metering.call_status, $15, $16, $17,
+                $18, $19::core.execution_location
+            FROM (SELECT 1) one
+            LEFT JOIN LATERAL (
+                SELECT me.id, me.model_id, me.router_id
+                FROM catalog.model_endpoints me
+                JOIN catalog.routers r ON r.id = me.router_id
+                WHERE r.name = $7 AND me.router_model_id = $9 AND me.is_active = true
+                ORDER BY me.is_default DESC, me.priority ASC
+                LIMIT 1
+            ) ep ON true
             "#,
         )
         .bind(self.tenant_id)
@@ -338,4 +355,118 @@ fn row_to_stored_trace(row: &sqlx::postgres::PgRow) -> Result<StoredTrace, Gatew
         trace,
         created_at: row.try_get("recorded_at").map_err(db_err)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use gateway::types::capability::Capability;
+    use sqlx::postgres::PgPoolOptions;
+
+    async fn pool() -> sqlx::PgPool {
+        let url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgresql://postgres:postgres@127.0.0.1:55322/postgres".into());
+        PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .expect("connect local Supabase (55322)")
+    }
+
+    fn call(adapter: &str, model: &str, api_model_id: Option<&str>) -> InferenceCall {
+        InferenceCall {
+            id: Uuid::new_v4(),
+            session_id: None,
+            project_id: None,
+            subject_id: None,
+            tier: None,
+            capability: Capability::TextChat,
+            chain_id: Some("chat".into()),
+            adapter: adapter.into(),
+            model: model.into(),
+            api_model_id: api_model_id.map(Into::into),
+            input_tokens: Some(10),
+            output_tokens: Some(20),
+            cost_usd: 0.01,
+            duration_ms: 100,
+            status: CallStatus::Success,
+            error_type: None,
+            fallback_sequence: 0,
+            recorded_at: Utc::now(),
+        }
+    }
+
+    /// §D LN-3b: `insert_inference_call` resolves (adapter, api_model_id) → the winning catalog
+    /// endpoint/model/router FK ids at write (the is_default desc / priority asc lateral), and fails
+    /// SOFT — NULL FKs but the call is STILL stored — when the pair matches no active endpoint or the
+    /// api_model_id is NULL. A resolution miss must never block a call (billing integrity: record what ran).
+    #[tokio::test]
+    #[ignore = "requires local Supabase (55322)"]
+    async fn insert_resolves_catalog_fks_and_fails_soft_on_miss() {
+        let pool = pool().await;
+        let t = Uuid::new_v4();
+        sqlx::query("insert into core.tenants (id,name,slug,modified_by) values ($1,'ln3b',$2,'test')")
+            .bind(t)
+            .bind(format!("ln3b-{t}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let store = PgGatewayStore { pool: pool.clone(), tenant_id: t };
+
+        // The resolution target: the winning seeded anthropic endpoint (+ its model/router).
+        let (exp_ep, exp_model, exp_router): (Uuid, Uuid, Uuid) = sqlx::query_as(
+            "select me.id, me.model_id, me.router_id from catalog.model_endpoints me \
+             join catalog.routers r on r.id=me.router_id \
+             where r.name='anthropic' and me.router_model_id='claude-3-5-sonnet-20241022' and me.is_active \
+             order by me.is_default desc, me.priority asc limit 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("a seeded anthropic endpoint");
+
+        // (1) resolvable → FK ids populated to that endpoint.
+        let hit = call("anthropic", "claude", Some("claude-3-5-sonnet-20241022"));
+        store.insert_inference_call(&hit).await.expect("insert hit");
+        let (ep, m, r): (Option<Uuid>, Option<Uuid>, Option<Uuid>) = sqlx::query_as(
+            "select endpoint_id, model_id, router_id from metering.inference_calls where tenant_id=$1 and id=$2",
+        )
+        .bind(t)
+        .bind(hit.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(ep, Some(exp_ep), "endpoint_id resolves to the winning seeded endpoint");
+        assert_eq!(m, Some(exp_model), "model_id resolves from that endpoint");
+        assert_eq!(r, Some(exp_router), "router_id resolves from that endpoint");
+
+        // (2) unresolvable api_model_id → FK ids NULL, but the call IS still stored.
+        let miss = call("anthropic", "claude", Some("no-such-api-model-zzz"));
+        store.insert_inference_call(&miss).await.expect("insert miss must not block");
+        let (present, ep2, m2, r2): (bool, Option<Uuid>, Option<Uuid>, Option<Uuid>) = sqlx::query_as(
+            "select true, endpoint_id, model_id, router_id from metering.inference_calls where tenant_id=$1 and id=$2",
+        )
+        .bind(t)
+        .bind(miss.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(present, "the unresolved call is still recorded (fail-soft)");
+        assert_eq!((ep2, m2, r2), (None, None, None), "a resolution miss leaves the FK cols NULL");
+
+        // (3) NULL api_model_id → also fail-soft NULL (the null-eq predicate matches nothing, no crash).
+        let null_amid = call("anthropic", "claude", None);
+        store.insert_inference_call(&null_amid).await.expect("insert null api_model_id");
+        let (ep3,): (Option<Uuid>,) = sqlx::query_as(
+            "select endpoint_id from metering.inference_calls where tenant_id=$1 and id=$2",
+        )
+        .bind(t)
+        .bind(null_amid.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(ep3, None, "NULL api_model_id resolves to NULL endpoint (fail-soft)");
+
+        sqlx::query("delete from core.tenants where id=$1").bind(t).execute(&pool).await.unwrap();
+    }
 }

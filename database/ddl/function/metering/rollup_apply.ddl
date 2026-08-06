@@ -53,10 +53,10 @@ begin
       v_unpriced := 1;                                -- excluded from savings, counted
     else
       v_cloud_equiv := coalesce(v_ce, 0);
-      v_savings     := greatest(v_cloud_equiv - coalesce(v_call.cost_usd, 0), 0);
+      v_savings     := greatest(v_cloud_equiv - coalesce(v_call.cost_actual, 0), 0);
     end if;
   else
-    v_cloud_equiv := coalesce(v_call.cost_usd, 0);    -- cloud: counterfactual = actual
+    v_cloud_equiv := coalesce(v_call.cost_actual, 0);    -- cloud: counterfactual = actual
   end if;
 
   -- Idempotency: mark the call; USAGE increments only on the first application.
@@ -74,7 +74,7 @@ begin
       (v_call.tenant_id, v_day, v_call.org_unit_id, v_call.model, v_call.adapter,
        v_call.capability, coalesce(v_call.execution_location, 'cloud'),
        1, coalesce(v_call.input_tokens, 0), coalesce(v_call.output_tokens, 0),
-       coalesce(v_call.cost_usd, 0), v_cloud_equiv, v_savings,
+       coalesce(v_call.cost_actual, 0), v_cloud_equiv, v_savings,
        case when v_call.fallback_sequence > 0 then 1 else 0 end,
        coalesce(v_call.duration_ms, 0), 1, v_local_only, v_unpriced)
     on conflict (tenant_id, day, org_unit_id, served_model, provider, capability, execution_location)
@@ -82,7 +82,7 @@ begin
        calls                  = usage_daily.calls + 1,
        input_tokens           = usage_daily.input_tokens  + coalesce(v_call.input_tokens, 0),
        output_tokens          = usage_daily.output_tokens + coalesce(v_call.output_tokens, 0),
-       cost_usd               = usage_daily.cost_usd        + coalesce(v_call.cost_usd, 0),
+       cost_usd               = usage_daily.cost_usd        + coalesce(v_call.cost_actual, 0),
        cloud_equiv_usd        = usage_daily.cloud_equiv_usd + v_cloud_equiv,
        savings_usd            = usage_daily.savings_usd     + v_savings,
        fallback_calls         = usage_daily.fallback_calls  + case when v_call.fallback_sequence > 0 then 1 else 0 end,

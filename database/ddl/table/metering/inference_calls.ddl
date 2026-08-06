@@ -5,8 +5,7 @@ create table if not exists inference_calls (
   tenant_id          uuid         not null
     references core.tenants(id) on delete cascade
 , id                 uuid         not null default gen_random_uuid()
-, session_id         uuid                                              -- nullable; FK below
-, project_id         uuid                                              -- nullable; no FK yet (projects table TBD)
+, conversation_id    uuid                                              -- §D LN-4b: nullable link to content.conversations (no FK; writer lands in P7). Replaces the vestigial session_id/project_id (dropped).
 , capability         text         not null                             -- Capability enum (snake_case: text_chat, text_complete, …)
 , chain_id           text                                              -- nullable
 , adapter            text         not null                             -- e.g. anthropic, openai
@@ -24,7 +23,7 @@ create table if not exists inference_calls (
 , router_id          uuid                                              -- catalog.routers (== adapter)
 , input_tokens       integer                                           -- nullable; Option<u32>
 , output_tokens      integer                                           -- nullable; Option<u32>
-, cost_usd           numeric(12,6) not null default 0                 -- f64 mapped to numeric for precision (LN-4b → cost_actual)
+, cost_actual        numeric(14,6) not null default 0                 -- §D LN-4b: actual USD cost (was cost_usd). Crate field stays InferenceCall.cost_usd → store.rs writes it here; shield aliases cost_actual AS cost_usd (RequestRow byte-identical).
 , cost_estimated     numeric(14,6)                                     -- §D LN-4: gateway pre-call cost estimate (USD); nullable — some paths (C6 judge) produce none
 , duration_ms        bigint       not null                             -- u64; bigint avoids overflow for long calls
 , status             metering.call_status not null                     -- CallStatus {success,failed}
@@ -38,8 +37,8 @@ create table if not exists inference_calls (
 , execution_location core.execution_location                       -- {local,cloud} enum (nullable)
 , hold_id            uuid
 , primary key (tenant_id, id)
-  -- §D Ledger Normalize LN-3a: sessions retired → the composite FK is gone. session_id/project_id
-  -- remain vestigial (bare uuids) until the LN-3b reshape drops them (→ conversation_id).
+  -- §D Ledger Normalize LN-3a→LN-4b: sessions retired; the vestigial session_id/project_id were DROPPED
+  -- (LN-4b) and replaced by the nullable conversation_id declared above (content.conversations writer = P7).
 , foreign key (tenant_id, org_unit_id)
     references core.org_units(tenant_id, id) on delete set null   -- never cascade-delete billing history
   -- §D LN-3b: FK-normalized routing identity → catalog (global, not tenant-scoped). ON DELETE SET NULL so
@@ -67,19 +66,16 @@ create index if not exists idx_inference_calls_org_unit
   on inference_calls(tenant_id, org_unit_id)
   where org_unit_id is not null;
 
-create index if not exists idx_inference_calls_session
-  on inference_calls(tenant_id, session_id)
-  where session_id is not null;
-
 comment on table inference_calls is
 'Append-only ledger of every model inference routed through the gateway.
 - Matches GatewayStore::InferenceCall exactly (gateway crate, store.rs).
 - tenant_id + id form the composite PK; tenant_id is the partition key.
 - capability stores the Capability enum variant in snake_case (text_chat, image_generate, …).
 - status stores CallStatus: ''success'' | ''failed'' (snake_case serde).
-- cost_usd is numeric(12,6) — f64 is converted on INSERT by the gateway store impl.
+- cost_actual is numeric(14,6) — the actual USD cost (crate InferenceCall.cost_usd), converted on INSERT.
+- cost_estimated is numeric(14,6) nullable — the gateway pre-call estimate (LN-4).
 - duration_ms is bigint (Rust u64) to handle pathological long calls without overflow.
 - fallback_sequence (u8) indicates which position in the fallback chain succeeded.
-- session_id composite FK is NULL-safe; project_id has no FK until a projects table lands.
+- conversation_id is a nullable link to content.conversations (LN-4b; writer = P7).
 - RW7 columns (budget attribution + execution_location + hold_id) are declared inline above.
 - Written by service_role (bypasses RLS); clients SELECT via RLS (tenant_isolation.sql).';

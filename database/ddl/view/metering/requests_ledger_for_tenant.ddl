@@ -20,7 +20,7 @@ select
 , execution_location
 , input_tokens
 , output_tokens
-, cost_usd
+, cost_actual as cost_usd          -- §D LN-4b: ledger col renamed cost_usd→cost_actual; contract keeps cost_usd
 , duration_ms
 , status
 , fallback_sequence

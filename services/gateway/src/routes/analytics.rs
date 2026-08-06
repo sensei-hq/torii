@@ -147,10 +147,10 @@ fn read_err(what: &str, e: sqlx::Error) -> Response {
 const SAVINGS_EXPR: &str = "case \
      when coalesce(ic.execution_location,'cloud') = 'cloud' then 0 \
      when ce.is_local_only or ce.is_unpriced then 0 \
-     else greatest(coalesce(ce.cloud_equiv_usd,0) - coalesce(ic.cost_usd,0), 0) end";
+     else greatest(coalesce(ce.cloud_equiv_usd,0) - coalesce(ic.cost_actual,0), 0) end";
 
 const CLOUD_EQUIV_EXPR: &str = "case \
-     when coalesce(ic.execution_location,'cloud') = 'cloud' then coalesce(ic.cost_usd,0) \
+     when coalesce(ic.execution_location,'cloud') = 'cloud' then coalesce(ic.cost_actual,0) \
      when ce.is_local_only or ce.is_unpriced then 0 \
      else coalesce(ce.cloud_equiv_usd,0) end";
 
@@ -326,7 +326,7 @@ fn plane_split_sql() -> String {
     format!(
         "with pc as ( \
            select coalesce(ic.execution_location,'cloud') as plane, ic.recorded_at::date as day, \
-                  coalesce(ic.cost_usd,0) as cost_usd, {ce} as cloud_equiv, {sav} as savings \
+                  coalesce(ic.cost_actual,0) as cost_usd, {ce} as cloud_equiv, {sav} as savings \
              from metering.inference_calls ic {lat} \
             where ic.tenant_id = $1 \
               and ic.recorded_at >= now() - make_interval(days => $2) \
@@ -396,7 +396,7 @@ fn spend_sql(group: SpendGroup) -> String {
     };
     let per_call = format!(
         "with pc as ( \
-           select {grp} as grp, coalesce(ic.cost_usd,0) as cost_usd, {sav} as savings \
+           select {grp} as grp, coalesce(ic.cost_actual,0) as cost_usd, {sav} as savings \
              from metering.inference_calls ic {lat} \
             where ic.tenant_id = $1 \
               and ic.recorded_at >= now() - make_interval(days => $2) \
@@ -531,7 +531,7 @@ pub async fn get_export(
             // spend-by-node + plane both come off the ledger (denormalized cols, no recursion).
             "select json_build_object('rows', coalesce(json_agg(t), '[]'::json)) from ( \
                select coalesce(ic.execution_location,'cloud') as plane, \
-                      count(*) as calls, sum(coalesce(ic.cost_usd,0))::float8 as cost_usd \
+                      count(*) as calls, sum(coalesce(ic.cost_actual,0))::float8 as cost_usd \
                  from metering.inference_calls ic \
                 where ic.tenant_id = $1 and ic.recorded_at >= now() - make_interval(days => $2) \
                   and ($3::uuid[] is null or ic.org_unit_id = any($3)) \
@@ -768,7 +768,7 @@ mod gate {
         ] {
             sqlx::query(
                 "insert into metering.inference_calls \
-                   (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence, \
+                   (tenant_id,id,capability,adapter,model,cost_actual,duration_ms,status,fallback_sequence, \
                     recorded_at,input_tokens,output_tokens,execution_location,chain_id,org_unit_id) \
                  values ($1,$2,'text_chat','anthropic','m',$3,100,'success',0,now(),512,128,$4::core.execution_location,'gate-chain',$5)")
                 .bind(t).bind(id).bind(cost).bind(plane).bind(team)
@@ -821,7 +821,7 @@ mod gate {
                      values ($1,$2,$3,3,'Gate Person',true,'test')")
             .bind(t).bind(personal).bind(team).execute(&pool).await.unwrap();
         sqlx::query("insert into metering.inference_calls \
-                       (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence, \
+                       (tenant_id,id,capability,adapter,model,cost_actual,duration_ms,status,fallback_sequence, \
                         recorded_at,input_tokens,output_tokens,execution_location,chain_id,org_unit_id) \
                      values ($1,$2,'text_chat','anthropic','m',0.03,100,'success',0,now(),10,5,'cloud'::core.execution_location,'gate-chain',$3)")
             .bind(t).bind(Uuid::new_v4()).bind(personal).execute(&pool).await.unwrap();

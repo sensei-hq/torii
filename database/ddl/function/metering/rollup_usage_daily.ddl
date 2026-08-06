@@ -32,7 +32,7 @@ begin
          count(*),
          coalesce(sum(ic.input_tokens), 0),
          coalesce(sum(ic.output_tokens), 0),
-         coalesce(sum(ic.cost_usd), 0),
+         coalesce(sum(ic.cost_actual), 0),
          count(*) filter (where ic.fallback_sequence > 0),
          coalesce(sum(ic.duration_ms), 0),
          count(*)

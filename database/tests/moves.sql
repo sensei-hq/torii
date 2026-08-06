@@ -921,8 +921,8 @@ end $$;
 \echo '== §D Ledger Normalize: legacy retirement (LN-3a) =='
 
 -- M-ln-3a — sessions/session_logs/gateway_tasks/gateway_task_logs RETIRED (dropped). The
--- inference_calls→sessions FK is necessarily gone (you can't drop sessions while an inbound FK exists);
--- session_id/project_id remain vestigial on inference_calls until the LN-3b reshape drops them.
+-- inference_calls→sessions FK is necessarily gone (you can't drop sessions while an inbound FK exists).
+-- (The vestigial session_id/project_id cols were later DROPPED in LN-4b — see M-ln-4b.)
 do $$
 declare t text;
 begin
@@ -1057,6 +1057,33 @@ begin
                   where table_schema='metering' and table_name='requests_ledger_for_tenant' and column_name='cost_estimated') then
     raise exception 'FAIL: requests_ledger_for_tenant does not expose cost_estimated'; end if;
   raise notice 'M-ln-4a cost_estimated on inference_calls (nullable) + requests_ledger shield ✓';
+end $$;
+
+-- M-ln-4b — the cost rename + linkage cleanup: inference_calls.cost_usd RENAMED → cost_actual (pairs with
+-- cost_estimated); vestigial session_id/project_id DROPPED; nullable conversation_id ADDED (no FK; P7
+-- writer). The requests_ledger shield still exposes cost_usd (aliased from cost_actual) → RequestRow
+-- byte-identical. The rollup fns read cost_actual (verified by analytics.sql over the reshaped ledger).
+do $$
+declare gone text;
+begin
+  if exists (select 1 from information_schema.columns
+              where table_schema='metering' and table_name='inference_calls' and column_name='cost_usd') then
+    raise exception 'FAIL: inference_calls.cost_usd not renamed (LN-4b expects cost_actual)'; end if;
+  if not exists (select 1 from information_schema.columns
+                  where table_schema='metering' and table_name='inference_calls' and column_name='cost_actual') then
+    raise exception 'FAIL: inference_calls.cost_actual missing'; end if;
+  select string_agg(col,', ') into gone from unnest(array['session_id','project_id']) as col
+   where exists (select 1 from information_schema.columns
+                  where table_schema='metering' and table_name='inference_calls' and column_name=col);
+  if gone is not null then raise exception 'FAIL: LN-4b did not drop vestigial cols: %', gone; end if;
+  if not exists (select 1 from information_schema.columns
+                  where table_schema='metering' and table_name='inference_calls' and column_name='conversation_id') then
+    raise exception 'FAIL: inference_calls.conversation_id missing'; end if;
+  -- shield still exposes cost_usd (the RequestRow contract name), sourced from cost_actual.
+  if not exists (select 1 from information_schema.columns
+                  where table_schema='metering' and table_name='requests_ledger_for_tenant' and column_name='cost_usd') then
+    raise exception 'FAIL: requests_ledger lost cost_usd (RequestRow contract broke)'; end if;
+  raise notice 'M-ln-4b cost_usd→cost_actual + session_id/project_id dropped + conversation_id added + shield contract intact ✓';
 end $$;
 
 \echo '== §D moves tests done =='

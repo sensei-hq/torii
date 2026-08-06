@@ -36,23 +36,10 @@ fn capability_to_str(cap: &Capability) -> Result<String, GatewayError> {
     Ok(v.as_str().unwrap_or("unknown").to_owned())
 }
 
-/// Deserialize a `Capability` from its serde snake_case string.
-fn str_to_capability(s: &str) -> Result<Capability, GatewayError> {
-    serde_json::from_value(serde_json::Value::String(s.to_owned()))
-        .map_err(GatewayError::Serialization)
-}
-
 fn status_str(s: &CallStatus) -> &'static str {
     match s {
         CallStatus::Success => "success",
         CallStatus::Failed => "failed",
-    }
-}
-
-fn str_to_status(s: &str) -> CallStatus {
-    match s {
-        "failed" => CallStatus::Failed,
-        _ => CallStatus::Success,
     }
 }
 
@@ -85,39 +72,41 @@ impl GatewayStore for PgGatewayStore {
             "cloud"
         };
 
-        // Budget attribution (§D LN-3c-2b): `subject_id` ($18) is the resolved cap-bearing unit →
-        // `org_unit_id` directly. session_id/project_id stay vestigial (retire with the crate change in
-        // LN-4 → conversation_id).
+        // Budget attribution (§D LN-3c-2b): `subject_id` ($16) is the resolved cap-bearing unit →
+        // `org_unit_id` directly. §D LN-4b dropped the vestigial session_id/project_id (→ conversation_id,
+        // nullable, not written until the content.conversations writer lands in P7). cost_actual ($10) is
+        // the crate's InferenceCall.cost_usd (renamed cost_usd→cost_actual on the ledger); cost_estimated
+        // ($18) is the gateway pre-call estimate.
         //
         // §D LN-3b: FK-normalize the routing identity at write. The `ep` LATERAL resolves the winning
-        // catalog endpoint from (adapter=$7 → routers.name, api_model_id=$9 → model_endpoints.router_model_id)
+        // catalog endpoint from (adapter=$5 → routers.name, api_model_id=$7 → model_endpoints.router_model_id)
         // using the is_default desc / priority asc tiebreak — the SAME lateral config_loader uses to *derive*
         // api_model_id, so a recorded api_model_id resolves back to the identical endpoint by construction.
         // LEFT JOIN LATERAL over a 1-row source ⇒ a no-match still inserts the call with NULL endpoint/model/
         // router_id (fail-soft — a resolution miss NEVER blocks a call). adapter/model/chain_id free-text are
-        // still written (point-in-time snapshot); LN-3b-2 will swap reads to the FKs.
+        // KEPT as the point-in-time snapshot (LN-3b keep-snapshot decision).
         sqlx::query(
             r#"
             INSERT INTO metering.inference_calls
-                (tenant_id, id, session_id, project_id, capability, chain_id,
+                (tenant_id, id, capability, chain_id,
                  adapter, model, api_model_id,
                  endpoint_id, model_id, router_id,
-                 input_tokens, output_tokens, cost_usd, duration_ms,
+                 input_tokens, output_tokens, cost_actual, duration_ms,
                  status, error_type, fallback_sequence, recorded_at,
                  org_unit_id, execution_location, cost_estimated)
             SELECT
-                $1, $2, $3, $4, $5, $6,
-                $7, $8, $9,
+                $1, $2, $3, $4,
+                $5, $6, $7,
                 ep.id, ep.model_id, ep.router_id,
-                $10, $11, $12, $13,
-                $14::metering.call_status, $15, $16, $17,
-                $18, $19::core.execution_location, $20
+                $8, $9, $10, $11,
+                $12::metering.call_status, $13, $14, $15,
+                $16, $17::core.execution_location, $18
             FROM (SELECT 1) one
             LEFT JOIN LATERAL (
                 SELECT me.id, me.model_id, me.router_id
                 FROM catalog.model_endpoints me
                 JOIN catalog.routers r ON r.id = me.router_id
-                WHERE r.name = $7 AND me.router_model_id = $9 AND me.is_active = true
+                WHERE r.name = $5 AND me.router_model_id = $7 AND me.is_active = true
                 ORDER BY me.is_default DESC, me.priority ASC
                 LIMIT 1
             ) ep ON true
@@ -125,8 +114,6 @@ impl GatewayStore for PgGatewayStore {
         )
         .bind(self.tenant_id)
         .bind(call.id)
-        .bind(call.session_id)
-        .bind(call.project_id)
         .bind(&capability)
         .bind(&call.chain_id)
         .bind(&call.adapter)
@@ -152,28 +139,12 @@ impl GatewayStore for PgGatewayStore {
 
     async fn get_inference_calls_by_session(
         &self,
-        session_id: Uuid,
+        _session_id: Uuid,
     ) -> Result<Vec<InferenceCall>, GatewayError> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id, session_id, project_id, capability, chain_id,
-                   adapter, model, api_model_id,
-                   input_tokens, output_tokens,
-                   cost_usd::float8 AS cost_usd,
-                   duration_ms, status::text AS status, error_type,
-                   fallback_sequence, recorded_at
-            FROM metering.inference_calls
-            WHERE tenant_id = $1 AND session_id = $2
-            ORDER BY recorded_at ASC
-            "#,
-        )
-        .bind(self.tenant_id)
-        .bind(session_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(db_err)?;
-
-        rows.iter().map(row_to_inference_call).collect()
+        // §D LN-3a/LN-4b: sessions retired and inference_calls.session_id dropped. Torii never calls this
+        // (crate-trait method exercised only in the crate's own tests); the session concept moves to
+        // content.conversations (P7). Returns empty rather than query a column that no longer exists.
+        Ok(Vec::new())
     }
 
     // -----------------------------------------------------------------------
@@ -183,7 +154,7 @@ impl GatewayStore for PgGatewayStore {
     async fn get_spend_since(&self, since: DateTime<Utc>) -> Result<f64, GatewayError> {
         let row = sqlx::query(
             r#"
-            SELECT COALESCE(SUM(cost_usd), 0)::float8 AS total
+            SELECT COALESCE(SUM(cost_actual), 0)::float8 AS total
             FROM metering.inference_calls
             WHERE tenant_id = $1 AND recorded_at >= $2
             "#,
@@ -217,7 +188,7 @@ impl GatewayStore for PgGatewayStore {
     ) -> Result<Vec<(String, f64)>, GatewayError> {
         let rows = sqlx::query(
             r#"
-            SELECT model, COALESCE(SUM(cost_usd), 0)::float8 AS total
+            SELECT model, COALESCE(SUM(cost_actual), 0)::float8 AS total
             FROM metering.inference_calls
             WHERE tenant_id = $1 AND recorded_at >= $2
             GROUP BY model
@@ -311,41 +282,6 @@ impl GatewayStore for PgGatewayStore {
 // ---------------------------------------------------------------------------
 // Row mappers
 // ---------------------------------------------------------------------------
-
-fn row_to_inference_call(row: &sqlx::postgres::PgRow) -> Result<InferenceCall, GatewayError> {
-    let capability_str: String = row.try_get("capability").map_err(db_err)?;
-    let status_str_val: String = row.try_get("status").map_err(db_err)?;
-
-    let input_tokens: Option<i32> = row.try_get("input_tokens").map_err(db_err)?;
-    let output_tokens: Option<i32> = row.try_get("output_tokens").map_err(db_err)?;
-    let duration_ms: i64 = row.try_get("duration_ms").map_err(db_err)?;
-    let fallback_sequence: i16 = row.try_get("fallback_sequence").map_err(db_err)?;
-
-    Ok(InferenceCall {
-        id: row.try_get("id").map_err(db_err)?,
-        session_id: row.try_get("session_id").map_err(db_err)?,
-        project_id: row.try_get("project_id").map_err(db_err)?,
-        // MIG-2 (v0.4.6): budget/quota attribution columns land in F1-rework RW7;
-        // until then the row-reader yields None (no crate-side subject attribution).
-        subject_id: None,
-        tier: None,
-        capability: str_to_capability(&capability_str)?,
-        chain_id: row.try_get("chain_id").map_err(db_err)?,
-        adapter: row.try_get("adapter").map_err(db_err)?,
-        model: row.try_get("model").map_err(db_err)?,
-        api_model_id: row.try_get("api_model_id").map_err(db_err)?,
-        input_tokens: input_tokens.map(|v| v as u32),
-        output_tokens: output_tokens.map(|v| v as u32),
-        cost_usd: row.try_get("cost_usd").map_err(db_err)?,
-        // trace-detail read path (get_inference_calls_by_session) doesn't select cost_estimated.
-        cost_estimated: None,
-        duration_ms: duration_ms as u64,
-        status: str_to_status(&status_str_val),
-        error_type: row.try_get("error_type").map_err(db_err)?,
-        fallback_sequence: fallback_sequence as u8,
-        recorded_at: row.try_get("recorded_at").map_err(db_err)?,
-    })
-}
 
 fn row_to_stored_trace(row: &sqlx::postgres::PgRow) -> Result<StoredTrace, GatewayError> {
     let trace_json: serde_json::Value = row.try_get("trace").map_err(db_err)?;

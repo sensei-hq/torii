@@ -103,7 +103,7 @@ on conflict (tenant_id, id) do nothing;
 
 begin;
   insert into metering.inference_calls
-    (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence,
+    (tenant_id,id,capability,adapter,model,cost_actual,duration_ms,status,fallback_sequence,
      recorded_at,input_tokens,output_tokens,execution_location,org_unit_id) values
     ('00000000-0000-0000-0000-000000000000','a11a0000-0000-0000-0000-0000000000f1','text_chat','anthropic','claude',0.01,100,'success',0,'2026-07-24T10:00:00Z',100,50,'cloud','b0de0000-0000-0000-0000-000000000001'),
     ('00000000-0000-0000-0000-000000000000','a11a0000-0000-0000-0000-0000000000f2','text_chat','anthropic','claude',0.02,120,'success',1,'2026-07-24T11:00:00Z',200,80,'cloud','b0de0000-0000-0000-0000-000000000001'),
@@ -147,7 +147,7 @@ begin;
   -- (1) inference_calls AFTER INSERT → analytics_rollup_apply → usage bucket appears
   --     with no application code path; replay is idempotent (no double-count).
   insert into metering.inference_calls
-    (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence,
+    (tenant_id,id,capability,adapter,model,cost_actual,duration_ms,status,fallback_sequence,
      recorded_at,input_tokens,output_tokens,execution_location,org_unit_id) values
     ('00000000-0000-0000-0000-000000000000','a22a0000-0000-0000-0000-0000000000c1',
      'text_chat','anthropic','sonnet-4.6',0.0041,200,'success',0,
@@ -234,7 +234,7 @@ begin;
 
   -- four LOCAL calls (cost 0, in=512 out=128), one per chain, distinct budget nodes.
   insert into metering.inference_calls
-    (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence,
+    (tenant_id,id,capability,adapter,model,cost_actual,duration_ms,status,fallback_sequence,
      recorded_at,input_tokens,output_tokens,execution_location,chain_id,org_unit_id) values
     ('00000000-0000-0000-0000-000000000000','a33c0000-0000-0000-0000-000000000001','text_chat','ollama','local-x',0,90,'success',0,'2026-07-26T09:00:00Z',512,128,'local','sav-cloud',   'b0de0000-0000-0000-0000-0000000000a1'),
     ('00000000-0000-0000-0000-000000000000','a33c0000-0000-0000-0000-000000000002','text_chat','ollama','local-x',0,90,'success',0,'2026-07-26T09:00:00Z',512,128,'local','sav-local',   'b0de0000-0000-0000-0000-0000000000a2'),
@@ -303,7 +303,7 @@ begin;
 
   -- 3 cloud calls (one bucket; latencies 100/200/300) + 1 local call (savings bucket)
   insert into metering.inference_calls
-    (tenant_id,id,capability,adapter,model,cost_usd,duration_ms,status,fallback_sequence,
+    (tenant_id,id,capability,adapter,model,cost_actual,duration_ms,status,fallback_sequence,
      recorded_at,input_tokens,output_tokens,execution_location,chain_id,org_unit_id) values
     ('00000000-0000-0000-0000-000000000000','a44c0000-0000-0000-0000-000000000001','text_chat','anthropic','sonnet-4.6',0.01,100,'success',0,'2026-07-27T09:00:00Z',100,50,'cloud','recon-chain','b0de0000-0000-0000-0000-0000000000b1'),
     ('00000000-0000-0000-0000-000000000000','a44c0000-0000-0000-0000-000000000002','text_chat','anthropic','sonnet-4.6',0.01,200,'success',0,'2026-07-27T10:00:00Z',100,50,'cloud','recon-chain','b0de0000-0000-0000-0000-0000000000b1'),

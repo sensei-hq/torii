@@ -1,6 +1,6 @@
 //! C5 · quality-signal emitters (§3b) — one row per retrieve and per ingest-redaction batch.
 //!
-//! Mirrors `quality.rs` house style: writes `public.quality_signals` as `service_role`, best-effort
+//! Mirrors `quality.rs` house style: writes `metering.quality_signals` as `service_role`, best-effort
 //! (a signal write NEVER fails the request — it logs and moves on). Redaction signals carry per-kind
 //! COUNTS + an active-secret flag only — NEVER the matched text (spec §5, "redaction/audit logs are
 //! themselves scrubbed").
@@ -35,9 +35,9 @@ pub async fn record_retrieval_signal(pool: &PgPool, tenant: Uuid, s: RetrievalSi
         "latency_ms": s.latency_ms,
     });
     let res = sqlx::query(
-        "insert into public.quality_signals \
-           (tenant_id, id, signal_key, signal_class, value_num, value_json, unit, source, actor_id, schema_version) \
-         values ($1, gen_random_uuid(), 'retrieval', 'implicit', $2, $3::jsonb, 'rrf_score', 'c5.retrieve', $4, $5)",
+        "insert into metering.quality_signals \
+           (tenant_id, id, subject_type, signal_key, signal_class, value_num, value_json, unit, source, actor_id, schema_version) \
+         values ($1, gen_random_uuid(), 'event', 'retrieval', 'implicit', $2, $3::jsonb, 'rrf_score', 'c5.retrieve', $4, $5)",
     )
     .bind(tenant)
     .bind(s.fused_top)
@@ -75,9 +75,9 @@ pub async fn record_redaction_signal(
         "by_kind": by_kind,
     });
     let res = sqlx::query(
-        "insert into public.quality_signals \
-           (tenant_id, id, signal_key, signal_class, value_num, value_json, unit, source, actor_id, schema_version) \
-         values ($1, gen_random_uuid(), 'redaction', 'implicit', $2, $3::jsonb, 'count', 'c5.ingest', $4, $5)",
+        "insert into metering.quality_signals \
+           (tenant_id, id, subject_type, signal_key, signal_class, value_num, value_json, unit, source, actor_id, schema_version) \
+         values ($1, gen_random_uuid(), 'event', 'redaction', 'implicit', $2, $3::jsonb, 'count', 'c5.ingest', $4, $5)",
     )
     .bind(tenant)
     .bind(total as f64)

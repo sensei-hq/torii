@@ -1,6 +1,6 @@
 //! C6 quality-signal capture (contract, P6). The gateway records **one implicit
 //! signal batch per inference call**, keyed to `inference_calls.id`, in
-//! `public.quality_signals`. This is the contract sink; C5 (RAG grounding) and the
+//! `metering.quality_signals`. This is the contract sink; C5 (RAG grounding) and the
 //! opt-in LLM-as-judge emit additional signals into the same table in later phases.
 //!
 //! Capture is best-effort: a failure here never fails the inference request (the
@@ -41,10 +41,10 @@ pub async fn record_call_signals(pool: &PgPool, tenant: Uuid, s: &CallSignals) {
     });
 
     let res = sqlx::query(
-        "insert into public.quality_signals \
-           (tenant_id, id, inference_call_id, signal_key, signal_class, \
+        "insert into metering.quality_signals \
+           (tenant_id, id, subject_type, inference_call_id, signal_key, signal_class, \
             value_num, value_json, unit, source, actor_id, schema_version) \
-         values ($1, gen_random_uuid(), $2, 'call_metrics', 'implicit', \
+         values ($1, gen_random_uuid(), 'call', $2, 'call_metrics', 'implicit', \
                  $3::numeric, $4::jsonb, 'usd', 'gateway', $5, 1)",
     )
     .bind(tenant)

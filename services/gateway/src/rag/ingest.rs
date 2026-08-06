@@ -309,7 +309,7 @@ mod tests {
 
         // a redaction quality signal exists.
         let sig: i64 = sqlx::query_scalar(
-            "select count(*) from quality_signals where tenant_id=$1 and signal_key='redaction'")
+            "select count(*) from metering.quality_signals where tenant_id=$1 and signal_key='redaction'")
             .bind(tenant).fetch_one(&pool).await.unwrap();
         assert!(sig >= 1, "no redaction quality signal written");
 
@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(status2, "completed", "re-ingest did not stay completed (unique collision?)");
 
         // cleanup
-        sqlx::query("delete from quality_signals where tenant_id=$1").bind(tenant).execute(&pool).await.unwrap();
+        sqlx::query("delete from metering.quality_signals where tenant_id=$1").bind(tenant).execute(&pool).await.unwrap();
         store.delete_document(tenant, doc).await.unwrap();
         sqlx::query("delete from core.tenants where id=$1").bind(tenant).execute(&pool).await.unwrap();
     }

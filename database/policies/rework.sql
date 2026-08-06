@@ -18,7 +18,7 @@ begin
     ('catalog', 'chain_bindings'),
     ('catalog', 'routing_policies'),
     ('catalog', 'provider_health'),
-    ('public', 'quality_signals'),
+    ('metering', 'quality_signals'),  -- §D Ledger Normalize: moved public→metering (split from feedback)
     ('public', 'structured_datasets'),
     ('public', 'dataset_columns'),
     ('device', 'tenant_mcp_servers'),

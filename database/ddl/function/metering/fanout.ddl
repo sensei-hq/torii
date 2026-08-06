@@ -29,9 +29,9 @@ create trigger inference_calls_analytics_ai
   after insert on metering.inference_calls
   for each row execute function metering.fanout();
 
-drop trigger if exists quality_signals_analytics_ai on public.quality_signals;
+drop trigger if exists quality_signals_analytics_ai on metering.quality_signals;
 create trigger quality_signals_analytics_ai
-  after insert on public.quality_signals
+  after insert on metering.quality_signals
   for each row execute function metering.fanout();
 
 comment on function metering.fanout() is

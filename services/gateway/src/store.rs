@@ -110,7 +110,7 @@ impl GatewayStore for PgGatewayStore {
                  input_tokens, output_tokens, cost_usd, duration_ms,
                  status, error_type, fallback_sequence, recorded_at,
                  budget_node_id, org_node_id, dept_node_id, team_node_id, user_node_id,
-                 execution_location)
+                 org_unit_id, execution_location)
             SELECT
                 $1, $2, $3, $4, $5, $6,
                 $7, $8, $9,
@@ -121,6 +121,7 @@ impl GatewayStore for PgGatewayStore {
                 (SELECT id FROM anc WHERE level = 1 LIMIT 1),
                 (SELECT id FROM anc WHERE level = 2 LIMIT 1),
                 (SELECT id FROM anc WHERE level IN (3, 4) LIMIT 1),
+                $18,  -- §D LN-3c: org_unit_id = the resolved unit (== budget_node_id under DC-1)
                 $19::core.execution_location
             "#,
         )

@@ -937,4 +937,24 @@ begin
   raise notice 'M-ln-3a legacy sessions/gateway_tasks retired, inference_calls→sessions FK dropped ✓';
 end $$;
 
+\echo '== §D Ledger Normalize: inference_calls.org_unit_id (LN-3c-1, additive) =='
+
+-- M-ln-3c1 — inference_calls.org_unit_id added additively with FK→core.org_units (ON DELETE SET NULL —
+-- never cascade-delete billing history). == budget_node_id under P5 DC-1; store.rs writes both. The
+-- analytics/rollup read migration + the P12 denorm reversal (drop budget_node_id + *_node_id) is LN-3c-2.
+do $$
+begin
+  if not exists (select 1 from information_schema.columns
+                  where table_schema='metering' and table_name='inference_calls' and column_name='org_unit_id') then
+    raise exception 'FAIL: inference_calls.org_unit_id missing'; end if;
+  if not exists (select 1 from pg_constraint where conrelid='metering.inference_calls'::regclass
+                  and confrelid='core.org_units'::regclass and contype='f') then
+    raise exception 'FAIL: inference_calls → core.org_units FK missing'; end if;
+  -- budget_node_id + the 4 *_node_id cols are STILL present this slice (spend-by-tier unchanged).
+  if not exists (select 1 from information_schema.columns
+                  where table_schema='metering' and table_name='inference_calls' and column_name='budget_node_id') then
+    raise exception 'FAIL: budget_node_id dropped early (should retire in LN-3c-2)'; end if;
+  raise notice 'M-ln-3c1 inference_calls.org_unit_id + FK→core.org_units (additive; budget_node_id/*_node_id intact) ✓';
+end $$;
+
 \echo '== §D moves tests done =='

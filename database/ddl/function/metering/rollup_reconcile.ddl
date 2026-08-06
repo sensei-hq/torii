@@ -39,15 +39,15 @@ begin
       ic.capability, coalesce(ic.execution_location, 'cloud') as plane,
       coalesce(ic.input_tokens, 0)  as in_tok,
       coalesce(ic.output_tokens, 0) as out_tok,
-      coalesce(ic.cost_usd, 0)      as cost_usd,
+      coalesce(ic.cost_actual, 0)      as cost_usd,
       coalesce(ic.duration_ms, 0)   as duration_ms,
       ic.fallback_sequence,
-      case when coalesce(ic.execution_location, 'cloud') = 'cloud' then coalesce(ic.cost_usd, 0)
+      case when coalesce(ic.execution_location, 'cloud') = 'cloud' then coalesce(ic.cost_actual, 0)
            when ce.is_local_only or ce.is_unpriced then 0
            else coalesce(ce.cloud_equiv_usd, 0) end as ce_usd,
       case when coalesce(ic.execution_location, 'cloud') = 'cloud' then 0
            when ce.is_local_only or ce.is_unpriced then 0
-           else greatest(coalesce(ce.cloud_equiv_usd, 0) - coalesce(ic.cost_usd, 0), 0) end as sav_usd,
+           else greatest(coalesce(ce.cloud_equiv_usd, 0) - coalesce(ic.cost_actual, 0), 0) end as sav_usd,
       case when coalesce(ic.execution_location, 'cloud') = 'local' and ce.is_local_only then 1 else 0 end as lo,
       case when coalesce(ic.execution_location, 'cloud') = 'local' and ce.is_unpriced   then 1 else 0 end as up
     from metering.inference_calls ic

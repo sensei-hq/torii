@@ -54,7 +54,7 @@ begin;
   -- must NOT see them (cross-tenant isolation).
   insert into metering.inference_calls(
       tenant_id, id, capability, adapter, model,
-      cost_usd, duration_ms, status, fallback_sequence, recorded_at
+      cost_actual, duration_ms, status, fallback_sequence, recorded_at
   ) values (
       '99999999-9999-9999-9999-999999999999',
       'ca110000-0000-0000-0000-000000000001',

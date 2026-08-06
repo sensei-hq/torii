@@ -811,4 +811,25 @@ begin
   raise notice 'M-meter-3 MVs deny-all + ledger SELECT-only posture ✓';
 end $$;
 
+\echo '== §D Ledger Normalize: requests_ledger shield (LN-1) =='
+
+-- M-ln-1 — requests_ledger_for_tenant shield exists with the RequestRow contract and is
+-- gateway-internal (deny-all; no security_invoker → a grant would bypass inference_calls RLS →
+-- cross-tenant leak). Shipped BEFORE the inference_calls FK-normalize so /v1/requests stays byte-identical.
+do $$
+declare missing text;
+begin
+  if not exists (select 1 from pg_views where schemaname='metering' and viewname='requests_ledger_for_tenant') then
+    raise exception 'FAIL: metering.requests_ledger_for_tenant view missing'; end if;
+  select string_agg(c, ', ') into missing from unnest(array[
+    'tenant_id','id','chain_id','adapter','model','budget_node_id','execution_location',
+    'input_tokens','output_tokens','cost_usd','duration_ms','status','fallback_sequence','recorded_at']) as c
+   where not exists (select 1 from information_schema.columns
+                      where table_schema='metering' and table_name='requests_ledger_for_tenant' and column_name=c);
+  if missing is not null then raise exception 'FAIL: requests_ledger_for_tenant missing columns: %', missing; end if;
+  if has_table_privilege('authenticated','metering.requests_ledger_for_tenant','select') then
+    raise exception 'FAIL: authenticated can SELECT requests_ledger_for_tenant (bypasses inference_calls RLS → cross-tenant leak)'; end if;
+  raise notice 'M-ln-1 requests_ledger_for_tenant shield: RequestRow contract + deny-all ✓';
+end $$;
+
 \echo '== §D moves tests done =='

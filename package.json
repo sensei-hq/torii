@@ -19,20 +19,20 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@iconify-json/lucide": "^1.2.101",
-    "@iconify-json/solar": "^1.2.5",
-    "eslint": "^10.1.0",
+    "@iconify-json/lucide": "^1.2.123",
+    "@iconify-json/solar": "^1.2.7",
+    "eslint": "^10.8.1",
     "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-svelte": "^3.16.0",
-    "globals": "^17.4.0",
-    "prettier": "^3.4.2",
-    "prettier-plugin-svelte": "^3.4.0",
+    "eslint-plugin-svelte": "^3.23.0",
+    "globals": "^17.11.0",
+    "prettier": "^3.9.6",
+    "prettier-plugin-svelte": "^3.5.2",
     "svelte-eslint-parser": "^0.43.0",
-    "typescript-eslint": "^8.0.0"
+    "typescript-eslint": "^8.67.0"
   },
   "dependencies": {
-    "@fontsource-variable/fraunces": "^5.2.9",
-    "@fontsource-variable/inter": "^5.2.8",
-    "@fontsource-variable/jetbrains-mono": "^5.2.8"
+    "@fontsource-variable/fraunces": "^5.3.0",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0"
   }
 }

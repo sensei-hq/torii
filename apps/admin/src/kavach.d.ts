@@ -38,5 +38,9 @@ declare module '$kavach/routes' {
 }
 
 declare module '$kavach/providers' {
-	export const providers: Array<{ name: string; mode?: string; label?: string }>
+	export const providers: Array<{
+		name: string
+		mode?: 'otp' | 'oauth' | 'password'
+		label: string
+	}>
 }

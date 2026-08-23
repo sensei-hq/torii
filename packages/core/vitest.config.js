@@ -9,6 +9,18 @@ import { defineConfig } from 'vitest/config'
 // Remove once @kavach/* publish `dist/` + extension-ful imports.
 export default defineConfig({
 	test: {
-		server: { deps: { inline: [/@kavach\//] } }
+		server: { deps: { inline: [/@kavach\//] } },
+		coverage: {
+			provider: 'v8',
+			// Honest coverage (`all: true`): every source file counts, so untested
+			// modules show as 0% instead of vanishing from the denominator — same
+			// policy as apps/admin. Excluded: spec files, ambient `.d.ts`, and the
+			// supabase client seam (I/O glue exercised by integration/e2e, not unit).
+			// `lcov` feeds the Qlty upload in .github/workflows/coverage.yml.
+			all: true,
+			include: ['src/**/*.ts', 'src/**/*.svelte.ts'],
+			exclude: ['src/**/*.spec.*', 'src/**/*.d.ts', 'src/supabase/**'],
+			reporter: ['text', 'lcov']
+		}
 	}
 })

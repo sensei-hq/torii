@@ -11,8 +11,7 @@ FROM rust:1.97-slim-bookworm AS builder
 # build-essential + cmake + clang: aws-lc-sys (pulled via rustls / aws-sdk-bedrockruntime)
 # compiles a C lib with CMake and may run bindgen (needs libclang). The slim image lacks them.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      pkg-config libssl-dev git ca-certificates \
-      build-essential cmake clang \
+      build-essential ca-certificates clang cmake git libssl-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 
@@ -31,11 +30,17 @@ COPY crates ./crates
 #  2. Drop the `apps/desktop/src-tauri` workspace member — the Tauri desktop app. Cargo parses
 #     EVERY member even for `-p torii-gateway`, and that member's [lib] source isn't copied,
 #     so keep it out of `members` entirely (the gateway doesn't depend on it).
+# Prep the workspace manifest for a cloud-only gateway build, then build the gateway
+# (not the Tauri desktop member):
+#  1. Strip the dev-in-place [patch] (points sensei-* at the sibling repo ../gateway, absent
+#     here) so the build resolves the git dependency at the pinned tag
+#     (services/gateway/Cargo.toml, currently tag = "v0.4.8").
+#  2. Drop the `apps/desktop/src-tauri` workspace member — the Tauri desktop app. Cargo parses
+#     EVERY member even for `-p torii-gateway`, and that member's [lib] source isn't copied,
+#     so keep it out of `members` entirely (the gateway doesn't depend on it).
 RUN sed -i '/^\[patch\./,/^$/d' Cargo.toml && \
-    sed -i -E 's#"apps/desktop/src-tauri",[[:space:]]*##' Cargo.toml
-
-# Build only the gateway (not the Tauri desktop member).
-RUN cargo build --release -p torii-gateway && \
+    sed -i -E 's#"apps/desktop/src-tauri",[[:space:]]*##' Cargo.toml && \
+    cargo build --release -p torii-gateway && \
     cp target/release/torii-gateway /torii-gateway
 
 # ---- runtime ---------------------------------------------------------------

@@ -19,6 +19,8 @@ export default defineConfig({
 			all: true,
 			include: ['src/lib/**/*.ts', 'src/lib/**/*.svelte.ts'],
 			exclude: ['src/lib/api.ts', 'src/lib/env.ts', 'src/lib/auth-flow.ts', '**/*.spec.*'],
+			// `lcov` feeds the Qlty upload in .github/workflows/coverage.yml.
+			reporter: ['text', 'lcov'],
 			thresholds: { lines: 80, functions: 80, statements: 80 }
 		}
 	}

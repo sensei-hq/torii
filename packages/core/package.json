@@ -9,6 +9,7 @@
   },
   "scripts": {
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "lint": "prettier --check . && eslint .",
     "check": "tsc --noEmit -p tsconfig.json"
   },

@@ -183,6 +183,9 @@ pub(crate) fn build_models(rows: &[ModelRow]) -> HashMap<String, ModelConfig> {
                 // MIG-2 (v0.4.6): model lineage for panel `distinct_by: family`.
                 // None ⇒ the model id is its own family (fine until panels are used).
                 family: None,
+                // Upstream (sensei-kernel 0.5.x) optional catalog metadata — the DB
+                // catalog tables don't carry free-tier/auth-type yet, so None.
+                catalog: None,
             },
         );
     }

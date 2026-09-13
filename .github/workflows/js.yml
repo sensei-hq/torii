@@ -12,6 +12,14 @@ on:
     branches: [develop, main]
   pull_request:
 
+# Least privilege: the gate only checks out the repo and runs bun — it never
+# pushes, comments or publishes. Without this block the workflow inherits the
+# repository default for GITHUB_TOKEN, which can be write access to contents,
+# issues and packages, handing that reach to every dependency the install
+# resolves. Flagged by CodeQL actions/missing-workflow-permissions.
+permissions:
+  contents: read
+
 concurrency:
   group: js-${{ github.ref }}
   cancel-in-progress: true

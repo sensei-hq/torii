@@ -11,6 +11,14 @@ on:
     branches: [develop, main]
   pull_request:
 
+# Least privilege: the rust job only reads the repo and uploads coverage with its
+# own QLTY_COVERAGE_TOKEN, so GITHUB_TOKEN needs nothing beyond read. Without
+# this block the workflow inherits the repository default, which can be write
+# access to contents, issues and packages. Flagged by CodeQL
+# actions/missing-workflow-permissions.
+permissions:
+  contents: read
+
 concurrency:
   group: coverage-${{ github.ref }}
   cancel-in-progress: true

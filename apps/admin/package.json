@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
+    "test:fidelity": "FIDELITY=1 playwright test fidelity",
     "deploy": "bun run build && wrangler deploy"
   },
   "dependencies": {

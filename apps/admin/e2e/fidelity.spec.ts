@@ -12,10 +12,11 @@ import { mockups } from './mockups'
 //   · card border colour (the dark hairline that must stay subtle)
 // Extend a screen by adding rows to OVERVIEW; add a screen by adding a table.
 //
-// LOCAL DEVELOPMENT ONLY — excluded from the e2e suite unless FIDELITY=1, because it
-// needs an export of the untracked design mockups. Run it with:
-//   bun run test:fidelity                      (default export at docs/mockups/)
-//   FIDELITY=1 MOCKUPS_DIR=<path> bun run test:e2e
+// LOCAL DEVELOPMENT ONLY — excluded from the e2e suite by default, because it needs an
+// export of the untracked design mockups. Run it with:
+//   bun run mockup-fidelity                    (fidelity alone; errors if no export)
+//   bun run e2e --with-mockup-fidelity         (whole suite; skips fidelity if no export)
+//   MOCKUPS_DIR=<path> bun run mockup-fidelity (a different export)
 //
 // Requires the live gateway + Supabase + seeded owner + the mock server
 // (auto-started by playwright.config webServer when enabled).

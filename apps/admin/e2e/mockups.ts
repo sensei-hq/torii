@@ -9,57 +9,90 @@ import { fileURLToPath } from 'node:url'
 // docs/mockups/ — which is UNTRACKED (see .gitignore). So the mock-vs-app
 // fidelity diff is a LOCAL DEVELOPMENT tool, not part of the e2e suite:
 //
-//   · default            → disabled; the rest of the e2e suite runs untouched
-//   · FIDELITY=1         → enabled; requires an export to be present
-//   · MOCKUPS_DIR=<path> → point at a different export (relative paths resolve
-//                          against apps/admin, matching the old ../../docs/mockups)
-//   · MOCKUPS_PORT=<n>   → serve on a different port (default 8890)
+//   bun run e2e                         → 'off'  · fidelity excluded
+//   bun run e2e --with-mockup-fidelity  → 'with' · included when an export exists;
+//                                          when it does not, e2e STILL RUNS without it
+//   bun run mockup-fidelity             → 'only' · fidelity alone; a missing export
+//                                          is a hard error
 //
-// Asking for fidelity without an export is a hard error, not a skip: a missing
-// directory would otherwise surface as a connection-refused at :8890 long after
-// the cause.
+// The asymmetry is deliberate. "e2e plus a bonus" must not be broken by a missing
+// bonus; "run exactly this" must not quietly run nothing and exit 0, which reads as
+// a pass.
+//
+// Overrides (both modes): MOCKUPS_DIR=<path> (relative resolves against apps/admin,
+// preserving the historical ../../docs/mockups) and MOCKUPS_PORT=<n> (default 8890).
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** The export directory, relative to apps/admin — the historical harness path. */
 const DEFAULT_DIR = '../../docs/mockups'
 const DEFAULT_PORT = 8890
 
+const WITH_FLAG = '--with-mockup-fidelity'
+const ONLY_FLAG = '--only-mockup-fidelity'
+
 /** apps/admin — the directory playwright.config.ts lives in. */
 export const CONFIG_DIR = resolve(fileURLToPath(import.meta.url), '..', '..')
 
+export type Mode = 'off' | 'with' | 'only'
+
 export type Mockups =
-	{ enabled: false; reason: string } | { enabled: true; dir: string; port: number; url: string }
+	| { enabled: false; mode: Mode; reason: string }
+	| {
+			enabled: true
+			mode: 'with' | 'only'
+			onlyFidelity: boolean
+			dir: string
+			port: number
+			url: string
+	  }
+
+/**
+ * Split our own flags out of the argv the user meant for playwright.
+ * Playwright's CLI rejects unknown options, so the runner must strip these before exec.
+ */
+export function parseMockupFidelityArgs(argv: string[]): { mode: Mode; rest: string[] } {
+	const rest = argv.filter((a) => a !== WITH_FLAG && a !== ONLY_FLAG)
+	// --only is the more specific request, so it wins if both are given.
+	const mode: Mode = argv.includes(ONLY_FLAG) ? 'only' : argv.includes(WITH_FLAG) ? 'with' : 'off'
+	return { mode, rest }
+}
 
 /**
  * Decide whether the fidelity harness runs, and where it reads the mockups from.
  *
- * @param env    process env (injected so the decision is testable)
- * @param exists directory predicate (injected for the same reason)
+ * @param mode    'off' | 'with' | 'only' — see the module comment
+ * @param env     process env (injected so the decision is testable)
+ * @param exists  directory predicate (injected for the same reason)
  * @param baseDir directory that relative `MOCKUPS_DIR` values resolve against
- * @throws if fidelity is requested but the export is missing, or the port is not a number
+ * @throws in 'only' mode when the export is missing, or when MOCKUPS_PORT is not a number
  */
 export function resolveMockups(
+	mode: Mode,
 	env: Record<string, string | undefined>,
 	exists: (path: string) => boolean,
 	baseDir: string
 ): Mockups {
-	if (!env.FIDELITY)
+	if (mode === 'off')
 		return {
 			enabled: false,
-			reason:
-				'fidelity harness off — set FIDELITY=1 to diff the app against the design mockups (local development only)'
+			mode,
+			reason: `mockup fidelity excluded — pass ${WITH_FLAG} to include it, or run \`bun run mockup-fidelity\``
 		}
 
 	const configured = env.MOCKUPS_DIR?.trim()
 	const requested = configured && configured.length > 0 ? configured : DEFAULT_DIR
 	const dir = isAbsolute(requested) ? requested : resolve(baseDir, requested)
 
-	if (!exists(dir))
-		throw new Error(
-			`FIDELITY=1 but no design mockups at ${dir}\n` +
-				`The mockups are untracked — export the claude.ai design project into docs/mockups/, ` +
-				`or set MOCKUPS_DIR to an existing export.`
-		)
+	if (!exists(dir)) {
+		const detail =
+			`no design mockups at ${dir}\n` +
+			`The mockups are untracked — export the claude.ai design project into docs/mockups/, ` +
+			`or set MOCKUPS_DIR to an existing export.`
+		// 'only' was an explicit request for these tests and nothing else: refuse.
+		if (mode === 'only') throw new Error(detail)
+		// 'with' was "e2e, plus fidelity if you can": run the rest.
+		return { enabled: false, mode, reason: `mockup fidelity skipped — ${detail}` }
+	}
 
 	const port = env.MOCKUPS_PORT ? Number(env.MOCKUPS_PORT) : DEFAULT_PORT
 	if (!Number.isInteger(port) || port <= 0)
@@ -67,8 +100,24 @@ export function resolveMockups(
 			`MOCKUPS_PORT must be a positive integer, got ${JSON.stringify(env.MOCKUPS_PORT)}`
 		)
 
-	return { enabled: true, dir, port, url: `http://localhost:${port}/Seiki.html` }
+	return {
+		enabled: true,
+		mode,
+		onlyFidelity: mode === 'only',
+		dir,
+		port,
+		url: `http://localhost:${port}/Seiki.html`
+	}
 }
 
-/** The resolution for this process — what playwright.config.ts and the spec both read. */
-export const mockups: Mockups = resolveMockups(process.env, existsSync, CONFIG_DIR)
+/**
+ * The resolution for this process. The runner (`e2e/run.ts`) strips our flags and
+ * forwards the mode in `MOCKUP_FIDELITY`, because playwright.config.ts is loaded by
+ * playwright itself and never sees the original argv.
+ */
+export const mockups: Mockups = resolveMockups(
+	(process.env.MOCKUP_FIDELITY as Mode) || 'off',
+	process.env,
+	existsSync,
+	CONFIG_DIR
+)

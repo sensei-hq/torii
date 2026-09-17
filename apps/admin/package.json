@@ -11,8 +11,9 @@
     "lint": "prettier --check . && eslint .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test",
-    "test:fidelity": "FIDELITY=1 playwright test fidelity",
+    "e2e": "bun e2e/run.ts",
+    "test:e2e": "bun e2e/run.ts",
+    "mockup-fidelity": "bun e2e/run.ts --only-mockup-fidelity",
     "deploy": "bun run build && wrangler deploy"
   },
   "dependencies": {

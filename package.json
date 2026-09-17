@@ -14,6 +14,8 @@
     "dev:desktop": "bun run --filter @torii/desktop dev",
     "build": "bun run --filter '*' build",
     "test": "bun run --filter '*' test",
+    "e2e": "bun run --filter @seiki/admin e2e",
+    "mockup-fidelity": "bun run --filter @seiki/admin mockup-fidelity",
     "lint": "bun run --filter '*' lint",
     "check": "bun run --filter '*' check"
   },

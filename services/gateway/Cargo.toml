@@ -9,7 +9,15 @@ tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uuid", "json"] }
-jsonwebtoken = "10"
+# jsonwebtoken 10 ships NO crypto backend by default (`default = ["use_pem"]`), so the
+# plain `"10"` we had compiled cleanly and then panicked on the FIRST verification —
+# "Could not automatically determine the process-level CryptoProvider". Every authenticated
+# request died with an empty response while /health stayed 200. Pick a backend explicitly.
+#
+# aws_lc_rs over rust_crypto: aws-lc-rs is already in the tree via rustls (no new
+# dependency), and rust_crypto would pull the `rsa` crate, which carries the unresolved
+# Marvin timing side-channel advisory (RUSTSEC-2023-0071).
+jsonwebtoken = { version = "10", default-features = false, features = ["use_pem", "aws_lc_rs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }

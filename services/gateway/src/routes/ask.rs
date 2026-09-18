@@ -253,6 +253,8 @@ pub async fn ask(
         consensus: None,
         allow_fallback,
         credentials: Default::default(),
+        // SP-ROUTE-1: default strategy; Ask does not expose per-request routing knobs.
+        routing: None,
     };
     inject_tenant_credentials(&state, Some(tenant), &mut ireq).await;
 

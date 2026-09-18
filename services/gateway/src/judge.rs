@@ -111,6 +111,9 @@ pub async fn execute_judge(state: &SharedState, question: &str, answer: &str) ->
         allow_fallback: true,
         // Local $0 judge uses no BYOK provider credentials.
         credentials: Default::default(),
+        // SP-ROUTE-1: no per-request routing preferences — the `judge` chain's own
+        // order is the policy. None ⇒ the engine's default strategy.
+        routing: None,
     };
 
     let start = std::time::Instant::now();

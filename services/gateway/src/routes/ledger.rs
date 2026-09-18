@@ -871,6 +871,7 @@ mod trace_roundtrip {
             estimated_cost: None,
             actual_cost: None,
             created_at: Utc::now(),
+            routing: None,
         };
         let stored = StoredTrace {
             id: Uuid::new_v4(),

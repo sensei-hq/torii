@@ -16,10 +16,23 @@ fn main() {
     let built_at = iso8601_utc_now();
     println!("cargo:rustc-env=TORII_BUILT_AT={built_at}");
 
-    // Short SHA, with a `-dirty` marker for uncommitted work. Falls back to "unknown" when
-    // git is unavailable or there is no .git (a Docker build that does not COPY it) — an
-    // honest "we asked and could not tell", which an empty string would not convey.
-    println!("cargo:rustc-env=TORII_COMMIT={}", git_describe());
+    // Short SHA, with a `-dirty` marker for uncommitted work.
+    //
+    // `.dockerignore` excludes `.git` on purpose (36 MB of context that would also bust layer
+    // caching every commit), so an image build cannot ask git. `GIT_SHA` is the way in:
+    // `fly deploy --build-arg GIT_SHA=$(git rev-parse --short HEAD)`, wired through the
+    // Dockerfile. Absent both, "unknown" — an honest "asked and could not tell", which an
+    // empty string would not convey. `built_at` carries the staleness signal regardless.
+    //
+    // NOTE: reading this env var must NOT come with `cargo:rerun-if-env-changed`. Emitting
+    // ANY rerun-if instruction opts out of the default "re-run when the package changes",
+    // which is what keeps built_at honest (see the note above).
+    let commit = std::env::var("GIT_SHA")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != "unknown")
+        .unwrap_or_else(git_describe);
+    println!("cargo:rustc-env=TORII_COMMIT={commit}");
 }
 
 /// `SystemTime` → RFC3339 UTC, via the civil-from-days algorithm (Howard Hinnant's

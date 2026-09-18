@@ -3,6 +3,11 @@
 #
 # Build from the REPO ROOT (the workspace):  docker build -f services/gateway/Dockerfile .
 # (Fly.io: `fly deploy` uses this via fly.toml's [build].dockerfile.)
+#
+# For a manual deploy, pass the revision so /health can report it:
+#   fly deploy --build-arg GIT_SHA=$(git rev-parse --short HEAD)
+# Fly's GitHub webhook builds take no local args, so those report commit "unknown";
+# `built_at` still identifies the build, which is what staleness checks need.
 
 # ---- builder ---------------------------------------------------------------
 # Rust 1.85+ required — the sensei-vault crate is edition 2024 (stabilized in 1.85). Pinned to
@@ -38,6 +43,16 @@ COPY crates ./crates
 #  2. Drop the `apps/desktop/src-tauri` workspace member — the Tauri desktop app. Cargo parses
 #     EVERY member even for `-p torii-gateway`, and that member's [lib] source isn't copied,
 #     so keep it out of `members` entirely (the gateway doesn't depend on it).
+# Build identity for /health. `.dockerignore` excludes .git (36 MB of context, and copying it
+# would bust layer caching every commit), so build.rs cannot ask git here — pass the SHA in:
+#
+#   fly deploy --build-arg GIT_SHA=$(git rev-parse --short HEAD)
+#
+# Left unset (Fly's GitHub webhook builds, which take no local args) /health reports
+# commit "unknown"; `built_at` still identifies the build, which is the staleness signal.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
+
 RUN sed -i '/^\[patch\./,/^$/d' Cargo.toml && \
     sed -i -E 's#"apps/desktop/src-tauri",[[:space:]]*##' Cargo.toml && \
     cargo build --release -p torii-gateway && \

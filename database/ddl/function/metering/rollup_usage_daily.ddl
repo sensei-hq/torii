@@ -20,6 +20,7 @@ begin
 
   insert into metering.usage_daily
     (tenant_id, day, org_unit_id, served_model, provider, capability, execution_location,
+     pool_key,
      calls, input_tokens, output_tokens, cost_usd,
      fallback_calls, latency_ms_sum, latency_ms_count)
   select ic.tenant_id,
@@ -29,6 +30,18 @@ begin
          ic.adapter,
          ic.capability,
          coalesce(ic.execution_location, 'cloud'),
+         -- G3: resolve the free-tier pool from the call's model. max() because pool_key is
+         -- functionally determined by model_id, so every row in the group agrees — it is an
+         -- aggregate only to satisfy GROUP BY, not a choice between differing values.
+         --
+         -- ⚠ Resolved from the catalog AS IT IS NOW, not as it was on p_day. Re-pooling a
+         -- model therefore re-attributes its history on the next rerun. Accepted: pool
+         -- membership is a property of the provider's terms (it changes when the provider
+         -- changes them, which is when history genuinely should follow), and the alternative
+         -- — snapshotting pool_key onto every inference_calls row — needs the gateway write
+         -- path, which is a later increment. The `re-run reproduces the day exactly` contract
+         -- above holds for a fixed catalog.
+         max(m.free_pool_key),
          count(*),
          coalesce(sum(ic.input_tokens), 0),
          coalesce(sum(ic.output_tokens), 0),
@@ -37,6 +50,9 @@ begin
          coalesce(sum(ic.duration_ms), 0),
          count(*)
     from metering.inference_calls ic
+    -- LEFT: a call whose model_id is unresolved (or whose model has no free tier) still
+    -- rolls up; it simply carries no pool. An inner join would silently drop usage.
+    left join catalog.models m on m.id = ic.model_id
    where ic.tenant_id = p_tenant
      and ic.recorded_at >= p_day
      and ic.recorded_at <  p_day + interval '1 day'

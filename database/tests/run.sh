@@ -23,6 +23,7 @@ suite=(
   analytics.sql # O2: daily usage rollup + idempotency
   catalog_meta.sql # G1: gateway CatalogMeta/FreeTier attrs + pool-dedup expressibility
   catalog_tiers.sql # G2: tiers (strategy + curated∪derived membership) + tier-ref chain steps
+  metering_pools.sql # G3: free-tier pools (dedup) + reset windows → pool_headroom
 )
 
 for t in "${suite[@]}"; do

@@ -18,6 +18,9 @@ begin
     ('catalog', 'chain_bindings'),
     ('catalog', 'routing_policies'),
     ('catalog', 'provider_health'),
+    -- G4: durable model-lockout state, same class as provider_health — a tenant reads its
+    -- own, the gateway writes as service_role.
+    ('catalog', 'endpoint_lockouts'),
     ('metering', 'quality_signals'),  -- §D Ledger Normalize: moved public→metering (split from feedback)
     ('public', 'structured_datasets'),
     ('public', 'dataset_columns'),

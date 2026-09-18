@@ -165,6 +165,9 @@ fn build_inference_request(
         allow_fallback,
         // F3-4 sets per-tenant BYOK credentials here from the vault key cache.
         credentials: Default::default(),
+        // SP-ROUTE-1: per-request routing preferences are not yet surfaced on /v1/chat.
+        // None ⇒ the default strategy, byte-identical to pre-slice behaviour.
+        routing: None,
     };
     (ireq, redactions)
 }
@@ -383,6 +386,11 @@ pub(crate) fn build_trace(
         attempts: resp.attempts.clone(),
         estimated_cost: resp.estimated_cost.clone(),
         actual_cost: resp.actual_cost.clone(),
+        // SP-ROUTE-1: PROPAGATE, don't default. The engine's ordering explanation rides on
+        // the response, and this trace is what `GET /v1/requests/{id}/trace` serves — the
+        // "why this model" answer. Defaulting to None here would compile and silently drop
+        // it, leaving the trace looking complete while the explanation is gone.
+        routing: resp.routing.clone(),
         created_at: recorded_at,
     };
     StoredTrace {
@@ -996,6 +1004,8 @@ impl ModelTurn for GatewayModelTurn<'_> {
             consensus: None,
             allow_fallback: self.allow_fallback,
             credentials: Default::default(),
+            // SP-ROUTE-1: agentic tool-loop turns inherit the chain's order.
+            routing: None,
         };
         inject_tenant_credentials(self.state, Some(self.tenant), &mut ireq).await;
 
@@ -1164,6 +1174,7 @@ mod tests {
             model: Some("gemma2:2b".into()),
             usage: None,
             tool_calls: Vec::new(),
+            routing: None,
             estimated_cost: None,
             actual_cost: None,
             attempts: vec![

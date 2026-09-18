@@ -168,6 +168,9 @@ fn baseline_local_config() -> GatewayConfig {
             max_output_tokens: 1_024,
             pricing: None,
             family: None, // MIG-3 (v0.4.6): panel distinctness lineage; None ⇒ id-is-family
+            // SP-CAT: no catalog metadata for an embedded local model — it has no
+            // free-tier terms or cost band to declare. None ⇒ the engine derives what it can.
+            catalog: None,
         },
     );
 

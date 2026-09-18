@@ -130,6 +130,8 @@ impl Embedder for EngineEmbedder {
             consensus: None,
             allow_fallback: true,
             credentials: HashMap::new(),
+            // SP-ROUTE-1: embeddings follow the chain's own order.
+            routing: None,
         };
         let resp = self
             .gw

@@ -22,6 +22,7 @@ suite=(
   retrieval.sql # C5: hybrid_search dual-write + cross-tenant/classification isolation
   analytics.sql # O2: daily usage rollup + idempotency
   catalog_meta.sql # G1: gateway CatalogMeta/FreeTier attrs + pool-dedup expressibility
+  catalog_tiers.sql # G2: tiers (strategy + curated∪derived membership) + tier-ref chain steps
 )
 
 for t in "${suite[@]}"; do

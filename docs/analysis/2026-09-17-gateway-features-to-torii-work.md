@@ -177,11 +177,29 @@ lockout — three gateway features at once.*
 `catalog.provider_health`. **Do this one early**: it is a live multi-instance correctness gap,
 not a feature.
 
-**G5 · Resilience config** — persist `ResilienceConfig` in `routing_policies`; Routing policy
-card.
+**G5 · Resilience config — ✅ DONE 2026-09-19** (`d3cb1e5`). ⚠️ **Not** in `routing_policies`, as
+this plan originally said. That table is keyed `(tenant_id, chain_id)`; `ResilienceConfig` is
+**process-global** — one store per gateway process, shared across tenants — so per-chain
+storage would let two chains disagree while the engine honours one. It landed as
+`config.resilience`, a deployment-scoped singleton whose defaults match the engine's exactly.
 
-**G6 · Config versioning + expiration tracking** — `config_versions` bump on catalog edits;
-proactive credential/credit/free-reset alerts into Alerts + Connections.
+**G6 · Config versioning + expiration tracking — ✅ MOSTLY ALREADY BUILT (assessed 2026-09-19).**
+Investigated before building, and the schema largely exists. Do **not** duplicate it:
+
+- **Config versioning — already correct, and better than the engine's.** `config.config_versions`
+  is keyed `(tenant_id)` with a monotonic `version` plus a `components` jsonb of sub-versions
+  for delta sync (RW15/D4). Contrast gateway's `orchestrator.config_versions`, a hard singleton
+  — one row for the entire database. **torii's is already per-tenant**, which is what a
+  multi-tenant publish needs. Nothing to build; the remaining work is *bumping* it on catalog
+  edits, which belongs with the write path, not the schema.
+- **Credential expiry — already stored.** `keyvault.router_credentials` carries
+  `oauth_expires_at` and a `refresh_status` enum. "When does this credential expire" is
+  answerable today.
+- **Genuinely missing: the alerting layer only.** `public.alert_rules` / `alert_events` exist;
+  what is absent is a rule that fires on an approaching expiry or free-tier reset. That is an
+  Alerts-screen feature over existing data, not new schema.
+
+**Revised remaining work:** none at the schema level. Reclassify as frontend/write-path work.
 
 **G0 · Release and repin** (prerequisite for G1–G3) — none of `CatalogMeta`, `gates/`, or the
 selection rewrite exists in the pinned `v0.5.1`. Dev builds gateway HEAD via `[patch]`;

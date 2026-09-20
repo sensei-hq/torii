@@ -10,7 +10,7 @@
 ## Bun workspaces: packages/* apps/*
 ## Cargo workspace: Cargo.toml at monorepo root → target/ at monorepo root
 
-.PHONY: install build test check lint e2e clean clean-cache clean-all help bump \
+.PHONY: install build test check lint e2e clean clean-cache clean-all sweep help bump \
         gateway-build gateway-service gateway-restart gateway-stop gateway-logs gateway-status
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -141,17 +141,63 @@ bump: ## Bump VERSION + all package.json / Cargo.toml / tauri.conf in lockstep, 
 	@git commit -m "chore: bump to v$(_v)"
 	@git tag "v$(_v)"
 	@echo "Committed + tagged v$(_v). To release: git push origin HEAD && git push origin v$(_v), then merge develop->main (triggers the CF + Fly deploys)."
+	@# Reclaim AFTER the tag, never before: the bump's `cargo check` artifacts have done their
+	@# job once the version is committed. A failure here must not imply the bump failed — the
+	@# tag exists either way — so $$ok is reported separately from the release outcome.
+	@ok=0; \
+	 $(RECLAIM); \
+	 if [ $$ok -ne 0 ]; then \
+	   echo ""; \
+	   echo "v$(_v) is committed and tagged — the bump itself succeeded."; \
+	   echo "Only the disk reclaim failed; run 'make clean' when convenient."; \
+	 fi
 
 # ── Clean / Disk management ───────────────────────────────────────────────────
 
+# Reclaim disk after a target that built Rust, reporting what it actually freed — the point
+# of this is a number you can verify, not a reassuring message. Modelled on dbd's
+# INSTALL_AND_RECLAIM: it preserves the CALLER's exit status in $$ok, so a reclaim failure
+# never masks a failed build, and a failed build still gets its disk back.
+#
+# Only `bump` calls this. It is deliberately NOT on `install` (that is `bun install` — no Rust
+# artifacts to reclaim, and cleaning would throw away a warm target/ for nothing) nor on
+# `gateway-build`/`gateway-restart` (run repeatedly during development; cleaning after each
+# would force a full recompile every time). `bump` is the release boundary, where the
+# artifacts have served their purpose — the same place dbd reclaims.
+define RECLAIM
+	before=$$(du -sk target 2>/dev/null | awk '{print $$1}'); before=$${before:-0}; \
+	echo "Reclaiming disk: removing Rust build artifacts..."; \
+	if cargo clean; then \
+	  freed=$$(( before / 1024 )); \
+	  echo "target/ cleaned — $${freed} MB reclaimed; the next build recompiles against the current lockfile."; \
+	else \
+	  echo "WARNING: cargo clean failed — target/ is still on disk."; \
+	  if [ $$ok -eq 0 ]; then ok=1; fi; \
+	fi
+endef
+
 clean: ## Reclaim disk: remove Cargo target/, .svelte-kit, build dirs, Playwright artefacts
-	@echo "Cleaning Cargo target/ (root workspace)..."
-	cargo clean
-	@echo "Cleaning SvelteKit build artefacts..."
-	rm -rf apps/*/.svelte-kit apps/*/build build dist
-	@echo "Pruning Playwright test artefacts..."
-	find . -type d \( -name test-results -o -name playwright-report \) -prune -exec rm -rf {} +
-	@echo "Clean complete."
+	@before=$$(du -sk target 2>/dev/null | awk '{print $$1}'); before=$${before:-0}; \
+	 echo "Cleaning Cargo target/ (root workspace)..."; \
+	 cargo clean; \
+	 echo "Cleaning SvelteKit build artefacts..."; \
+	 rm -rf apps/*/.svelte-kit apps/*/build build dist; \
+	 echo "Pruning Playwright test artefacts..."; \
+	 find . -type d \( -name test-results -o -name playwright-report \) -prune -exec rm -rf {} + ; \
+	 echo "Clean complete — $$(( before / 1024 )) MB reclaimed from target/."
+
+sweep: ## Prune STALE Rust artifacts (other toolchains, >14d untouched), keeping the build warm
+	@if ! command -v cargo-sweep >/dev/null 2>&1; then \
+	  echo "cargo-sweep not installed. Install it with:"; \
+	  echo "  cargo install cargo-sweep"; \
+	  echo "Or run 'make clean' to wipe target/ entirely (forces a full rebuild)."; \
+	  exit 1; \
+	fi
+	@before=$$(du -sk target 2>/dev/null | awk '{print $$1}'); before=$${before:-0}; \
+	 cargo sweep --installed; \
+	 cargo sweep --time 14; \
+	 after=$$(du -sk target 2>/dev/null | awk '{print $$1}'); after=$${after:-0}; \
+	 echo "Swept — $$(( (before - after) / 1024 )) MB reclaimed, current working set kept warm."
 
 clean-cache: ## Prune stale rustc incremental caches (keep 5 newest per crate, macOS stat)
 	@echo "Pruning stale rustc incremental caches (keeping 5 newest per crate)..."

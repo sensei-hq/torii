@@ -22,8 +22,22 @@ help: ## Show this help message
 
 # ── JS / Bun ──────────────────────────────────────────────────────────────────
 
-install: ## Install all JS dependencies via bun
+install: ## Install everything: JS dependencies + the Rust API layer on PATH, then reclaim disk
+	@# `bun install` is only linking — it costs no meaningful disk. The Rust API layer
+	@# (services/gateway) is what actually fills the drive, so it is the half worth reclaiming,
+	@# and it belongs in `install` rather than being a separate step you have to remember.
 	bun install
+	@# Same shape as dbd: install, then reclaim, preserving the INSTALL's exit status so a
+	@# failed reclaim never reports as a failed install — and a failed install still gets its
+	@# disk back. Safe to wipe target/ here precisely because the binary is now in ~/.cargo/bin.
+	@ok=0; \
+	 cargo install --path services/gateway --locked --force --debug || ok=$$?; \
+	 $(RECLAIM); \
+	 if [ $$ok -ne 0 ]; then \
+	   echo "Install FAILED (exit $$ok) — disk was still reclaimed. Fix the build, re-run 'make install'."; \
+	   exit $$ok; \
+	 fi; \
+	 echo "torii-gateway is on your PATH ($(GW_BIN))."
 
 build: ## Build all JS workspaces (apps only) then the Cargo workspace
 	bun run build
@@ -56,7 +70,12 @@ e2e: ## Run Playwright e2e for admin and desktop (desktop e2e builds the Tauri a
 
 GW_LABEL  := dev.torii.gateway
 GW_PLIST  := $(HOME)/Library/LaunchAgents/$(GW_LABEL).plist
-GW_BIN    := $(CURDIR)/target/debug/torii-gateway
+# The INSTALLED binary, not target/debug/. Two reasons, one of which bit us:
+#   · `make clean` wipes target/, and the launchd service holds the running inode — so the
+#     gateway keeps serving from a deleted file and only fails at the NEXT restart, long after
+#     the clean that caused it. Installing outside target/ makes clean safe by construction.
+#   · it is where `cargo install` puts it, so the service and the CLI run the same build.
+GW_BIN    := $(HOME)/.cargo/bin/torii-gateway
 GW_CWD    := $(CURDIR)/services/gateway
 GW_LOG    := $(GW_CWD)/gateway.log
 GW_DOMAIN := gui/$(shell id -u)
@@ -67,8 +86,12 @@ GW_WAIT = for i in $$(seq 1 15); do \
 	    echo "$(1): health 200"; exit 0; fi; sleep 1; \
 	done; echo "$(1): not healthy after 15s -- check: make gateway-logs"
 
-gateway-build: ## Build the torii-gateway binary (debug)
-	cargo build -p torii-gateway
+gateway-build: ## Build torii-gateway and put it on PATH (debug profile — fast dev loop)
+	@# `cargo install --debug` rather than `cargo build`: same debug profile and the same warm
+	@# target/, but the artifact lands in ~/.cargo/bin instead of target/debug. That is what
+	@# makes `make clean` safe — the service (GW_BIN) keeps running a binary clean cannot
+	@# delete. --force because the version rarely changes between dev builds.
+	cargo install --path services/gateway --locked --force --debug
 
 gateway-service: gateway-build ## Install + start the gateway as a launchd service (auto-restart)
 	@test -f "$(GW_CWD)/.env" || { echo "!! Missing $(GW_CWD)/.env — copy .env.example and fill it in first."; exit 1; }

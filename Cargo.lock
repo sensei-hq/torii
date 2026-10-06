@@ -7497,6 +7497,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tools",
+ "torii-core",
  "tower-http",
  "tracing",
  "tracing-subscriber",

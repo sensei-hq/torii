@@ -13,9 +13,28 @@ async fn the_gateway_config_is_built_from_the_platform_catalog() {
         return;
     };
     let pool = sqlx::PgPool::connect(&url).await.expect("connect");
-    let cfg = torii_core::load_gateway_config(&pool)
+    // The seed's routers are all active, so add an INACTIVE one: without it, a loader that
+    // dropped its is_active filter would pass. Uniquely named, removed below.
+    let inactive = format!("tm8-inactive-{}", std::process::id());
+    sqlx::query(
+        "insert into catalog.routers (name, router_type, is_active, modified_by) \
+         values ($1, 'aggregator', false, 'tm8-test')",
+    )
+    .bind(&inactive)
+    .execute(&pool)
+    .await
+    .expect("seed an inactive router");
+    let loaded = torii_core::load_gateway_config(&pool).await;
+    sqlx::query("delete from catalog.routers where name = $1")
+        .bind(&inactive)
+        .execute(&pool)
         .await
-        .expect("the platform catalog loads");
+        .expect("remove the inactive router");
+    let cfg = loaded.expect("the platform catalog loads");
+    assert!(
+        !cfg.routers.contains_key(&inactive),
+        "an inactive router is not loaded"
+    );
 
     // Routers: exactly the active ones.
     let active: Vec<(String,)> = sqlx::query_as("select name from catalog.routers where is_active")

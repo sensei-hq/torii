@@ -28,7 +28,6 @@ mod apikeys; // H2: API-key generation + argon2 hash/verify (identity-bound)
 mod auth;
 mod budgets; // C3: budget-node resolution + hard reserve→commit on the inference hot path
 mod capabilities; // F2: server-side capability resolution + claims-version gate
-mod config_loader;
 mod devices; // O3-4: device-fleet pure logic (buffer-health verdict, config drift, sync-policy validation)
 mod governance; // C4: output redaction + injection scan + why-this-model governance
 mod judge; // C6: opt-in LLM-as-judge (local gemma4) → judge_score signal
@@ -166,7 +165,7 @@ async fn main() -> anyhow::Result<()> {
     // Load the real GatewayConfig from the Postgres config tables (Task 4).
     // Reads catalog.routers, catalog.models, and catalog.chains for the
     // platform tenant; logs router/model/chain counts on success.
-    let config = config_loader::load_gateway_config(&pool).await?;
+    let config = torii_core::load_gateway_config(&pool).await?;
 
     // Build the router_id → env_var_name map before Gateway::new moves config.
     let router_env = keys::router_env_map(&config);

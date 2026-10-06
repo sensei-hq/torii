@@ -80,7 +80,7 @@ impl GatewayStore for PgGatewayStore {
         //
         // §D LN-3b: FK-normalize the routing identity at write. The `ep` LATERAL resolves the winning
         // catalog endpoint from (adapter=$5 → routers.name, api_model_id=$7 → model_endpoints.router_model_id)
-        // using the is_default desc / priority asc tiebreak — the SAME lateral config_loader uses to *derive*
+        // using the is_default desc / priority asc tiebreak — the SAME lateral torii_core::config uses to *derive*
         // api_model_id, so a recorded api_model_id resolves back to the identical endpoint by construction.
         // LEFT JOIN LATERAL over a 1-row source ⇒ a no-match still inserts the call with NULL endpoint/model/
         // router_id (fail-soft — a resolution miss NEVER blocks a call). adapter/model/chain_id free-text are

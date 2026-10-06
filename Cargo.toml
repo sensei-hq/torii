@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/desktop/src-tauri", "crates/orchestrator-store", "crates/tools", "services/gateway"]
+members = ["apps/desktop/src-tauri", "crates/core", "crates/orchestrator-store", "crates/tools", "services/gateway"]
 # "services/gateway" added in the Phase 2 plan
 resolver = "2"
 

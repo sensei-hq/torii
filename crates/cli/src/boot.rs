@@ -1353,7 +1353,7 @@ mod tests {
             Ok(_) => panic!("heavy() must refuse a registry bound to an undefined chain"),
             Err(e) => e,
         };
-        t.drop().await;
+        drop(t);
         assert!(
             err.message.contains("torii-chain-nobody-defined")
                 && err.message.contains("torii-unbound-probe-agent")
@@ -1383,7 +1383,7 @@ mod tests {
             .expect("seed");
         let env = tenant_env(&url, t.id, "torii-selector-probe-fence");
         let deps = heavy(&env, None, None).await;
-        t.drop().await;
+        drop(t);
         let deps = deps.expect("boots against the catalog's chat chain");
         assert!(
             deps.scheduler.executor().has_reconciler_for("fs_write"),
@@ -1437,7 +1437,7 @@ mod tests {
         let before = backend_count(&t.pool, &tag).await;
         let deps = heavy(&env, None, None).await;
         let after = backend_count(&t.pool, &tag).await;
-        t.drop().await;
+        drop(t);
         let deps = deps.expect("boots");
         assert_eq!(before, 0, "the probe tag is unique to this call");
         assert!(

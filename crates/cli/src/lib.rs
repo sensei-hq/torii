@@ -85,6 +85,7 @@ pub(crate) mod test_tenant {
     pub(crate) struct TestTenant {
         pub(crate) id: uuid::Uuid,
         pub(crate) pool: sqlx::PgPool,
+        url: String,
     }
 
     impl TestTenant {
@@ -100,20 +101,40 @@ pub(crate) mod test_tenant {
             .execute(&pool)
             .await
             .expect("create the test tenant");
-            Self { id, pool }
+            Self {
+                id,
+                pool,
+                url: database_url.to_string(),
+            }
         }
 
         pub(crate) fn stores(&self) -> torii_core::TenantStores {
             torii_core::TenantStores::open(&self.pool, self.id)
         }
+    }
 
-        /// Cascades every row the tenant owns away.
-        pub(crate) async fn drop(self) {
-            sqlx::query("delete from core.tenants where id = $1")
-                .bind(self.id)
-                .execute(&self.pool)
-                .await
-                .expect("drop the test tenant");
+    /// Cascades every row the tenant owns away — also when the test panicked. Over a FRESH
+    /// connection on its own thread: the pool belongs to the test's runtime, which `Drop`
+    /// cannot drive.
+    impl Drop for TestTenant {
+        fn drop(&mut self) {
+            let (url, id) = (self.url.clone(), self.id);
+            let _ = std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                rt.block_on(async move {
+                    use sqlx::Connection;
+                    if let Ok(mut c) = sqlx::PgConnection::connect(&url).await {
+                        let _ = sqlx::query("delete from core.tenants where id = $1")
+                            .bind(id)
+                            .execute(&mut c)
+                            .await;
+                    }
+                });
+            })
+            .join();
         }
     }
 }

@@ -321,7 +321,6 @@ pub fn interactive_confirm(prompt: &str, r: &mut impl BufRead, w: &mut impl Writ
 mod tests {
     use super::*;
     use orchestrator_core::{Activation, SkillDef};
-    use orchestrator_store::postgres::PostgresConfigSource;
 
     /// Push-time attribution, through the function boot shares (TM-4).
     fn unresolved_chain_refs(
@@ -939,17 +938,16 @@ mod tests {
     // is replace-all, so seeding via it establishes exactly our state regardless of
     // leftover rows from other probing.
 
-    /// Every test below that writes or measures the durable config holds `config_guard` —
-    /// see its definition for why it lives at crate root rather than here. `db_url` lives
-    /// there too so its skip notice (WHOLE-SLICE FIX 6) covers every DB-gated test in the
-    /// crate from one place.
-    use crate::test_guard::{config_guard, db_url};
+    /// Every test below that writes or measures the durable config owns a fresh tenant
+    /// (`crate::test_tenant`), which isolates its registry and generation completely. `db_url`
+    /// (crate root) is the one skip notice (WHOLE-SLICE FIX 6) for every DB-gated test.
+    use crate::test_guard::db_url;
 
     /// A scheduler store with NOTHING paused. `push` reads it only to count the in-flight
     /// work a generation bump would strand, and every test below is about config
     /// semantics — so an empty in-memory store keeps the paused-run gate out of the way.
-    /// Deliberately NOT the real `PostgresSchedulerStore`: `scheduled_runs` is a shared
-    /// table with hundreds of leftover rows, which would make every push here prompt.
+    /// In-memory on purpose: these tests are about config, and the paused-run count `push`
+    /// discloses has its own test below.
     fn no_paused_runs() -> orchestrator_store::InMemorySchedulerStore {
         orchestrator_store::InMemorySchedulerStore::default()
     }
@@ -975,9 +973,8 @@ mod tests {
     #[tokio::test]
     async fn a_confirmed_push_refuses_when_the_diff_went_stale_mid_prompt() {
         let Some(url) = db_url() else { return };
-        let _guard = config_guard().await;
-        let src =
-            PostgresConfigSource::new(orchestrator_store::postgres::connect(&url).await.unwrap());
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let src = t.stores().config;
 
         let a = format!("a-{}", uuid::Uuid::new_v4());
         let b = format!("b-{}", uuid::Uuid::new_v4());
@@ -994,6 +991,7 @@ mod tests {
         // prompt for minutes leaves a window open. It spins up its own thread + runtime
         // so the concurrent write runs to completion independently of this test's
         // runtime, then answers "yes".
+        let tenant = t.id;
         let mut confirm = |_text: &str| {
             let url = url.clone();
             let entry = skill(&survivor, "z");
@@ -1003,9 +1001,11 @@ mod tests {
                     .build()
                     .unwrap();
                 rt.block_on(async move {
-                    let concurrent = PostgresConfigSource::new(
-                        orchestrator_store::postgres::connect(&url).await.unwrap(),
-                    );
+                    let concurrent = torii_core::TenantStores::open(
+                        &torii_core::connect(&url, 2).await.unwrap(),
+                        tenant,
+                    )
+                    .config;
                     concurrent
                         .store_and_bump(&RegistryConfig {
                             agents: vec![],
@@ -1061,9 +1061,8 @@ mod tests {
     #[tokio::test]
     async fn a_declined_push_refuses_without_repeating_the_diff_text() {
         let Some(url) = db_url() else { return };
-        let _guard = config_guard().await;
-        let src =
-            PostgresConfigSource::new(orchestrator_store::postgres::connect(&url).await.unwrap());
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let src = t.stores().config;
         let a = format!("decline-{}", uuid::Uuid::new_v4());
         src.store_and_bump(&cfg(vec![skill(&a, "x")]))
             .await
@@ -1097,9 +1096,8 @@ mod tests {
     #[tokio::test]
     async fn write_and_report_keeps_the_diff_text_when_confirm_was_never_called() {
         let Some(url) = db_url() else { return };
-        let _guard = config_guard().await;
-        let src =
-            PostgresConfigSource::new(orchestrator_store::postgres::connect(&url).await.unwrap());
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let src = t.stores().config;
         let text = "config diff (durable vX -> ./cfg):\n  - skill  gone\n".to_string();
         let out = write_and_report(&src, &cfg(vec![]), u64::MAX, Some(&text))
             .await
@@ -1124,9 +1122,8 @@ mod tests {
     #[tokio::test]
     async fn write_and_report_omits_the_diff_text_when_confirm_already_showed_it() {
         let Some(url) = db_url() else { return };
-        let _guard = config_guard().await;
-        let src =
-            PostgresConfigSource::new(orchestrator_store::postgres::connect(&url).await.unwrap());
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let src = t.stores().config;
         let out = write_and_report(&src, &cfg(vec![]), u64::MAX, None)
             .await
             .unwrap();
@@ -1156,14 +1153,9 @@ mod tests {
     #[tokio::test]
     async fn a_genuine_first_push_lands_through_the_real_push_path_when_the_row_is_absent() {
         let Some(url) = db_url() else { return };
-        let _guard = config_guard().await;
-        let pool = orchestrator_store::postgres::connect(&url).await.unwrap();
-        let src = PostgresConfigSource::new(pool.clone());
-
-        sqlx::query("delete from orchestrator.config_versions")
-            .execute(&pool)
-            .await
-            .unwrap();
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        // A fresh tenant has never published: no `registry` component in its config_versions.
+        let src = t.stores().config;
         assert_eq!(
             src.version().await.unwrap(),
             Some(0),
@@ -1215,9 +1207,8 @@ mod tests {
     #[tokio::test]
     async fn a_push_validates_then_refuses_then_applies_against_a_live_database() {
         let Some(url) = db_url() else { return };
-        let _guard = config_guard().await;
-        let src =
-            PostgresConfigSource::new(orchestrator_store::postgres::connect(&url).await.unwrap());
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let src = t.stores().config;
 
         // Seed a known durable state: a push is replace-all, so after this the durable
         // config IS exactly this one skill, whatever other tests left behind.
@@ -1326,9 +1317,8 @@ mod tests {
     #[tokio::test]
     async fn a_pure_addition_prompts_and_names_the_paused_runs_it_would_strand() {
         let Some(url) = db_url() else { return };
-        let _guard = config_guard().await;
-        let src =
-            PostgresConfigSource::new(orchestrator_store::postgres::connect(&url).await.unwrap());
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let src = t.stores().config;
         let v0 = src.store_and_bump(&cfg(vec![])).await.unwrap();
 
         // A single chain binding: pure JSON (no frontmatter), assembles fine on its own,

@@ -156,8 +156,6 @@ fn baseline_local_config() -> GatewayConfig {
     models.insert(
         "gemma2:2b".into(),
         ModelConfig {
-            // gateway 0.6+: free-tier terms + attribute tags; not modelled on the desktop.
-            catalog: None,
             id: "gemma2:2b".into(),
             // The id the resolver keys on when locating the GGUF bytes in the
             // managed dir / Ollama cache.
@@ -168,6 +166,9 @@ fn baseline_local_config() -> GatewayConfig {
             max_output_tokens: 1_024,
             pricing: None,
             family: None, // MIG-3 (v0.4.6): panel distinctness lineage; None ⇒ id-is-family
+            // SP-CAT: no catalog metadata for an embedded local model — it has no
+            // free-tier terms or cost band to declare. None ⇒ the engine derives what it can.
+            catalog: None,
         },
     );
 

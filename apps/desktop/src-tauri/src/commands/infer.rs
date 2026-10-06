@@ -62,7 +62,6 @@ pub async fn infer(
         .collect();
 
     let req = InferenceRequest {
-        routing: None, // no per-request provider routing preferences
         capability: Capability::TextChat,
         // Default to the user's persisted choice (falls back to "gemma2:2b" when
         // unset) — see `commands::models::{set_default_model, read_default}`.
@@ -81,6 +80,8 @@ pub async fn infer(
         budget: None,
         // MIG-3 (v0.4.6): AUTH/panel/consensus addressing — unused on the local plane.
         auth: None,
+        // SP-ROUTE-1: the local chain's own order is the policy.
+        routing: None,
         panel: None,
         consensus: None,
         // Local plane: keep the prior walk-the-chain fallback behaviour; embedded local

@@ -20,7 +20,9 @@ export default tseslint.config(
 			// Rust source — linted by cargo clippy, not ESLint
 			'apps/*/src-tauri/**',
 			// Design mockups (static HTML/JSX, not part of the app)
-			'docs/mockups/**'
+			'docs/mockups/**',
+			// Generated vitest coverage reports
+			'**/coverage/**'
 		]
 	},
 

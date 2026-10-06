@@ -8,7 +8,10 @@ export default defineConfig({
 	plugins: [svelte()],
 	test: {
 		environment: 'node',
-		include: ['src/**/*.spec.ts', 'src/**/*.spec.svelte.ts'],
+		// `e2e/**/*.test.ts` is deliberately `.test.ts`, not `.spec.ts`: Playwright owns
+		// `e2e/*.spec.ts`, so the harness's own pure helpers (mockups resolution) are unit-
+		// tested here without Playwright trying to run them as browser specs.
+		include: ['src/**/*.spec.ts', 'src/**/*.spec.svelte.ts', 'e2e/**/*.test.ts'],
 		coverage: {
 			provider: 'v8',
 			// Cover the testable logic: pure derivations + runes state modules. The api.ts
@@ -19,6 +22,8 @@ export default defineConfig({
 			all: true,
 			include: ['src/lib/**/*.ts', 'src/lib/**/*.svelte.ts'],
 			exclude: ['src/lib/api.ts', 'src/lib/env.ts', 'src/lib/auth-flow.ts', '**/*.spec.*'],
+			// `lcov` feeds the Qlty upload in .github/workflows/coverage.yml.
+			reporter: ['text', 'lcov'],
 			thresholds: { lines: 80, functions: 80, statements: 80 }
 		}
 	}

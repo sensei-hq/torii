@@ -243,7 +243,6 @@ pub async fn ask(
         ((clean_query.chars().count() + system.chars().count()) / 4).min(u32::MAX as usize) as u32;
 
     let mut ireq = InferenceRequest {
-        routing: None, // no per-request provider routing preferences
         capability: Capability::TextChat,
         model: None,
         router: None,
@@ -261,6 +260,8 @@ pub async fn ask(
         consensus: None,
         allow_fallback,
         credentials: Default::default(),
+        // SP-ROUTE-1: default strategy; Ask does not expose per-request routing knobs.
+        routing: None,
     };
     inject_tenant_credentials(&state, Some(tenant), &mut ireq).await;
 

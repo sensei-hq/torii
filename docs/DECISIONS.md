@@ -216,3 +216,55 @@ genuinely-open / deviation items resolved:
 
 *(Doc note: `BUILD-PROGRESS.md` is stale — it lists the W1 admin portal as "next" though it is
 substantially built with real endpoints; reconcile when convenient.)*
+
+## 11. Gateway is a library; torii owns persistence (RATIFIED 2026-09-17)
+
+Ruled by Jerry. Settles the boundary between the `sensei-hq/gateway` engine repo and this
+monorepo, and **overrides gateway's SP-DATA Phase 4 plan**.
+
+**The ruling.** *"Gateway will always be a library, but torii will be the web interface and the
+persistence. Moving these to gateway will break its usage as a library."*
+
+| concern | owner |
+|---|---|
+| Routing, adapters, capability traits, selection, gates, orchestrator kernel, vault crypto | **gateway** (library) |
+| *Trait definitions* for persistence (`GatewayStore`, and a catalog/metering seam) | **gateway** (library) |
+| All Postgres schema, migrations, tenancy, RLS | **torii** (dbd) |
+| Catalog / config / metering data, registry content, staging, versioning, publish | **torii** |
+| Every web and admin surface | **seiki** / **torii** |
+
+**This is gateway's own established pattern, not a new constraint.** Verified 2026-09-17
+against `~/Developer/gateway` @ `1ac4e4e`:
+
+- `crates/gateway` — the library — has **no database dependency at all**. `GatewayStore` is a
+  trait with an in-memory impl; torii implements it over Postgres
+  (`services/gateway/src/store.rs`). That seam already works and is the precedent to extend.
+- Where a crate *does* touch a DB, it is feature-gated off by default: `vault` has
+  `sqlx = ["dep:sqlx"]`, and `orchestrator-store` has `postgres = ["dep:sqlx"]` commented
+  *"Off by default so the crate stays dependency-light + the InMemory path is byte-identical;
+  a deployment enables it."*
+
+So the departure is `docs/features/data-tier/` in the gateway repo, which plans a subsystem
+**"extracted from torii"** covering torii's `catalog` / `config` / `metering` schemas
+(`catalog-control-plane.md`, `metering-store.md`, `management-api.md`), with
+`tiers-and-chains.md` naming torii's `routing_policies` / `chain_models` / `chain_bindings`
+directly. **That extraction is cancelled.**
+
+**Consequences.**
+1. Gateway gains a **trait seam** for catalog + metering, mirroring `GatewayStore`; any
+   Postgres impl stays behind an off-by-default feature or lives in torii entirely.
+2. Torii supplies the data-tier. This is what un-stubs six gateway features that are currently
+   deferred purely for want of persistence — `headroom`/`least-used` intra-tier strategies
+   (today they silently fall back to `priority`), usage metering, predicted lockout, config
+   versioning, expiration tracking, and the external-DB catalog loader.
+3. The `orchestrator` schema in gateway's own dbd project (`sensei-orchestrator`, 11 tables)
+   **must not back a Seiki screen as-is**: no table carries a `tenant_id`, there is no RLS, and
+   `config_versions` is a hard singleton — so one tenant's publish would terminally kill every
+   other tenant's paused runs. Tenant-scoped equivalents belong in torii's dbd project.
+4. Gateway's `crates/torii` CLI control-plane is a **dev/ops tool**, not the product's config
+   surface; if it keeps a `config push`, it targets torii's schema.
+5. Action in the gateway repo: redirect or delete `docs/features/data-tier/` so it stops
+   describing an extraction, and note the ownership split in the feature index.
+
+Detail and the work breakdown: `analysis/2026-09-17-gateway-features-to-torii-work.md`;
+screens and crate delta: `analysis/2026-09-17-seiki-torii-gateway-alignment.md`.

@@ -10,7 +10,7 @@
 ## Bun workspaces: packages/* apps/*
 ## Cargo workspace: Cargo.toml at monorepo root → target/ at monorepo root
 
-.PHONY: install build test check lint fmt fmt-check hooks e2e clean clean-cache clean-all help bump \
+.PHONY: install build test check lint fmt fmt-check hooks e2e clean clean-cache clean-all sweep help bump \
         gateway-build gateway-service gateway-restart gateway-stop gateway-logs gateway-status
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -22,8 +22,22 @@ help: ## Show this help message
 
 # ── JS / Bun ──────────────────────────────────────────────────────────────────
 
-install: ## Install all JS dependencies via bun
+install: ## Install everything: JS dependencies + the Rust API layer on PATH, then reclaim disk
+	@# `bun install` is only linking — it costs no meaningful disk. The Rust API layer
+	@# (services/gateway) is what actually fills the drive, so it is the half worth reclaiming,
+	@# and it belongs in `install` rather than being a separate step you have to remember.
 	bun install
+	@# Same shape as dbd: install, then reclaim, preserving the INSTALL's exit status so a
+	@# failed reclaim never reports as a failed install — and a failed install still gets its
+	@# disk back. Safe to wipe target/ here precisely because the binary is now in ~/.cargo/bin.
+	@ok=0; \
+	 cargo install --path services/gateway --locked --force --debug || ok=$$?; \
+	 $(RECLAIM); \
+	 if [ $$ok -ne 0 ]; then \
+	   echo "Install FAILED (exit $$ok) — disk was still reclaimed. Fix the build, re-run 'make install'."; \
+	   exit $$ok; \
+	 fi; \
+	 echo "torii-gateway is on your PATH ($(GW_BIN))."
 
 build: ## Build all JS workspaces (apps only) then the Cargo workspace
 	bun run build
@@ -71,7 +85,12 @@ e2e: ## Run Playwright e2e for admin and desktop (desktop e2e builds the Tauri a
 
 GW_LABEL  := dev.torii.gateway
 GW_PLIST  := $(HOME)/Library/LaunchAgents/$(GW_LABEL).plist
-GW_BIN    := $(CURDIR)/target/debug/torii-gateway
+# The INSTALLED binary, not target/debug/. Two reasons, one of which bit us:
+#   · `make clean` wipes target/, and the launchd service holds the running inode — so the
+#     gateway keeps serving from a deleted file and only fails at the NEXT restart, long after
+#     the clean that caused it. Installing outside target/ makes clean safe by construction.
+#   · it is where `cargo install` puts it, so the service and the CLI run the same build.
+GW_BIN    := $(HOME)/.cargo/bin/torii-gateway
 GW_CWD    := $(CURDIR)/services/gateway
 GW_LOG    := $(GW_CWD)/gateway.log
 GW_DOMAIN := gui/$(shell id -u)
@@ -82,8 +101,12 @@ GW_WAIT = for i in $$(seq 1 15); do \
 	    echo "$(1): health 200"; exit 0; fi; sleep 1; \
 	done; echo "$(1): not healthy after 15s -- check: make gateway-logs"
 
-gateway-build: ## Build the torii-gateway binary (debug)
-	cargo build -p torii-gateway
+gateway-build: ## Build torii-gateway and put it on PATH (debug profile — fast dev loop)
+	@# `cargo install --debug` rather than `cargo build`: same debug profile and the same warm
+	@# target/, but the artifact lands in ~/.cargo/bin instead of target/debug. That is what
+	@# makes `make clean` safe — the service (GW_BIN) keeps running a binary clean cannot
+	@# delete. --force because the version rarely changes between dev builds.
+	cargo install --path services/gateway --locked --force --debug
 
 gateway-service: gateway-build ## Install + start the gateway as a launchd service (auto-restart)
 	@test -f "$(GW_CWD)/.env" || { echo "!! Missing $(GW_CWD)/.env — copy .env.example and fill it in first."; exit 1; }
@@ -156,17 +179,63 @@ bump: ## Bump VERSION + all package.json / Cargo.toml / tauri.conf in lockstep, 
 	@git commit -m "chore: bump to v$(_v)"
 	@git tag "v$(_v)"
 	@echo "Committed + tagged v$(_v). To release: git push origin HEAD && git push origin v$(_v), then merge develop->main (triggers the CF + Fly deploys)."
+	@# Reclaim AFTER the tag, never before: the bump's `cargo check` artifacts have done their
+	@# job once the version is committed. A failure here must not imply the bump failed — the
+	@# tag exists either way — so $$ok is reported separately from the release outcome.
+	@ok=0; \
+	 $(RECLAIM); \
+	 if [ $$ok -ne 0 ]; then \
+	   echo ""; \
+	   echo "v$(_v) is committed and tagged — the bump itself succeeded."; \
+	   echo "Only the disk reclaim failed; run 'make clean' when convenient."; \
+	 fi
 
 # ── Clean / Disk management ───────────────────────────────────────────────────
 
+# Reclaim disk after a target that built Rust, reporting what it actually freed — the point
+# of this is a number you can verify, not a reassuring message. Modelled on dbd's
+# INSTALL_AND_RECLAIM: it preserves the CALLER's exit status in $$ok, so a reclaim failure
+# never masks a failed build, and a failed build still gets its disk back.
+#
+# Only `bump` calls this. It is deliberately NOT on `install` (that is `bun install` — no Rust
+# artifacts to reclaim, and cleaning would throw away a warm target/ for nothing) nor on
+# `gateway-build`/`gateway-restart` (run repeatedly during development; cleaning after each
+# would force a full recompile every time). `bump` is the release boundary, where the
+# artifacts have served their purpose — the same place dbd reclaims.
+define RECLAIM
+	before=$$(du -sk target 2>/dev/null | awk '{print $$1}'); before=$${before:-0}; \
+	echo "Reclaiming disk: removing Rust build artifacts..."; \
+	if cargo clean; then \
+	  freed=$$(( before / 1024 )); \
+	  echo "target/ cleaned — $${freed} MB reclaimed; the next build recompiles against the current lockfile."; \
+	else \
+	  echo "WARNING: cargo clean failed — target/ is still on disk."; \
+	  if [ $$ok -eq 0 ]; then ok=1; fi; \
+	fi
+endef
+
 clean: ## Reclaim disk: remove Cargo target/, .svelte-kit, build dirs, Playwright artefacts
-	@echo "Cleaning Cargo target/ (root workspace)..."
-	cargo clean
-	@echo "Cleaning SvelteKit build artefacts..."
-	rm -rf apps/*/.svelte-kit apps/*/build build dist
-	@echo "Pruning Playwright test artefacts..."
-	find . -type d \( -name test-results -o -name playwright-report \) -prune -exec rm -rf {} +
-	@echo "Clean complete."
+	@before=$$(du -sk target 2>/dev/null | awk '{print $$1}'); before=$${before:-0}; \
+	 echo "Cleaning Cargo target/ (root workspace)..."; \
+	 cargo clean; \
+	 echo "Cleaning SvelteKit build artefacts..."; \
+	 rm -rf apps/*/.svelte-kit apps/*/build build dist; \
+	 echo "Pruning Playwright test artefacts..."; \
+	 find . -type d \( -name test-results -o -name playwright-report \) -prune -exec rm -rf {} + ; \
+	 echo "Clean complete — $$(( before / 1024 )) MB reclaimed from target/."
+
+sweep: ## Prune STALE Rust artifacts (other toolchains, >14d untouched), keeping the build warm
+	@if ! command -v cargo-sweep >/dev/null 2>&1; then \
+	  echo "cargo-sweep not installed. Install it with:"; \
+	  echo "  cargo install cargo-sweep"; \
+	  echo "Or run 'make clean' to wipe target/ entirely (forces a full rebuild)."; \
+	  exit 1; \
+	fi
+	@before=$$(du -sk target 2>/dev/null | awk '{print $$1}'); before=$${before:-0}; \
+	 cargo sweep --installed; \
+	 cargo sweep --time 14; \
+	 after=$$(du -sk target 2>/dev/null | awk '{print $$1}'); after=$${after:-0}; \
+	 echo "Swept — $$(( (before - after) / 1024 )) MB reclaimed, current working set kept warm."
 
 clean-cache: ## Prune stale rustc incremental caches (keep 5 newest per crate, macOS stat)
 	@echo "Pruning stale rustc incremental caches (keeping 5 newest per crate)..."

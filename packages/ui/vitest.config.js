@@ -20,6 +20,16 @@ export default defineConfig({
 	test: {
 		environment: 'jsdom',
 		include: ['src/**/*.spec.svelte.js'],
-		setupFiles: ['src/test-setup.js']
+		setupFiles: ['src/test-setup.js'],
+		coverage: {
+			provider: 'v8',
+			// Unit scope is pure logic + runes state only (component/e2e stays in
+			// Playwright), so the denominator is the non-spec TS surface. `lcov`
+			// feeds the Qlty upload in .github/workflows/coverage.yml.
+			all: true,
+			include: ['src/**/*.ts', 'src/**/*.svelte.ts'],
+			exclude: ['src/**/*.spec.*'],
+			reporter: ['text', 'lcov']
+		}
 	}
 })

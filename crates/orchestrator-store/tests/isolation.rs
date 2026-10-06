@@ -75,7 +75,10 @@ async fn a_tenant_cannot_read_another_tenants_journal_even_for_the_same_run_id()
     .await
     .unwrap();
 
-    assert!(jb.load(run).await.unwrap().is_empty(), "B sees none of A's events");
+    assert!(
+        jb.load(run).await.unwrap().is_empty(),
+        "B sees none of A's events"
+    );
     assert!(jb.load_since(run, 0).await.unwrap().is_empty());
     assert!(
         jb.latest_snapshot(run).await.unwrap().is_none(),
@@ -88,9 +91,19 @@ async fn a_tenant_cannot_read_another_tenants_journal_even_for_the_same_run_id()
     assert_eq!(ja.load(run).await.unwrap().len(), 2, "A's run is untouched");
 
     // B compacting "its" seqs cannot delete A's events, even naming A's seqs directly.
-    let a_seqs: Vec<_> = ja.load(run).await.unwrap().into_iter().map(|(s, _)| s).collect();
+    let a_seqs: Vec<_> = ja
+        .load(run)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(s, _)| s)
+        .collect();
     jb.compact(run, &a_seqs, started()).await.unwrap();
-    assert_eq!(ja.load(run).await.unwrap().len(), 2, "B's compaction never reaches A");
+    assert_eq!(
+        ja.load(run).await.unwrap().len(),
+        2,
+        "B's compaction never reaches A"
+    );
 
     a.drop_tenant().await;
     b.drop_tenant().await;
@@ -175,7 +188,10 @@ async fn the_schedule_is_per_tenant() {
     sa.record_paused(run, Some(now), "gated").await.unwrap();
 
     assert!(sb.status(run).await.unwrap().is_none(), "B sees no status");
-    assert!(sb.list_paused().await.unwrap().is_empty(), "B lists none of A's pauses");
+    assert!(
+        sb.list_paused().await.unwrap().is_empty(),
+        "B lists none of A's pauses"
+    );
     assert!(
         sb.claim_due(now, chrono::Duration::seconds(60), 10)
             .await
@@ -191,14 +207,23 @@ async fn the_schedule_is_per_tenant() {
         "B cannot cancel A's run"
     );
     // The same run id in B is a separate schedule entry, not a duplicate submit.
-    sb.enqueue(run, &g, now).await.expect("B's own submit of the same run id");
+    sb.enqueue(run, &g, now)
+        .await
+        .expect("B's own submit of the same run id");
     // Pruning in B never reaches A's terminal rows.
-    sa.claim_due(now, chrono::Duration::seconds(60), 10).await.unwrap();
-    sa.record_terminal(run, RunStatus::Completed, None).await.unwrap();
+    sa.claim_due(now, chrono::Duration::seconds(60), 10)
+        .await
+        .unwrap();
+    sa.record_terminal(run, RunStatus::Completed, None)
+        .await
+        .unwrap();
     let far = ts(4_000_000_000);
     assert_eq!(sb.count_terminal_before(far).await.unwrap(), 0);
     assert_eq!(sb.prune_terminal(far).await.unwrap(), 0);
-    assert!(sa.status(run).await.unwrap().is_some(), "A's terminal row survives B's prune");
+    assert!(
+        sa.status(run).await.unwrap().is_some(),
+        "A's terminal row survives B's prune"
+    );
 
     a.drop_tenant().await;
     b.drop_tenant().await;
@@ -213,13 +238,16 @@ async fn the_same_run_id_locks_independently_per_tenant() {
     let Some(pool) = pool().await else { return };
     let (a, b) = (Tenant::new(&pool).await, Tenant::new(&pool).await);
     let run = RunId(uuid::Uuid::new_v4());
-    let held = a.scheduler().try_lock_run(run).await.unwrap().expect("A locks");
-    let other = b
+    let held = a
         .scheduler()
         .try_lock_run(run)
         .await
         .unwrap()
-        .expect("B's run with the same id is a different run — its drive is not blocked by A's");
+        .expect("A locks");
+    let other =
+        b.scheduler().try_lock_run(run).await.unwrap().expect(
+            "B's run with the same id is a different run — its drive is not blocked by A's",
+        );
     other.release().await.unwrap();
     held.release().await.unwrap();
     a.drop_tenant().await;
@@ -236,19 +264,27 @@ async fn registry_config_and_generation_are_per_tenant() {
     let (a, b) = (Tenant::new(&pool).await, Tenant::new(&pool).await);
     let (ca, cb) = (a.config(), b.config());
 
-    let ga = ca.store_and_bump_if(&cfg("shared-name", "a-chain"), 0).await.unwrap();
+    let ga = ca
+        .store_and_bump_if(&cfg("shared-name", "a-chain"), 0)
+        .await
+        .unwrap();
     assert_eq!(ga, Some(1));
     // B's first push is ALSO at 0 — A's publish did not move B's generation.
     assert_eq!(cb.version().await.unwrap(), Some(0));
     assert_eq!(
-        cb.store_and_bump_if(&cfg("shared-name", "b-chain"), 0).await.unwrap(),
+        cb.store_and_bump_if(&cfg("shared-name", "b-chain"), 0)
+            .await
+            .unwrap(),
         Some(1),
         "the same skill name in another tenant is not a conflict"
     );
 
     let (cfg_a, gen_a) = ca.load_versioned().await.unwrap();
     assert_eq!(gen_a, Some(1));
-    assert_eq!(cfg_a.chain_bindings[0].chain, "a-chain", "A's binding is A's");
+    assert_eq!(
+        cfg_a.chain_bindings[0].chain, "a-chain",
+        "A's binding is A's"
+    );
     assert_eq!(cfg_a.skills.len(), 1, "A sees only its own skill row");
 
     // B's replace-all (to empty) must not delete A's rows.

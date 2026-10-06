@@ -26,19 +26,31 @@ db_test!(the_journal_keeps_the_conformance_suite, |t: &Tenant| {
     let s = t.journal();
     async move { orchestrator_testkit::journal(&s).await }
 });
-db_test!(the_content_store_keeps_the_conformance_suite, |t: &Tenant| {
-    let s = t.content();
-    async move { orchestrator_testkit::content(&s).await }
-});
-db_test!(the_context_store_keeps_the_conformance_suite, |t: &Tenant| {
-    let s = t.context();
-    async move { orchestrator_testkit::context(&s).await }
-});
-db_test!(the_scheduler_store_keeps_the_conformance_suite, |t: &Tenant| {
-    let s = t.scheduler();
-    async move { orchestrator_testkit::scheduler(&s).await }
-});
-db_test!(the_config_store_keeps_the_conformance_suite, |t: &Tenant| {
-    let s = t.config();
-    async move { orchestrator_testkit::config_store(&s).await }
-});
+db_test!(
+    the_content_store_keeps_the_conformance_suite,
+    |t: &Tenant| {
+        let s = t.content();
+        async move { orchestrator_testkit::content(&s).await }
+    }
+);
+db_test!(
+    the_context_store_keeps_the_conformance_suite,
+    |t: &Tenant| {
+        let s = t.context();
+        async move { orchestrator_testkit::context(&s).await }
+    }
+);
+db_test!(
+    the_scheduler_store_keeps_the_conformance_suite,
+    |t: &Tenant| {
+        let s = t.scheduler();
+        async move { orchestrator_testkit::scheduler(&s).await }
+    }
+);
+db_test!(
+    the_config_store_keeps_the_conformance_suite,
+    |t: &Tenant| {
+        let s = t.config();
+        async move { orchestrator_testkit::config_store(&s).await }
+    }
+);

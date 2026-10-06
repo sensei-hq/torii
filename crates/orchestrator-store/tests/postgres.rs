@@ -7,10 +7,12 @@ mod common;
 use chrono::{DateTime, Duration, Utc};
 use common::{Tenant, pool};
 use orchestrator_core::{
-    ConfigSource, ConfigStore, EffectClass, ExecutionJournal, Graph, JournalError, JournalEvent,
+    AgentBacking, AgentDefinition, ConfigSource, ConfigStore, ContentStore, EffectClass,
+    ExecutionJournal, Graph, JournalError, JournalEvent, NetworkPolicy, Permissions,
     RegistryConfig, RunId, RunStatus, SchedulerStore, SkillDef, ToolSpec,
 };
 use sqlx::PgPool;
+use std::collections::HashMap;
 
 fn run() -> RunId {
     RunId(uuid::Uuid::new_v4())
@@ -283,6 +285,219 @@ async fn claim_due_never_claims_more_than_its_limit_in_a_populated_table() {
     );
     t.drop_tenant().await;
     others.drop_tenant().await;
+}
+
+/// The exactly-once gate needs the claimers to actually OVERLAP: a row another claimer holds
+/// must be SKIPPED, not waited on and not claimed again. An open transaction holds the row lock
+/// exactly as a concurrent `claim_due` does between its select and its commit. Without
+/// `FOR UPDATE SKIP LOCKED` this claim blocks on the lock and then double-claims the run.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn claim_due_skips_a_row_another_claimer_holds() {
+    let Some(pool) = pool().await else { return };
+    let t = Tenant::new(&pool).await;
+    let s = t.scheduler();
+    let r = run();
+    let now = ts(2_400_000);
+    s.enqueue(r, &sg(), now).await.unwrap();
+    s.record_paused(r, Some(now), "gated").await.unwrap();
+
+    let mut other = pool.begin().await.unwrap();
+    sqlx::query(
+        "select run_id from runs.scheduled_runs where tenant_id = $1 and run_id = $2 for update",
+    )
+    .bind(t.id)
+    .bind(r.0)
+    .fetch_one(&mut *other)
+    .await
+    .unwrap();
+    let got = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        s.claim_due(now, Duration::seconds(60), 10),
+    )
+    .await
+    .expect("a held row must be SKIPPED, not waited on")
+    .unwrap();
+    assert!(
+        got.is_empty(),
+        "a row another claimer holds is not claimed again: {got:?}"
+    );
+    other.rollback().await.unwrap();
+    assert_eq!(
+        s.claim_due(now, Duration::seconds(60), 10)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "released ⇒ claimable"
+    );
+    t.drop_tenant().await;
+}
+
+/// The CAS stores arbitrary bytes exactly — binary tool output is not UTF-8.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn the_content_store_round_trips_arbitrary_binary_bytes() {
+    let Some(pool) = pool().await else { return };
+    let t = Tenant::new(&pool).await;
+    let raw: Vec<u8> = vec![
+        0x00, 0xFF, 0xDE, 0xAD, 0xBE, 0xEF, 0x80, 0xC3, 0x28, 0x00, 0x7F,
+    ];
+    let d = t.content().put(&raw).await.unwrap();
+    assert_eq!(t.content().get(&d).await.unwrap(), raw);
+    t.drop_tenant().await;
+}
+
+/// Agents and tools carry NESTED structure (a grants map of `Permissions`, an input schema,
+/// credentials); the jsonb round-trip must preserve it exactly, not just a row with the name.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn agents_and_tools_round_trip_through_jsonb_including_nested_fields() {
+    let Some(pool) = pool().await else { return };
+    let t = Tenant::new(&pool).await;
+    let mut grants = HashMap::new();
+    grants.insert(
+        "fetch".to_string(),
+        Permissions {
+            paths: vec!["/w".into()],
+            commands: vec![],
+            network: NetworkPolicy::Hosts(vec!["x.example.com".into()]),
+            caps: Default::default(),
+        },
+    );
+    let agent = AgentDefinition {
+        default_planner: false,
+        name: "researcher".into(),
+        area: "research".into(),
+        kind: "reasoning".into(),
+        chain: Some("c".into()),
+        chains: HashMap::new(),
+        grants,
+        tools: vec!["fetch".into()],
+        skills: vec!["concise".into()],
+        system_prompt: "be careful".into(),
+        backed_by: AgentBacking::Model,
+    };
+    let input_schema = serde_json::json!({"type":"object","properties":{"q":{"type":"string"}}});
+    let tool = ToolSpec {
+        name: "fetch".into(),
+        description: Some("does a thing".into()),
+        input_schema: input_schema.clone(),
+        effect_class: EffectClass::Observation,
+        ttl_secs: Some(60),
+        source: Some("web".into()),
+        permissions: Permissions {
+            paths: vec!["/w".into()],
+            commands: vec!["ls".into()],
+            network: NetworkPolicy::Deny,
+            caps: Default::default(),
+        },
+        activation: Default::default(),
+        credentials: vec!["api-key".into()],
+    };
+    t.config()
+        .store_and_bump(&RegistryConfig {
+            agents: vec![agent],
+            tools: vec![tool],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let got = t.config().load().await.unwrap();
+    let a = got
+        .agents
+        .iter()
+        .find(|a| a.name == "researcher")
+        .expect("agent round-trips");
+    assert_eq!(a.tools, vec!["fetch".to_string()]);
+    assert_eq!(a.skills, vec!["concise".to_string()]);
+    assert_eq!(a.system_prompt, "be careful");
+    let grant = a.grants.get("fetch").expect("grants map entry survives");
+    assert_eq!(grant.paths, vec!["/w".to_string()]);
+    assert_eq!(
+        grant.network,
+        NetworkPolicy::Hosts(vec!["x.example.com".into()])
+    );
+    let tl = got
+        .tools
+        .iter()
+        .find(|x| x.name == "fetch")
+        .expect("tool round-trips");
+    assert_eq!(tl.input_schema, input_schema);
+    assert_eq!(tl.credentials, vec!["api-key".to_string()]);
+    assert_eq!(tl.permissions.commands, vec!["ls".to_string()]);
+    assert_eq!(tl.effect_class, EffectClass::Observation);
+    assert_eq!(tl.ttl_secs, Some(60));
+    t.drop_tenant().await;
+}
+
+/// Replace-all means ALL four tables: a publish that retires a tool, a binding or an agent
+/// removes it — a leftover tool stays available to agents.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn a_publish_replaces_every_registry_table_not_just_skills() {
+    let Some(pool) = pool().await else { return };
+    let t = Tenant::new(&pool).await;
+    let full = RegistryConfig {
+        agents: vec![AgentDefinition {
+            default_planner: false,
+            name: "gone-agent".into(),
+            area: "a".into(),
+            kind: "k".into(),
+            chain: None,
+            chains: HashMap::new(),
+            grants: HashMap::new(),
+            tools: vec![],
+            skills: vec![],
+            system_prompt: String::new(),
+            backed_by: AgentBacking::Model,
+        }],
+        skills: vec![skill("gone-skill")],
+        tools: vec![cfg_tool("gone-tool")],
+        chain_bindings: vec![orchestrator_core::ChainBinding {
+            area: "a".into(),
+            kind: "k".into(),
+            chain: "gone-chain".into(),
+        }],
+    };
+    t.config().store_and_bump(&full).await.unwrap();
+    let before = t.config().load().await.unwrap();
+    assert_eq!(
+        (
+            before.agents.len(),
+            before.skills.len(),
+            before.tools.len(),
+            before.chain_bindings.len()
+        ),
+        (1, 1, 1, 1),
+        "the seed landed in all four tables"
+    );
+    t.config()
+        .store_and_bump(&RegistryConfig::default())
+        .await
+        .unwrap();
+    let after = t.config().load().await.unwrap();
+    assert!(after.agents.is_empty(), "a retired agent is removed");
+    assert!(after.skills.is_empty(), "a retired skill is removed");
+    assert!(after.tools.is_empty(), "a retired tool is removed");
+    assert!(
+        after.chain_bindings.is_empty(),
+        "a retired binding is removed"
+    );
+    t.drop_tenant().await;
 }
 
 /// THE prune safety property: ancient `paused` (timed AND NULL-deadline) and `waking` rows

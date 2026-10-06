@@ -202,7 +202,39 @@ pub async fn push(
     // registry-visible. Given the catalog, refuse here rather than let the mismatch surface
     // mid-run as an empty candidate set -> `NoCandidates` -> a terminal `NodeFailed` naming
     // neither cause nor remedy. Optional so every existing invocation is unchanged.
-    let _ = gateway_config; // TM-8c red: the chain check is not wired to the source yet
+    // 1b. SP-REG-5. `Registry::validate` above proves every chain id is PRESENT; it cannot
+    // prove any RESOLVES, because the gateway's catalog is not registry-visible. Given the
+    // gateway config — torii's catalog on the Postgres backend, always — refuse here rather
+    // than let the mismatch surface mid-run as `NoCandidates` -> a terminal `NodeFailed`
+    // naming neither cause nor remedy.
+    if let Some(source) = gateway_config {
+        let gw = source
+            .load()
+            .await
+            .map_err(|e| CliError::error(format!("refusing to push: {}", e.message)))?;
+        let missing = crate::boot::unresolved_chain_refs(
+            incoming.agents.iter(),
+            incoming
+                .chain_bindings
+                .iter()
+                .map(|b| (b.area.as_str(), b.kind.as_str(), b.chain.as_str())),
+            &gw.chains,
+        );
+        if !missing.is_empty() {
+            let detail = missing
+                .iter()
+                .map(|(what, chain)| format!("  {what} -> chain {chain:?}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(CliError::error(format!(
+                "refusing to push: {} references {} chain id(s) that {} does not define:\n{}",
+                dir.display(),
+                missing.len(),
+                source.describe(),
+                detail
+            )));
+        }
+    }
 
     // 2. One atomic read of the durable (content, generation) pair.
     let (current, current_v) = src.load_versioned().await?;

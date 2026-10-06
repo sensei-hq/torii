@@ -16,9 +16,11 @@ use torii::{boot, cmd};
     name = "torii",
     about = "Operator control plane for the sensei orchestrator",
     long_about = "Observe and intervene on runs, drive due wakes, and manage durable config.\n\n\
-                  DATABASE_URL must be set (env only — a flag would leak the password into `ps`).\n\
-                  `run submit` and `worker serve` additionally need TORII_FENCE_VERSION and \
-                  --gateway-config.\n\n\
+                  DATABASE_URL and TORII_TENANT (a tenant id or slug) must be set — env only, \
+                  a flag would leak the password into `ps`. The gateway config is torii's \
+                  catalog. `run submit` and `worker serve` additionally need \
+                  TORII_FENCE_VERSION; with TORII_BACKEND=memory (no database) they take \
+                  --gateway-config instead.\n\n\
                   Exit codes: 0 ok, 1 error (including a submitted run that actually executed \
                   and failed), 2 not-found, precondition-not-met, or a result that is complete \
                   enough to print but not the unqualified success you asked for (`run \
@@ -656,7 +658,18 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                             &mut std::io::stderr(),
                         )
                     };
-                    let file_source = gateway_config.map(boot::FileGatewayConfigSource::new); // TM-8c red
+                    // ONE gateway-config source (TM-8c): torii's catalog on Postgres (a
+                    // --gateway-config there is refused), the file — if given — on memory.
+                    let file_source = match &d.gateway_config {
+                        Some(_) => {
+                            boot::gateway_config_file_for(&env.backend, gateway_config.as_deref())?
+                        }
+                        None => gateway_config.map(boot::FileGatewayConfigSource::new),
+                    };
+                    let source: Option<&dyn boot::GatewayConfigSource> = match &file_source {
+                        Some(f) => Some(f),
+                        None => d.gateway_config.as_deref(),
+                    };
                     // The scheduler store rides the same pool `light` already opened —
                     // `push` reads it to disclose how much paused work a generation
                     // bump would strand.
@@ -664,9 +677,7 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                         d.config_source.as_ref(),
                         d.scheduler_store.as_ref(),
                         &dir,
-                        file_source
-                            .as_ref()
-                            .map(|f| f as &dyn boot::GatewayConfigSource),
+                        source,
                         yes,
                         &mut confirm,
                     )

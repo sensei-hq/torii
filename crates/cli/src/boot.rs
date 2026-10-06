@@ -14,10 +14,6 @@ use orchestrator_core::{
     Clock, ConfigSource, ConfigStore, ContentStore, ContextStore, ExecutionJournal,
     PatternRedactor, RegistryHandle, RulePlannerSelector, SchedulerStore, SystemClock,
 };
-use orchestrator_store::postgres::{
-    PostgresConfigSource, PostgresContentStore, PostgresContextStore, PostgresJournal,
-    PostgresSchedulerStore, connect_with_max,
-};
 use orchestrator_store::{
     FilesystemConfigSource, InMemoryConfigStore, InMemoryContentStore, InMemoryContextStore,
     InMemoryJournal, InMemorySchedulerStore,
@@ -32,8 +28,8 @@ pub const ENV_BACKEND: &str = "TORII_BACKEND";
 pub const ENV_REGISTRY_DIR: &str = "TORII_REGISTRY_DIR";
 pub const ENV_TENANT: &str = "TORII_TENANT";
 
-/// [`connect_with_max`]'s own default, restated here as the fallback when
-/// `TORII_POOL_SIZE` is unset — see that function's doc comment for why 8.
+/// The pool cap when `TORII_POOL_SIZE` is unset: one pool serves every store of a worker, so
+/// this is the worker's whole connection budget (`torii_core::connect`).
 const DEFAULT_POOL_SIZE: u32 = 8;
 
 /// A sanity ceiling on `TORII_POOL_SIZE`, not an operational policy. Postgres's own
@@ -157,7 +153,16 @@ fn postgres_backend(non_empty: &impl Fn(&str) -> Option<String>) -> Result<Backe
              database at all, set {ENV_BACKEND}=memory.)"
         ))
     })?;
-    let tenant = non_empty(ENV_TENANT).unwrap_or_default(); // TM-8c red: not yet required
+    let tenant = non_empty(ENV_TENANT)
+        .map(|t| t.trim().to_string())
+        .ok_or_else(|| {
+            CliError::error(format!(
+                "{ENV_TENANT} is not set.\n\
+                 torii's database holds many tenants, and every run, journal and registry \
+                 belongs to one of them — set {ENV_TENANT} to a tenant id or slug. (For a run \
+                 with no database at all, set {ENV_BACKEND}=memory.)"
+            ))
+        })?;
     Ok(Backend::Postgres {
         database_url,
         tenant,
@@ -287,10 +292,13 @@ impl CatalogGatewayConfigSource {
 #[async_trait::async_trait]
 impl GatewayConfigSource for CatalogGatewayConfigSource {
     async fn load(&self) -> Result<kernel::types::config::GatewayConfig, CliError> {
-        let _ = &self.pool;
-        Err(CliError::error(
-            "TM-8c red: the catalog source is not implemented",
-        ))
+        torii_core::load_gateway_config(&self.pool)
+            .await
+            .map_err(|e| {
+                CliError::error(format!(
+                    "cannot load the gateway config from torii's catalog: {e:#}"
+                ))
+            })
     }
     fn describe(&self) -> String {
         "torii's catalog".to_string()
@@ -450,10 +458,33 @@ fn require_agents(
         return Err(CliError::error(format!(
             "the registry at generation {generation} has zero agents (skills={skills}, \
              tools={tools}). A worker with no agents cannot do useful work — run `torii config \
-             push` first, or check that DATABASE_URL points at the intended database."
+             push` first, or check that DATABASE_URL and TORII_TENANT point at the intended database \
+             and tenant."
         )));
     }
     Ok(())
+}
+
+/// The `--gateway-config` file this backend takes, if any (TM-8c): none on Postgres — its gateway
+/// config is torii's catalog, and a file there is refused rather than silently preferred or
+/// ignored — and exactly one on memory, which has no catalog.
+pub fn gateway_config_file_for(
+    backend: &Backend,
+    file: Option<&Path>,
+) -> Result<Option<FileGatewayConfigSource>, CliError> {
+    match (backend, file) {
+        (Backend::Postgres { .. }, None) => Ok(None),
+        (Backend::Postgres { .. }, Some(_)) => Err(CliError::error(format!(
+            "--gateway-config is not accepted with {ENV_BACKEND}=postgres: the gateway config is \
+             torii's catalog — the same one the API routes with — so a file here would be a \
+             second source the API never sees. It is only for {ENV_BACKEND}=memory."
+        ))),
+        (Backend::Memory { .. }, Some(path)) => Ok(Some(FileGatewayConfigSource::new(path))),
+        (Backend::Memory { .. }, None) => Err(CliError::error(format!(
+            "--gateway-config is required with {ENV_BACKEND}=memory: there is no catalog to read \
+             the routers, models and chains from."
+        ))),
+    }
 }
 
 /// Light tier: everything reachable with just a database. No gateway, no model
@@ -487,22 +518,29 @@ struct Stores {
 
 async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
     match &env.backend {
-        Backend::Postgres { database_url, .. } => {
-            // ONE pool for every store: cloning a `PgPool` is an `Arc::clone`, not a new
-            // connection, so the whole process is capped at `TORII_POOL_SIZE` connections
-            // (see `connect_with_max`'s doc comment for why 8 is the default).
-            let pool = connect_with_max(database_url, env.pool_size)
+        Backend::Postgres {
+            database_url,
+            tenant,
+        } => {
+            // torii's database, through torii-core — the same layer the API reads it through.
+            // ONE pool for every store and the catalog: cloning a `PgPool` is an `Arc::clone`,
+            // so the whole process is capped at `TORII_POOL_SIZE` connections.
+            let pool = torii_core::connect(database_url, env.pool_size)
                 .await
                 .map_err(|e| CliError::error(connect_failure(database_url, &e.to_string())))?;
+            let tenant_id = torii_core::resolve_tenant(&pool, tenant)
+                .await
+                .map_err(|e| CliError::error(format!("{ENV_TENANT}: {e}")))?;
+            let stores = torii_core::TenantStores::open(&pool, tenant_id);
             Ok(Stores {
                 light: LightDeps {
-                    scheduler_store: Arc::new(PostgresSchedulerStore::new(pool.clone())),
-                    journal: Arc::new(PostgresJournal::new(pool.clone())),
-                    config_source: Arc::new(PostgresConfigSource::new(pool.clone())),
-                    gateway_config: None, // TM-8c red
+                    scheduler_store: Arc::new(stores.scheduler),
+                    journal: Arc::new(stores.journal),
+                    config_source: Arc::new(stores.config),
+                    gateway_config: Some(Arc::new(CatalogGatewayConfigSource::new(pool))),
                 },
-                content: Arc::new(PostgresContentStore::new(pool.clone())),
-                context: Arc::new(PostgresContextStore::new(pool)),
+                content: Arc::new(stores.content),
+                context: Arc::new(stores.context),
             })
         }
         Backend::Memory { registry_dir } => {
@@ -554,17 +592,16 @@ pub async fn heavy(
     workspace_root: Option<&Path>,
 ) -> Result<HeavyDeps, CliError> {
     let fence = require_fence(env)?.to_string();
-    // TM-8c red: still the file, whatever the backend.
-    let file = FileGatewayConfigSource::new(
-        gateway_config_file.ok_or_else(|| CliError::error("TM-8c red: no gateway config"))?,
-    );
-    let gateway_config: &dyn GatewayConfigSource = &file;
-
-    // Load the gateway config FIRST: for a file source that is pure and offline, so the most
-    // likely operator typo — a bad `--gateway-config` path — is caught instantly instead of
-    // only after a TCP connect and auth handshake.
-    let gw_config = gateway_config.load().await?;
-    let gw_source = gateway_config.describe();
+    // ONE gateway-config source per backend (TM-8c), decided before any connection: the
+    // catalog on Postgres (a file there would be a second source the API never sees), the
+    // file on memory (there is no catalog).
+    let file = gateway_config_file_for(&env.backend, gateway_config_file)?;
+    // A file loads FIRST: it is offline, so a bad `--gateway-config` path is caught before any
+    // store opens.
+    let file_config = match &file {
+        Some(f) => Some(f.load().await?),
+        None => None,
+    };
 
     // Every store from ONE backend (TM-5): for Postgres, one shared pool; for memory, this
     // process's heap. The journal the Executor writes is the SAME one the Scheduler reads, so
@@ -574,6 +611,13 @@ pub async fn heavy(
         content,
         context,
     } = open_stores(env).await?;
+    let (gw_config, gw_source) = match (file_config, &file, &light.gateway_config) {
+        (Some(cfg), Some(f), _) => (cfg, f.describe()),
+        (_, _, Some(catalog)) => (catalog.load().await?, catalog.describe()),
+        _ => {
+            unreachable!("gateway_config_file_for returns a file exactly when there is no catalog")
+        }
+    };
 
     // One atomic (config, generation) read — the fence generation must match the
     // config it was computed from.

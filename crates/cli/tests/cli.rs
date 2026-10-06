@@ -7,6 +7,7 @@ fn torii() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_torii"));
     // Never inherit a developer's real database.
     c.env_remove("DATABASE_URL");
+    c.env_remove("TORII_TENANT");
     c.env_remove("TORII_FENCE_VERSION");
     c
 }
@@ -89,6 +90,7 @@ fn a_missing_database_url_fails_with_a_named_variable() {
 fn an_invalid_run_id_is_rejected_before_any_connection() {
     let out = torii()
         .env("DATABASE_URL", "postgres://nobody@127.0.0.1:1/none")
+        .env("TORII_TENANT", "platform")
         .args(["run", "status", "not-a-uuid"])
         .output()
         .expect("runs");
@@ -164,6 +166,7 @@ fn prune_is_a_light_tier_command_and_a_century_window_deletes_nothing() {
     let Some(url) = db_url() else { return };
     let out = torii()
         .env("DATABASE_URL", &url)
+        .env("TORII_TENANT", "platform")
         .args(["run", "prune", "--older-than", "36500d", "--yes"])
         .output()
         .expect("runs");
@@ -172,7 +175,7 @@ fn prune_is_a_light_tier_command_and_a_century_window_deletes_nothing() {
     assert_eq!(
         out.status.code(),
         Some(0),
-        "prune must need nothing but DATABASE_URL:\n{stderr}"
+        "prune must need nothing but DATABASE_URL and TORII_TENANT:\n{stderr}"
     );
     assert!(
         stdout.contains("nothing to prune"),
@@ -226,6 +229,7 @@ fn signal_help_says_a_signal_is_not_a_credential_channel() {
 fn signal_with_payload(payload: &str) -> std::process::Output {
     torii()
         .env("DATABASE_URL", "postgres://nobody@127.0.0.1:999999/none")
+        .env("TORII_TENANT", "platform")
         .args([
             "run",
             "signal",
@@ -313,6 +317,7 @@ fn a_connect_failure_does_not_leak_the_password() {
     let url = format!("postgres://operator:{pw}@127.0.0.1:999999/none");
     let out = torii()
         .env("DATABASE_URL", &url)
+        .env("TORII_TENANT", "platform")
         .args(["config", "version"])
         .output()
         .expect("runs");
@@ -335,10 +340,11 @@ fn a_connect_failure_does_not_leak_the_password() {
     ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
 )]
 #[test]
-fn a_light_tier_command_runs_with_only_a_database_url() {
+fn a_light_tier_command_runs_with_only_a_database_url_and_a_tenant() {
     let Some(url) = db_url() else { return };
     let out = torii()
         .env("DATABASE_URL", &url)
+        .env("TORII_TENANT", "platform")
         .args(["run", "list-paused"])
         .output()
         .expect("runs");
@@ -346,7 +352,7 @@ fn a_light_tier_command_runs_with_only_a_database_url() {
     assert_eq!(
         out.status.code(),
         Some(0),
-        "the light tier must need nothing but DATABASE_URL:\n{stderr}"
+        "the light tier must need nothing but DATABASE_URL and TORII_TENANT:\n{stderr}"
     );
 }
 
@@ -376,6 +382,7 @@ fn a_payload_file_keeps_the_decision_out_of_argv() {
         // Never-connectable, so the child lives long enough to be observed but performs
         // no I/O — the same out-of-u16-range trick `signal_with_payload` uses.
         .env("DATABASE_URL", "postgres://nobody@127.0.0.1:999999/none")
+        .env("TORII_TENANT", "platform")
         .args([
             "run",
             "signal",
@@ -423,6 +430,7 @@ fn a_payload_file_keeps_the_decision_out_of_argv() {
 fn payload_and_payload_file_are_mutually_exclusive_and_one_is_required() {
     let both = torii()
         .env("DATABASE_URL", "postgres://nobody@127.0.0.1:999999/none")
+        .env("TORII_TENANT", "platform")
         .args([
             "run",
             "signal",
@@ -445,6 +453,7 @@ fn payload_and_payload_file_are_mutually_exclusive_and_one_is_required() {
 
     let neither = torii()
         .env("DATABASE_URL", "postgres://nobody@127.0.0.1:999999/none")
+        .env("TORII_TENANT", "platform")
         .args([
             "run",
             "signal",
@@ -621,6 +630,7 @@ fn agent_help_does_not_enumerate_the_waiting_kinds_as_three() {
 fn gate_reject_requires_a_reason() {
     let out = torii()
         .env("DATABASE_URL", "postgres://nobody@127.0.0.1:999999/none")
+        .env("TORII_TENANT", "platform")
         .args([
             "run",
             "gate",
@@ -817,6 +827,7 @@ fn an_answer_file_keeps_the_text_out_of_argv() {
         // Never-connectable, so the child lives long enough to be observed but performs no
         // I/O — the same out-of-u16-range trick `signal_with_payload` uses.
         .env("DATABASE_URL", "postgres://nobody@127.0.0.1:999999/none")
+        .env("TORII_TENANT", "platform")
         .args([
             "run",
             "agent",
@@ -866,6 +877,7 @@ fn an_answer_file_keeps_the_text_out_of_argv() {
 fn text_and_text_file_are_mutually_exclusive_and_one_is_required() {
     let both = torii()
         .env("DATABASE_URL", "postgres://nobody@127.0.0.1:999999/none")
+        .env("TORII_TENANT", "platform")
         .args([
             "run",
             "agent",
@@ -889,6 +901,7 @@ fn text_and_text_file_are_mutually_exclusive_and_one_is_required() {
 
     let neither = torii()
         .env("DATABASE_URL", "postgres://nobody@127.0.0.1:999999/none")
+        .env("TORII_TENANT", "platform")
         .args([
             "run",
             "agent",
@@ -913,6 +926,7 @@ fn text_and_text_file_are_mutually_exclusive_and_one_is_required() {
 fn an_unreadable_payload_file_is_rejected_before_any_connection() {
     let out = torii()
         .env("DATABASE_URL", "postgres://nobody@127.0.0.1:999999/none")
+        .env("TORII_TENANT", "platform")
         .args([
             "run",
             "signal",

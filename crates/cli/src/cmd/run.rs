@@ -5203,12 +5203,8 @@ pub(crate) mod tests {
     /// The same AC6 claim, against the REAL durable backends rather than in-memory
     /// doubles — because "the secret is not in durable storage" is a claim about
     /// Postgres, and the in-memory journal cannot falsify it. Reads the row back through
-    /// a SECOND `PostgresJournal` over its own connection, so nothing in-process is
-    /// shared with the writer.
-    ///
-    /// Touches only its own freshly-generated run id (`status`/`record_paused`/
-    /// `force_wake` are all run-scoped and no assertion here reads the global paused
-    /// list), so it needs no `scheduled_runs` guard and cannot race another suite.
+    /// a SECOND journal over its own pool, so nothing in-process is shared with the writer.
+    /// Runs in a fresh tenant (`crate::test_tenant`), so it cannot race another suite.
     #[cfg_attr(
         not(have_database_url),
         ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
@@ -5218,11 +5214,10 @@ pub(crate) mod tests {
         let Some(url) = crate::test_guard::db_url() else {
             return;
         };
-        use orchestrator_store::postgres::{PostgresJournal, PostgresSchedulerStore, connect};
-
+        let t = crate::test_tenant::TestTenant::new(&url).await;
         let run = RunId(uuid::Uuid::new_v4());
-        let store = PostgresSchedulerStore::new(connect(&url).await.expect("connect"));
-        let journal = PostgresJournal::new(connect(&url).await.expect("connect"));
+        let stores = t.stores();
+        let (store, journal) = (stores.scheduler, stores.journal);
 
         store.enqueue(run, &empty_graph(), now()).await.unwrap();
         journal
@@ -5265,7 +5260,11 @@ pub(crate) mod tests {
         assert_eq!(out.code, EXIT_OK, "{}", out.text);
 
         // A FRESH reader over its own connection — the durable bytes, not this process's.
-        let reader = PostgresJournal::new(connect(&url).await.expect("connect"));
+        let reader = torii_core::TenantStores::open(
+            &torii_core::connect(&url, 2).await.expect("connect"),
+            t.id,
+        )
+        .journal;
         let events = reader.load(run).await.expect("load");
         let payload = events
             .iter()

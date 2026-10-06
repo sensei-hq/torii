@@ -8,9 +8,8 @@ description = "Tenant-scoped Postgres stores for the gateway orchestrator (regis
 name = "orchestrator_store"
 
 [dependencies]
-# The persistence traits + domain types. Dev resolves via the workspace [patch] to ../gateway;
-# `branch = "develop"` until a gateway release carries ConfigStore + the testkit (TM-2/TM-3),
-# then pin that tag like the other sensei-* deps. Cargo.lock pins the exact commit meanwhile.
+# The persistence traits + domain types — the same gateway git ref as every other sensei-*
+# dependency (TM-8a). Dev resolves via the workspace [patch] to ../gateway.
 orchestrator-core = { package = "sensei-orchestrator-core", git = "https://github.com/sensei-hq/gateway", branch = "develop" }
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }

@@ -46,7 +46,8 @@ quick-xml = "0.41"
 htmd = "0.5"
 image = "0.25"
 csv = "1"
-# MIG-1: real package is `sensei-gateway` (v0.4.6); alias to `gateway` so imports stay short.
+# MIG-1: real package is `sensei-gateway`; alias to `gateway` so imports stay short. Same git ref
+# as every other sensei-* dependency in the workspace (TM-8a).
 gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", branch = "develop" }
 # X1 (P11): the Torii-owned MCP tool runtime — allow-list enforcement, SSRF egress, tool-egress
 # redaction, discovery, the agentic loop. db + net features (central plane).

@@ -1,9 +1,11 @@
 # torii
 
-> **This crate is moving to the Torii product repo** — epic
-> [sensei-hq/gateway#76](https://github.com/sensei-hq/gateway/issues/76), step TM-8
-> ([sensei-hq/torii#26](https://github.com/sensei-hq/torii/issues/26)). Torii `docs/DECISIONS.md` §11:
-> the gateway is a library; torii owns persistence. Until the move lands, everything below holds.
+> **Moved here from the gateway** (`sensei-hq/gateway` `crates/torii`, with its history) — epic
+> [sensei-hq/gateway#76](https://github.com/sensei-hq/gateway/issues/76), TM-8
+> ([#26](https://github.com/sensei-hq/torii/issues/26)); `docs/DECISIONS.md` §11: the gateway is a
+> library, torii owns persistence. It reads torii's database through `torii-core` — the same layer
+> the API (`services/gateway`) uses — so the CLI and the API share one config and one store
+> implementation.
 
 The operator control plane for the sensei orchestrator: submit and observe runs, intervene on the
 ones waiting for a human, drive due wakes, and manage the durable registry config.
@@ -15,33 +17,35 @@ toolkit does not yet do something, it says so rather than describing an intentio
 
 | | |
 |---|---|
-| **A Postgres** | The orchestrator's journal, CAS, context, scheduler and config all live there. |
-| **The schema** | `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/_apply_all.sql` — idempotent (`create … if not exists`), so it is safe to re-run. |
+| **torii's database** | The orchestrator's registry (`registry.*`) and run state (`runs.*`) live there, per tenant, beside the catalog. Apply the schema with `dbd` from `database/` (see `database/README.md`), RLS policies included. |
 | **`DATABASE_URL`** | Environment only. There is deliberately no flag: a flag would leak the password into `ps`. |
+| **`TORII_TENANT`** | The tenant every command acts for — its id or its slug. Required on the Postgres backend: every run, journal and registry belongs to exactly one tenant, and another tenant's are invisible. |
 | **`TORII_FENCE_VERSION`** | Needed by `run submit` and `worker serve`. Set it **explicitly** (e.g. `v1`) and keep a fleet agreed on it — it is recorded in every run and checked on resume, so deriving it from a build version would strand every paused run on a routine deploy. |
 | **`TORII_POOL_SIZE`** | Optional. Defaults are fine to start. |
 | **`TORII_BACKEND`** | Optional: `postgres` (the default — everything above applies) or `memory`. `memory` keeps every store in the process — no database, no `DATABASE_URL` — for development and CI. Nothing survives the process, so a run it submits can only be observed or woken by that same process. |
 | **`TORII_REGISTRY_DIR`** | With `TORII_BACKEND=memory`: the registry directory (the `agents/ skills/ tools/` layout `config push` reads) loaded at boot, since there is no database to push to. |
-| **A gateway config** | `--gateway-config <file>`, JSON. Needed by `run submit` and `worker serve`. |
+| **A gateway config** | On Postgres: **torii's catalog** — routers, models and chains, read by the same `torii_core::load_gateway_config` the API routes with. Nothing to pass; a `--gateway-config` there is refused. With `TORII_BACKEND=memory` only: `--gateway-config <file>` (JSON), required by `run submit` and `worker serve`. |
 
 ## The gateway config
 
-`GatewayConfig` (`kernel::types::config`) is JSON with `routers`, `models`, `chains`, plus optional
-`constraints`, `panels` and consensus workflows. The minimum that boots:
+On the Postgres backend it is **torii's catalog** (`catalog.routers / models / chains`, the platform
+tenant's) — there is one, and the API routes with the same one.
+
+With `TORII_BACKEND=memory` there is no catalog, so `--gateway-config <file>` supplies it:
+`GatewayConfig` (`kernel::types::config`) as JSON with `routers`, `models`, `chains`, plus optional
+`constraints`, `panels` and consensus workflows. `ollama` registers without credentials, which is
+convenient for a first boot:
 
 ```json
 { "routers": { "ollama": { "url": "http://127.0.0.1:11434" } } }
 ```
 
-`ollama` is convenient for a first boot because it registers without credentials. A real
-deployment adds `models` and named `chains`.
-
 > **Know this before you author agents.** An agent's `chain`, its per-phase `chains`, and every
-> `(area, kind)` chain binding are **strings** resolved against *this* file's `chains` map. Two
-> checks keep them in step: `torii config push --gateway-config <file>` refuses a registry that
-> names a chain the file lacks (opt-in, at push time), and `run submit` / `worker serve` **always**
-> refuse to boot on one — naming each missing chain and the agent, phase or binding that names it
-> — rather than letting every run that reaches it fail with no candidates.
+> `(area, kind)` chain binding are **strings** resolved against the gateway config's `chains`. Two
+> checks keep them in step: `torii config push` refuses a registry that names a chain the catalog
+> lacks (always, on Postgres; with `--gateway-config` on memory), and `run submit` /
+> `worker serve` **always** refuse to boot on one — naming each missing chain and the agent, phase
+> or binding that names it — rather than letting every run that reaches it fail with no candidates.
 
 ## The registry directory
 
@@ -81,18 +85,17 @@ the model can call and the runtime cannot serve.
 ## The flow
 
 ```sh
-# 1. schema (idempotent)
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/_apply_all.sql
+export DATABASE_URL=… TORII_TENANT=acme TORII_FENCE_VERSION=v1
 
-# 2. push your registry — replace-all, and it advances the config generation
+# 1. push your registry — replace-all; it advances THIS tenant's config generation
 torii config push ./registry
 torii config version
 
-# 3. run something
-torii run submit --graph ./graph.json --gateway-config ./gateway.json
+# 2. run something
+torii run submit --graph ./graph.json
 
-# 4. or serve wakes continuously
-torii worker serve --gateway-config ./gateway.json
+# 3. or serve this tenant's wakes continuously
+torii worker serve
 ```
 
 **`config push` is replace-all.** What is in the directory becomes the durable config; anything
@@ -100,8 +103,12 @@ absent is removed. It asks for confirmation before removing entities, and before
 generation while runs are paused — `--yes` bypasses both, which is what a CI push needs, since the
 interactive prompt refuses on EOF.
 
-**Any successful push terminally kills every already-journaled paused run**, because the generation
-it advances is part of the fence those runs resume against. `torii run list-paused` before pushing.
+**Any successful push terminally kills every already-journaled paused run of that tenant**, because
+the generation it advances is part of the fence those runs resume against. Other tenants' runs are
+untouched — the generation is per tenant, and only a registry push moves it (a catalog edit does
+not). `torii run list-paused` before pushing.
+
+A worker serves **one tenant** (`TORII_TENANT`): its sweeps claim only that tenant's due runs.
 
 ## Observing and intervening
 
@@ -137,4 +144,13 @@ Stated because finding them by experiment is worse.
 - **No release artifact.** There is no published crate or container, so `torii` is built from a
   checkout.
 
-For the design record behind these, see `docs/analysis/2026-09-14-sp-reg-1-registry-content.md`.
+For the design record behind these, see the gateway's
+[`docs/analysis/2026-09-14-sp-reg-1-registry-content.md`](https://github.com/sensei-hq/gateway/blob/main/docs/analysis/2026-09-14-sp-reg-1-registry-content.md).
+
+## Tests
+
+`cargo test -p torii-cli` runs everything that needs no database and reports the rest `ignored`.
+With `DATABASE_URL` pointing at a torii database (schema applied **and** seeded — the boot tests
+bind the catalog's `chat` chain), every test runs: each creates a tenant of its own and removes it
+afterwards, so they run in parallel with no shared lock. `tests/postgres_backend.rs` drives the real
+binary end to end; `tests/e2e_pg.rs` the cross-process operator loop.

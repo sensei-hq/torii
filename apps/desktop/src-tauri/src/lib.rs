@@ -3,40 +3,40 @@ mod gateway;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  // Build the in-process inference engine (local plane, Phase 1b) before the
-  // Tauri builder. `build_gateway` is async and `run()` is sync, so block on it
-  // here, then hand the `Arc<Gateway>` to Tauri's managed state for commands to
-  // resolve via `State<Arc<Gateway>>`.
-  let gateway = tauri::async_runtime::block_on(gateway::build_gateway());
+    // Build the in-process inference engine (local plane, Phase 1b) before the
+    // Tauri builder. `build_gateway` is async and `run()` is sync, so block on it
+    // here, then hand the `Arc<Gateway>` to Tauri's managed state for commands to
+    // resolve via `State<Arc<Gateway>>`.
+    let gateway = tauri::async_runtime::block_on(gateway::build_gateway());
 
-  let builder = tauri::Builder::default()
-    .manage(gateway)
-    .invoke_handler(tauri::generate_handler![
-      commands::infer::infer,
-      commands::infer::list_models,
-      commands::infer::gateway_status,
-      commands::models::list_local_models,
-      commands::models::available_models,
-      commands::models::device_info,
-      commands::models::set_default_model,
-      commands::models::remove_model,
-      commands::models::pull_model,
-    ])
-    .setup(|app| {
-      if cfg!(debug_assertions) {
-        app.handle().plugin(
-          tauri_plugin_log::Builder::default()
-            .level(log::LevelFilter::Info)
-            .build(),
-        )?;
-      }
-      Ok(())
-    });
+    let builder = tauri::Builder::default()
+        .manage(gateway)
+        .invoke_handler(tauri::generate_handler![
+            commands::infer::infer,
+            commands::infer::list_models,
+            commands::infer::gateway_status,
+            commands::models::list_local_models,
+            commands::models::available_models,
+            commands::models::device_info,
+            commands::models::set_default_model,
+            commands::models::remove_model,
+            commands::models::pull_model,
+        ])
+        .setup(|app| {
+            if cfg!(debug_assertions) {
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::default()
+                        .level(log::LevelFilter::Info)
+                        .build(),
+                )?;
+            }
+            Ok(())
+        });
 
-  #[cfg(feature = "e2e-testing")]
-  let builder = builder.plugin(tauri_plugin_playwright::init());
+    #[cfg(feature = "e2e-testing")]
+    let builder = builder.plugin(tauri_plugin_playwright::init());
 
-  builder
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    builder
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }

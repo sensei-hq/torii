@@ -9,9 +9,7 @@
 
 use uuid::Uuid;
 
-use crate::types::{
-    offered_name, AllowedToolSet, Plane, ToolBinding, ToolDef, ToolKey, Transport,
-};
+use crate::types::{offered_name, AllowedToolSet, Plane, ToolBinding, ToolDef, ToolKey, Transport};
 
 /// The caller context for resolution (populated from the gateway's RequestContext).
 #[derive(Debug, Clone)]
@@ -187,7 +185,10 @@ mod tests {
     #[test]
     fn build_set_offers_http_tools_and_indexes_them() {
         let set = build_allowed_set(
-            vec![row("web", "fetch", Transport::Http), row("web", "search", Transport::Sse)],
+            vec![
+                row("web", "fetch", Transport::Http),
+                row("web", "search", Transport::Sse),
+            ],
             Plane::Cloud,
         );
         assert_eq!(set.len(), 2);
@@ -386,8 +387,18 @@ mod db_tests {
         // 4. a role-wide grant (space_id NULL) spans every space the caller belongs to.
         clear(&pool).await;
         grant(&pool, a, role, None, web, Some("read")).await;
-        assert!(r.resolve(&cloud, Some(space)).await.unwrap().binding_for("web__read").is_some());
-        assert!(r.resolve(&cloud, Some(space2)).await.unwrap().binding_for("web__read").is_some());
+        assert!(r
+            .resolve(&cloud, Some(space))
+            .await
+            .unwrap()
+            .binding_for("web__read")
+            .is_some());
+        assert!(r
+            .resolve(&cloud, Some(space2))
+            .await
+            .unwrap()
+            .binding_for("web__read")
+            .is_some());
 
         // 5. a tenant-disabled server drops its tools.
         sqlx::query(
@@ -438,7 +449,11 @@ mod db_tests {
             tenant_id: b,
             ..cloud.clone()
         };
-        assert!(r.resolve(&other_tenant, Some(space)).await.unwrap().is_empty());
+        assert!(r
+            .resolve(&other_tenant, Some(space))
+            .await
+            .unwrap()
+            .is_empty());
         assert!(r.resolve(&other_tenant, None).await.unwrap().is_empty());
 
         // cleanup — delete servers (cascades tools + grants) then tenants (cascades the rest).

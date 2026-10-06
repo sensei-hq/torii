@@ -123,24 +123,24 @@ impl<'a> ToolInvoker<'a> {
         };
 
         // 2. Fail-closed redaction of the tool INPUT before it egresses to the tool.
-        let (clean_args, mut redactions) = match self.redactor.redact(Direction::Input, &inv.arguments)
-        {
-            Ok(v) => v,
-            Err(e) => {
-                return self
-                    .blocked(
-                        ctx,
-                        &binding.server_name,
-                        &binding.key.tool_name,
-                        binding.plane,
-                        ToolOutcome::BlockedRedactionFailClosed,
-                        Vec::new(),
-                        Some(format!("input redaction failed: {e}")),
-                        start,
-                    )
-                    .await;
-            }
-        };
+        let (clean_args, mut redactions) =
+            match self.redactor.redact(Direction::Input, &inv.arguments) {
+                Ok(v) => v,
+                Err(e) => {
+                    return self
+                        .blocked(
+                            ctx,
+                            &binding.server_name,
+                            &binding.key.tool_name,
+                            binding.plane,
+                            ToolOutcome::BlockedRedactionFailClosed,
+                            Vec::new(),
+                            Some(format!("input redaction failed: {e}")),
+                            start,
+                        )
+                        .await;
+                }
+            };
 
         // 3. Acquire the transport — SSRF (http/sse) + device-only (stdio) are enforced inside.
         let client = match self.transport.client_for(&binding).await {
@@ -429,7 +429,10 @@ mod tests {
             .await;
         assert_eq!(out.outcome, ToolOutcome::BlockedNotAllowed);
         assert!(out.output.is_none());
-        assert!(rec.calls.lock().unwrap().is_empty(), "transport must not be reached");
+        assert!(
+            rec.calls.lock().unwrap().is_empty(),
+            "transport must not be reached"
+        );
         assert_eq!(audit.rows.lock().unwrap().len(), 1, "exactly one audit row");
     }
 
@@ -462,8 +465,14 @@ mod tests {
         // the output returned to the model is redacted too.
         assert!(!out.output.as_ref().unwrap().contains("sk-live-SECRET"));
         // both directions are reported in the redaction summary.
-        assert!(out.redactions.iter().any(|r| r.direction == Direction::Input));
-        assert!(out.redactions.iter().any(|r| r.direction == Direction::Output));
+        assert!(out
+            .redactions
+            .iter()
+            .any(|r| r.direction == Direction::Input));
+        assert!(out
+            .redactions
+            .iter()
+            .any(|r| r.direction == Direction::Output));
     }
 
     #[tokio::test]
@@ -494,7 +503,10 @@ mod tests {
             )
             .await;
         assert_eq!(out.outcome, ToolOutcome::BlockedRedactionFailClosed);
-        assert!(rec.calls.lock().unwrap().is_empty(), "raw input must never egress");
+        assert!(
+            rec.calls.lock().unwrap().is_empty(),
+            "raw input must never egress"
+        );
     }
 
     #[tokio::test]
@@ -525,7 +537,10 @@ mod tests {
             )
             .await;
         assert_eq!(out.outcome, ToolOutcome::BlockedRedactionFailClosed);
-        assert!(out.output.is_none(), "un-redactable output is withheld from the model");
+        assert!(
+            out.output.is_none(),
+            "un-redactable output is withheld from the model"
+        );
     }
 
     #[tokio::test]

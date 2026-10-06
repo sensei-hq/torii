@@ -174,7 +174,9 @@ impl DocumentParser for DefaultParser {
             "application/vnd.openxmlformats-officedocument.presentationml.presentation" => {
                 parse_pptx(bytes)
             }
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => parse_xlsx(bytes),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => {
+                parse_xlsx(bytes)
+            }
             "image/png" | "image/jpeg" | "image/webp" | "image/gif" => parse_image(bytes),
             _ => Err(RagError::Unsupported("unsupported mime for parse")),
         }
@@ -301,7 +303,9 @@ fn parse_pdf(bytes: &[u8]) -> Result<DocIR, RagError> {
     let text = pdf_extract::extract_text_from_mem(bytes)
         .map_err(|e| RagError::Parse(format!("pdf text-layer: {e}")))?;
     if text.trim().is_empty() {
-        tracing::debug!("rag::parse: pdf has no clean text layer (scanned?); OCR deferred (Tier-0)");
+        tracing::debug!(
+            "rag::parse: pdf has no clean text layer (scanned?); OCR deferred (Tier-0)"
+        );
         return Ok(DocIR {
             markdown: String::new(),
             blocks: vec![],
@@ -853,7 +857,11 @@ mod tests {
         // slide1 content precedes slide2 content despite insertion order.
         let one = ir.markdown.find("Slide One").unwrap();
         let two = ir.markdown.find("Slide Two").unwrap();
-        assert!(one < two, "slides not numerically ordered: {:?}", ir.markdown);
+        assert!(
+            one < two,
+            "slides not numerically ordered: {:?}",
+            ir.markdown
+        );
     }
 
     // -- image ----------------------------------------------------------------------------------

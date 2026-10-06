@@ -7501,6 +7501,7 @@ dependencies = [
  "chrono",
  "sensei-orchestrator-core",
  "sensei-orchestrator-testkit",
+ "serde",
  "serde_json",
  "sqlx",
  "tokio",

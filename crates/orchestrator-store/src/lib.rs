@@ -1,77 +1,57 @@
 //! Tenant-scoped Postgres stores for the gateway orchestrator (TM-7, torii#25).
-#![allow(unused)]
-use chrono::{DateTime, Utc};
-use orchestrator_core::{
-    ConfigSource, ConfigStore, ContentStore, ContextKey, ContextRef, ContextStore, Digest,
-    ExecutionJournal, Graph, JournalError, JournalEvent, OrchestratorError, RegistryConfig, RunId,
-    RunLock, RunStatus, ScheduledRun, SchedulerStore, Scope, Seq, Snapshot,
-};
+//!
+//! The gateway is a library; torii owns persistence (`docs/DECISIONS.md` §11). The gateway's
+//! `orchestrator-core` defines the persistence traits and ships in-memory stores; this crate
+//! implements those traits over torii's `registry.*` + `runs.*` schemas (TM-6). Ported from the
+//! gateway's single-tenant `orchestrator-store` Postgres adapters, keeping their exactly-once,
+//! compare-and-swap and format-fence behaviour.
+//!
+//! **Tenancy.** Every store is constructed for ONE tenant (`new(pool, tenant)`) and every
+//! statement it issues carries `tenant_id = $1` — in the key, the predicate and the conflict
+//! target. The traits take no tenant, so a store-wide operation (`claim_due`, `list_paused`,
+//! pruning, the registry generation) is a per-tenant one: a worker serving several tenants holds
+//! one set of stores per tenant. The service connects as the table owner, so RLS does not apply
+//! to it; the `tenant_id` predicate is the isolation, and `tests/isolation.rs` proves it.
+//!
+//! Sqlx RUNTIME queries (not the compile-time macros), so the crate builds with no database.
+
+mod config;
+mod content;
+mod journal;
+mod scheduler;
+
+pub use config::PgConfigStore;
+pub use content::{PgContentStore, PgContextStore};
+pub use journal::PgJournal;
+pub use scheduler::PgSchedulerStore;
+
+use orchestrator_core::OrchestratorError;
 use sqlx::postgres::{PgPool, PgPoolOptions};
-use uuid::Uuid;
 
+/// The default pool cap [`connect`] uses: one pool is shared by every store of a worker, so this
+/// is the worker's whole connection budget. [`connect_with_max`] raises it.
+const DEFAULT_MAX_CONNECTIONS: u32 = 8;
+
+/// Connect a pool to `database_url` (torii's schema must be applied), capped at 8 connections.
 pub async fn connect(database_url: &str) -> Result<PgPool, sqlx::Error> {
-    PgPoolOptions::new().max_connections(8).connect(database_url).await
+    connect_with_max(database_url, DEFAULT_MAX_CONNECTIONS).await
 }
 
-#[derive(Clone)]
-pub struct PgJournal { pool: PgPool, tenant: Uuid }
-impl PgJournal { pub fn new(pool: PgPool, tenant: Uuid) -> Self { Self { pool, tenant } } }
-#[async_trait::async_trait]
-impl ExecutionJournal for PgJournal {
-    async fn append(&self, _: RunId, _: JournalEvent) -> Result<Seq, JournalError> { todo!() }
-    async fn load(&self, _: RunId) -> Result<Vec<(Seq, JournalEvent)>, JournalError> { todo!() }
-    async fn load_since(&self, _: RunId, _: Seq) -> Result<Vec<(Seq, JournalEvent)>, JournalError> { todo!() }
-    async fn snapshot(&self, _: RunId, _: Snapshot) -> Result<(), JournalError> { todo!() }
-    async fn latest_snapshot(&self, _: RunId) -> Result<Option<Snapshot>, JournalError> { todo!() }
-    async fn compact(&self, _: RunId, _: &[Seq], _: JournalEvent) -> Result<(), JournalError> { todo!() }
+/// Connect a pool to `database_url`, capped at `max` connections.
+pub async fn connect_with_max(database_url: &str, max: u32) -> Result<PgPool, sqlx::Error> {
+    PgPoolOptions::new()
+        .max_connections(max)
+        .connect(database_url)
+        .await
 }
 
-#[derive(Clone)]
-pub struct PgContentStore { pool: PgPool, tenant: Uuid }
-impl PgContentStore { pub fn new(pool: PgPool, tenant: Uuid) -> Self { Self { pool, tenant } } }
-#[async_trait::async_trait]
-impl ContentStore for PgContentStore {
-    async fn put(&self, _: &[u8]) -> Result<Digest, OrchestratorError> { todo!() }
-    async fn get(&self, _: &Digest) -> Result<Vec<u8>, OrchestratorError> { todo!() }
+/// A transport error on a CAS / context / config-write / scheduler path → the loud
+/// `Store(..)` channel (distinct from the journal's `Backend`). Never swallowed.
+pub(crate) fn store_err(e: sqlx::Error) -> OrchestratorError {
+    OrchestratorError::Store(e.to_string())
 }
 
-#[derive(Clone)]
-pub struct PgContextStore { pool: PgPool, tenant: Uuid }
-impl PgContextStore { pub fn new(pool: PgPool, tenant: Uuid) -> Self { Self { pool, tenant } } }
-#[async_trait::async_trait]
-impl ContextStore for PgContextStore {
-    async fn put(&self, _: RunId, _: Scope, _: ContextKey, _: serde_json::Value) -> Result<ContextRef, OrchestratorError> { todo!() }
-    async fn get(&self, _: RunId, _: Scope, _: ContextKey) -> Result<Option<ContextRef>, OrchestratorError> { todo!() }
-    async fn load(&self, _: &ContextRef) -> Result<serde_json::Value, OrchestratorError> { todo!() }
-    async fn insert_ref(&self, _: RunId, _: ContextRef) -> Result<(), OrchestratorError> { todo!() }
-}
-
-#[derive(Clone)]
-pub struct PgConfigStore { pool: PgPool, tenant: Uuid }
-impl PgConfigStore { pub fn new(pool: PgPool, tenant: Uuid) -> Self { Self { pool, tenant } } }
-#[async_trait::async_trait]
-impl ConfigSource for PgConfigStore {
-    async fn load(&self) -> Result<RegistryConfig, OrchestratorError> { todo!() }
-}
-#[async_trait::async_trait]
-impl ConfigStore for PgConfigStore {
-    async fn store_and_bump(&self, _: &RegistryConfig) -> Result<u64, OrchestratorError> { todo!() }
-    async fn store_and_bump_if(&self, _: &RegistryConfig, _: u64) -> Result<Option<u64>, OrchestratorError> { todo!() }
-}
-
-pub struct PgSchedulerStore { pool: PgPool, tenant: Uuid }
-impl PgSchedulerStore { pub fn new(pool: PgPool, tenant: Uuid) -> Self { Self { pool, tenant } } }
-#[async_trait::async_trait]
-impl SchedulerStore for PgSchedulerStore {
-    async fn try_lock_run(&self, _: RunId) -> Result<Option<Box<dyn RunLock>>, OrchestratorError> { todo!() }
-    async fn enqueue(&self, _: RunId, _: &Graph, _: DateTime<Utc>) -> Result<(), OrchestratorError> { todo!() }
-    async fn record_paused(&self, _: RunId, _: Option<DateTime<Utc>>, _: &str) -> Result<(), OrchestratorError> { todo!() }
-    async fn record_terminal(&self, _: RunId, _: RunStatus, _: Option<&str>) -> Result<(), OrchestratorError> { todo!() }
-    async fn claim_due(&self, _: DateTime<Utc>, _: chrono::Duration, _: usize) -> Result<Vec<(RunId, Graph)>, OrchestratorError> { todo!() }
-    async fn status(&self, _: RunId) -> Result<Option<ScheduledRun>, OrchestratorError> { todo!() }
-    async fn list_paused(&self) -> Result<Vec<ScheduledRun>, OrchestratorError> { todo!() }
-    async fn cancel(&self, _: RunId) -> Result<(), OrchestratorError> { todo!() }
-    async fn force_wake(&self, _: RunId, _: DateTime<Utc>) -> Result<(), OrchestratorError> { todo!() }
-    async fn count_terminal_before(&self, _: DateTime<Utc>) -> Result<u64, OrchestratorError> { todo!() }
-    async fn prune_terminal(&self, _: DateTime<Utc>) -> Result<u64, OrchestratorError> { todo!() }
+/// A serialization error on a WRITE path → the same `Store` channel.
+pub(crate) fn store_err_ser(e: serde_json::Error) -> OrchestratorError {
+    OrchestratorError::Store(e.to_string())
 }

@@ -21,6 +21,7 @@ suite=(
   dataset.sql   # §3c: sensitive-data safe schema + k-anonymity
   retrieval.sql # C5: hybrid_search dual-write + cross-tenant/classification isolation
   analytics.sql # O2: daily usage rollup + idempotency
+  orchestrator.sql # TM-6: registry.*/runs.* tenant isolation + registry generation CAS
 )
 
 for t in "${suite[@]}"; do

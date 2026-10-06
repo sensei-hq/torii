@@ -145,3 +145,47 @@ async fn every_store_in_the_bundle_belongs_to_its_tenant() {
     drop_tenant(&pool, a).await;
     drop_tenant(&pool, b).await;
 }
+
+/// A slug can look like a UUID (slugs are free text; an org can be NAMED after another
+/// tenant's id). Resolution must then never silently pick the tenant with that id: an input
+/// that matches one tenant by id and another by slug is ambiguous, and refused naming both.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn a_uuid_shaped_slug_is_never_resolved_to_the_tenant_with_that_id() {
+    let Some(pool) = pool().await else { return };
+    let (a, _) = tenant(&pool).await;
+    // B's slug is A's id.
+    let b = Uuid::new_v4();
+    sqlx::query(
+        "insert into core.tenants (id, name, slug, modified_by) values ($1, $2, $3, 'tm8c-test')",
+    )
+    .bind(b)
+    .bind(format!("tm8c-{b}"))
+    .bind(a.to_string())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let err = torii_core::resolve_tenant(&pool, &a.to_string())
+        .await
+        .expect_err("ambiguous: A by id, B by slug");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("ambiguous") && msg.contains(&a.to_string()) && msg.contains(&b.to_string()),
+        "{msg}"
+    );
+
+    // With no tenant having that id, the UUID-shaped slug resolves to its own tenant.
+    drop_tenant(&pool, a).await;
+    assert_eq!(
+        torii_core::resolve_tenant(&pool, &a.to_string())
+            .await
+            .unwrap(),
+        b,
+        "a UUID-shaped slug resolves by slug when no tenant has that id"
+    );
+    drop_tenant(&pool, b).await;
+}

@@ -128,6 +128,9 @@ values ('00000000-0000-0000-0000-000000000000', 'aaaaaaaa-0000-0000-0000-0000000
 reset role;
 
 -- ── the registry generation: a per-tenant CAS on config_versions' 'registry' component ──
+-- Run as service_role — the only role the functions are granted to, so the grant chain they
+-- need (schema usage on config, execute on config.bump_config_version) is exercised.
+set local role service_role;
 do $$
 declare
   a constant uuid := '00000000-0000-0000-0000-000000000000';
@@ -174,5 +177,6 @@ begin
   end if;
   raise notice 'generation OK';
 end $$;
+reset role;
 
 rollback;

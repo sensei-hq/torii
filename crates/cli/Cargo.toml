@@ -18,7 +18,9 @@ path = "src/main.rs"
 [dependencies]
 orchestrator-core = { package = "sensei-orchestrator-core", git = "https://github.com/sensei-hq/gateway", branch = "develop" }
 orchestrator = { package = "sensei-orchestrator", git = "https://github.com/sensei-hq/gateway", branch = "develop" }
-orchestrator-store = { package = "sensei-orchestrator-store", git = "https://github.com/sensei-hq/gateway", branch = "develop", features = ["postgres"] }
+# The in-memory stores (TORII_BACKEND=memory) and the registry-directory reader. Postgres lives
+# in torii-core (torii's tenant-scoped schema), not in the gateway crate.
+orchestrator-store = { package = "sensei-orchestrator-store", git = "https://github.com/sensei-hq/gateway", branch = "develop" }
 gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", branch = "develop" }
 kernel = { package = "sensei-kernel", git = "https://github.com/sensei-hq/gateway", branch = "develop" }
 # torii's shared data layer: the catalog GatewayConfig loader the API uses, tenant resolution
@@ -38,11 +40,6 @@ uuid = { version = "1", features = ["v4", "serde"] }
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 tempfile = "3"
-# `test-support` on top of the plain `postgres` dependency above: it exposes
-# `orchestrator_store::test_guard`, the ONE DB-test isolation guard, which this crate's
-# tests take instead of the private copy they used to carry. Dev-only — the binary links
-# the un-featured dependency.
-orchestrator-store = { package = "sensei-orchestrator-store", git = "https://github.com/sensei-hq/gateway", branch = "develop", features = ["postgres", "test-support"] }
 # The cross-process e2e needs the same gateway/clock doubles the executor's own tests
 # use (a gated gateway to force a durable pause, a recording one to count re-spend).
 orchestrator = { package = "sensei-orchestrator", git = "https://github.com/sensei-hq/gateway", branch = "develop", features = ["test-support"] }

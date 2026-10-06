@@ -1,9 +1,8 @@
 //! AC8 — the operator loop, end to end, across a process boundary.
 //!
-//! `DATABASE_URL`-guarded rather than feature-gated: torii depends on
-//! `orchestrator-store/postgres` unconditionally (it has no non-Postgres mode), so there
-//! is no feature to hang this off. Absent a database each test returns early, which keeps
-//! the default `cargo test` DB-free.
+//! `DATABASE_URL`-guarded (a conditional `#[ignore]`, see build.rs): runs against torii's
+//! database with its schema applied, each test in a tenant of its own (TM-8c). Absent a
+//! database the tests are reported `ignored`, which keeps the default `cargo test` DB-free.
 //!
 //! Process A submits a graph against a gated gateway and it takes a DURABLE pause. The
 //! torii operator commands then observe that pause and act on it. Finally a FRESH set of
@@ -32,11 +31,10 @@ use orchestrator_core::{
     Graph, JournalEvent, LoopBody, LoopGateOption, Node, NodeId, NodeKind, RegistryHandle, RunId,
     RunStatus, SchedulerStore, Scope, TokenBudget,
 };
-use orchestrator_store::postgres::{
-    PostgresConfigSource, PostgresContentStore, PostgresContextStore, PostgresJournal,
-    PostgresSchedulerStore, connect,
-};
 use std::sync::Arc;
+use torii_core::stores::{
+    PgConfigStore, PgContentStore, PgContextStore, PgJournal, PgSchedulerStore,
+};
 
 /// **The SECOND layer, since the conditional-ignore gate.** The first is
 /// `#[cfg_attr(not(have_database_url), ignore = "...")]` on every test below, driven by
@@ -69,20 +67,59 @@ fn db_url() -> Option<String> {
     url
 }
 
-/// `scheduled_runs` is a GLOBAL table and `tick()` claims the whole due set, not just the
-/// caller's run — so two of these tests running concurrently would each drive the other's
-/// run through their own gateway, and the re-spend counts below would be measuring the
-/// wrong executor. The singleton `config_versions` row has the same problem for the fence
-/// test, which asserts an exact generation.
-///
-/// Both now come from `orchestrator_store::test_guard`, the ONE shared implementation. This
-/// file used to hold a THIRD private copy — and a weaker one: a bare process-wide
-/// `tokio::sync::Mutex`, justified by "cross-PROCESS isolation is not needed: cargo runs
-/// test binaries one at a time". That is a property of `cargo test`, not of the code:
-/// `cargo nextest` runs test binaries in parallel and would defeat it silently, and it was
-/// never true of two concurrent `cargo` invocations either. The shared guard adds a Postgres
-/// session advisory lock, which holds across processes however the suite is invoked.
-use orchestrator_store::test_guard::{config_guard, scheduler_guard};
+/// The test's database AND its own tenant (TM-8c). torii's stores are tenant-scoped, so a
+/// tenant of its own isolates a test completely: `tick()` claims only this tenant's due runs,
+/// and the registry generation is this tenant's — what the shared `scheduler_guard` /
+/// `config_guard` locks used to buy, without serializing the suite. The tenant (and every row
+/// it owns) is removed on drop, also when the test panicked.
+struct Db {
+    url: String,
+    tenant: uuid::Uuid,
+}
+
+impl Db {
+    async fn new() -> Option<Db> {
+        let url = db_url()?;
+        let tenant = uuid::Uuid::new_v4();
+        let pool = torii_core::connect(&url, 1).await.expect("connect");
+        sqlx::query(
+            "insert into core.tenants (id, name, slug, modified_by) values ($1, $2, $2, 'torii-e2e')",
+        )
+        .bind(tenant)
+        .bind(format!("torii-e2e-{tenant}"))
+        .execute(&pool)
+        .await
+        .expect("create the test tenant");
+        Some(Db { url, tenant })
+    }
+
+    /// A NEW pool — one per store, as before: each "process" shares nothing in-process.
+    async fn pool(&self) -> sqlx::PgPool {
+        torii_core::connect(&self.url, 8).await.expect("connect")
+    }
+}
+
+impl Drop for Db {
+    fn drop(&mut self) {
+        let (url, tenant) = (self.url.clone(), self.tenant);
+        let _ = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            rt.block_on(async move {
+                use sqlx::Connection;
+                if let Ok(mut c) = sqlx::PgConnection::connect(&url).await {
+                    let _ = sqlx::query("delete from core.tenants where id = $1")
+                        .bind(tenant)
+                        .execute(&mut c)
+                        .await;
+                }
+            });
+        })
+        .join();
+    }
+}
 
 /// One `ModelCall` node whose prompt is `marker` — the smallest graph that spends a token.
 ///
@@ -283,7 +320,7 @@ fn reviewer(timeout: Option<Duration>) -> orchestrator_core::AgentDefinition {
 ///
 /// **Stated precisely, because it is the one seam this test does NOT carry over the
 /// database:** the config here is built in-process on each side rather than read back from
-/// `PostgresConfigSource`, so what is proven below is a human-backed role surviving a
+/// `PgConfigStore`, so what is proven below is a human-backed role surviving a
 /// process boundary in the JOURNAL and the SCHEDULER — not its `AgentDefinition` surviving
 /// a `config_agents` jsonb round-trip. Adjacent coverage, named rather than gestured at:
 /// `orchestrator-core`'s `agent_backing_is_serde_defaulted_and_round_trips` covers the
@@ -291,9 +328,9 @@ fn reviewer(timeout: Option<Duration>) -> orchestrator_core::AgentDefinition {
 /// `filesystem_source_carries_a_human_backing_through_to_the_registry` covers the authored
 /// md → `load` → `Registry::from_config` path. What NOTHING covers today, and this test
 /// does not either, is a human-backed definition written to and read back from a live
-/// `PostgresConfigSource`.
+/// `PgConfigStore`.
 ///
-/// Wiring `PostgresConfigSource` here instead would also pin a config generation into the
+/// Wiring `PgConfigStore` here instead would also pin a config generation into the
 /// fence (`RegistryHandle::from_source`, the way `fresh_worker_pinned` does it), which is
 /// the subject of `a_stale_config_generation_fails_a_wake_at_the_fence_before_spending_
 /// anything` and not of this one.
@@ -463,13 +500,13 @@ fn human_loop_gate_node_ids(marker: &str) -> (NodeId, NodeId, NodeId, NodeId) {
 /// Its own constructor rather than a parameter on `fresh_context_worker`, so every
 /// existing test's wiring stays byte-identical.
 async fn fresh_human_worker(
-    url: &str,
+    db: &Db,
     at: DateTime<Utc>,
     timeout: Option<Duration>,
 ) -> (Scheduler, CallLog) {
-    let (exec, journal, clock, calls) = fresh_context_executor(url, at).await;
+    let (exec, journal, clock, calls) = fresh_context_executor(db, at).await;
     let exec = exec.with_registry(human_registry(timeout));
-    let store = Arc::new(PostgresSchedulerStore::new(connect(url).await.unwrap()));
+    let store = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
     (Scheduler::new(store, exec, journal, clock), calls)
 }
 
@@ -487,24 +524,22 @@ fn calls_for(log: &CallLog, marker: &str) -> usize {
 /// that matters: it shares no in-process state with the submitting side — only the
 /// database.
 async fn fresh_executor(
-    url: &str,
+    db: &Db,
     at: DateTime<Utc>,
-) -> (Executor, Arc<PostgresJournal>, Arc<FakeClock>, CallLog) {
-    let journal = Arc::new(PostgresJournal::new(connect(url).await.unwrap()));
+) -> (Executor, Arc<PgJournal>, Arc<FakeClock>, CallLog) {
+    let journal = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let (gw, calls) = recording_gateway().await;
     let clock = FakeClock::new(at);
     let exec = Executor::new(Arc::new(gw), journal.clone(), "v1")
-        .with_content_store(Arc::new(PostgresContentStore::new(
-            connect(url).await.unwrap(),
-        )))
+        .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
         .with_clock(clock.clone());
     (exec, journal, clock, calls)
 }
 
 /// [`fresh_executor`] behind a scheduler — a worker process.
-async fn fresh_worker(url: &str, at: DateTime<Utc>) -> (Scheduler, CallLog) {
-    let (exec, journal, clock, calls) = fresh_executor(url, at).await;
-    let store = Arc::new(PostgresSchedulerStore::new(connect(url).await.unwrap()));
+async fn fresh_worker(db: &Db, at: DateTime<Utc>) -> (Scheduler, CallLog) {
+    let (exec, journal, clock, calls) = fresh_executor(db, at).await;
+    let store = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
     (Scheduler::new(store, exec, journal, clock), calls)
 }
 
@@ -517,19 +552,17 @@ async fn fresh_worker(url: &str, at: DateTime<Utc>) -> (Scheduler, CallLog) {
 /// recording double here would fail the node instead of completing the run — arriving at
 /// a red test by the right rule, which is confusing rather than informative.
 async fn fresh_metered_worker(
-    url: &str,
+    db: &Db,
     at: DateTime<Utc>,
     per_call_tokens: u32,
 ) -> (Scheduler, CallLog) {
-    let journal = Arc::new(PostgresJournal::new(connect(url).await.unwrap()));
+    let journal = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let (gw, calls) = metered_gateway(Some(usage(per_call_tokens))).await;
     let clock = FakeClock::new(at);
     let exec = Executor::new(Arc::new(gw), journal.clone(), "v1")
-        .with_content_store(Arc::new(PostgresContentStore::new(
-            connect(url).await.unwrap(),
-        )))
+        .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
         .with_clock(clock.clone());
-    let store = Arc::new(PostgresSchedulerStore::new(connect(url).await.unwrap()));
+    let store = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
     (Scheduler::new(store, exec, journal, clock), calls)
 }
 
@@ -550,25 +583,23 @@ fn usage(total: u32) -> TokenUsage {
 /// generation is durably current at the moment this "process" boots, not the raw
 /// unversioned fence base the other e2e tests use. Needed only by the fence-composition
 /// test below: a worker that never pins a generation can never observe a fence drift.
-async fn fresh_worker_pinned(url: &str, at: DateTime<Utc>) -> (Scheduler, CallLog) {
-    let journal = Arc::new(PostgresJournal::new(connect(url).await.unwrap()));
+async fn fresh_worker_pinned(db: &Db, at: DateTime<Utc>) -> (Scheduler, CallLog) {
+    let journal = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let (gw, calls) = recording_gateway().await;
     let clock = FakeClock::new(at);
-    let config_source = PostgresConfigSource::new(connect(url).await.unwrap());
+    let config_source = PgConfigStore::new(db.pool().await, db.tenant);
     let handle = RegistryHandle::from_source(&config_source)
         .await
         .expect("a registry handle over the shared config source");
     let exec = Executor::new(Arc::new(gw), journal.clone(), "v1")
-        .with_content_store(Arc::new(PostgresContentStore::new(
-            connect(url).await.unwrap(),
-        )))
+        .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
         .with_registry_handle(handle)
         .with_clock(clock.clone());
-    let store = Arc::new(PostgresSchedulerStore::new(connect(url).await.unwrap()));
+    let store = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
     (Scheduler::new(store, exec, journal, clock), calls)
 }
 
-/// SP-6 s1: [`fresh_executor`], but ALSO wired with a durable `PostgresContextStore` —
+/// SP-6 s1: [`fresh_executor`], but ALSO wired with a durable `PgContextStore` —
 /// which is how `boot::heavy` wires every real torii process, and what makes the
 /// blackboard half of the signal path observable.
 ///
@@ -581,27 +612,23 @@ async fn fresh_worker_pinned(url: &str, at: DateTime<Utc>) -> (Scheduler, CallLo
 /// treats that same `ContextWrite` as the completion marker for exactly those node kinds,
 /// so a store-less run would exercise only its `RunCompleted` backstop.
 async fn fresh_context_executor(
-    url: &str,
+    db: &Db,
     at: DateTime<Utc>,
-) -> (Executor, Arc<PostgresJournal>, Arc<FakeClock>, CallLog) {
-    let journal = Arc::new(PostgresJournal::new(connect(url).await.unwrap()));
+) -> (Executor, Arc<PgJournal>, Arc<FakeClock>, CallLog) {
+    let journal = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let (gw, calls) = recording_gateway().await;
     let clock = FakeClock::new(at);
     let exec = Executor::new(Arc::new(gw), journal.clone(), "v1")
-        .with_content_store(Arc::new(PostgresContentStore::new(
-            connect(url).await.unwrap(),
-        )))
-        .with_context_store(Arc::new(PostgresContextStore::new(
-            connect(url).await.unwrap(),
-        )))
+        .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
+        .with_context_store(Arc::new(PgContextStore::new(db.pool().await, db.tenant)))
         .with_clock(clock.clone());
     (exec, journal, clock, calls)
 }
 
 /// [`fresh_context_executor`] behind a scheduler — the SP-6 s1 worker process.
-async fn fresh_context_worker(url: &str, at: DateTime<Utc>) -> (Scheduler, CallLog) {
-    let (exec, journal, clock, calls) = fresh_context_executor(url, at).await;
-    let store = Arc::new(PostgresSchedulerStore::new(connect(url).await.unwrap()));
+async fn fresh_context_worker(db: &Db, at: DateTime<Utc>) -> (Scheduler, CallLog) {
+    let (exec, journal, clock, calls) = fresh_context_executor(db, at).await;
+    let store = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
     (Scheduler::new(store, exec, journal, clock), calls)
 }
 
@@ -645,7 +672,7 @@ async fn serve_once(sched: &Scheduler) -> torii::cmd::Outcome {
 /// crowd-out leaves the row untouched, which is exactly what they assert.
 async fn serve_until_settled(
     sched: &Scheduler,
-    store: &PostgresSchedulerStore,
+    store: &PgSchedulerStore,
     run: RunId,
 ) -> torii::cmd::Outcome {
     for _ in 0..16 {
@@ -676,8 +703,7 @@ async fn serve_until_settled(
 )]
 #[tokio::test]
 async fn the_operator_loop_drives_a_paused_run_to_completion_across_processes() {
-    let Some(url) = db_url() else { return };
-    let _guard = scheduler_guard().await;
+    let Some(db) = Db::new().await else { return };
 
     let run = RunId(uuid::Uuid::new_v4());
     let marker = run.0.to_string();
@@ -685,12 +711,10 @@ async fn the_operator_loop_drives_a_paused_run_to_completion_across_processes() 
     let clock = FakeClock::new(DateTime::<Utc>::from_timestamp(3_000_000, 0).unwrap());
 
     // ---- Process A: submit against a gated gateway → a durable pause ---------------
-    let store_a = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
-    let journal_a = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let store_a = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_a = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let exec_a = Executor::new(Arc::new(gated_gateway().await), journal_a.clone(), "v1")
-        .with_content_store(Arc::new(PostgresContentStore::new(
-            connect(&url).await.unwrap(),
-        )))
+        .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
     // `|| {}` for the announce hook: `main` passes the `submitted: <id>` print, which a
@@ -707,11 +731,11 @@ async fn the_operator_loop_drives_a_paused_run_to_completion_across_processes() 
 
     // ---- The operator, light tier: observe A's pause, sharing nothing with A -------
     // A separate pool, and torii's own commands — the operator's real surface.
-    let store_b = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
+    let store_b = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
     // SP-DATA-5 Task 5: `status`/`wake` need a journal too (spend lives there, not in
     // the scheduler row) — a fresh handle over its OWN connection, same discipline as
     // `store_b`: process B shares nothing in-process with A.
-    let journal_b = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let journal_b = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let listed = torii::cmd::run::list_paused(store_b.as_ref(), journal_b.as_ref(), false)
         .await
         .expect("list-paused");
@@ -763,7 +787,7 @@ async fn the_operator_loop_drives_a_paused_run_to_completion_across_processes() 
     // ---- Process B: a FRESH worker drives it --------------------------------------
     // The ONLY thing carried over from A is the run id; everything else B needs — the
     // graph included — it reads out of Postgres.
-    let (sched_b, calls_b) = fresh_worker(&url, queued_at + Duration::seconds(1)).await;
+    let (sched_b, calls_b) = fresh_worker(&db, queued_at + Duration::seconds(1)).await;
     let served = serve_until_settled(&sched_b, store_b.as_ref(), run).await;
     assert_eq!(served.code, torii::errors::EXIT_OK, "{}", served.text);
 
@@ -788,7 +812,7 @@ async fn the_operator_loop_drives_a_paused_run_to_completion_across_processes() 
     // the `== 1` above would also hold if the journal were amnesiac, because B's node had
     // never run before. Here the node HAS run, in another process, and must not run again.
     let (exec_c, _journal_c, _clock_c, calls_c) =
-        fresh_executor(&url, queued_at + Duration::seconds(2)).await;
+        fresh_executor(&db, queued_at + Duration::seconds(2)).await;
     let resumed = exec_c
         .start(run, &graph)
         .await
@@ -819,19 +843,16 @@ async fn the_operator_loop_drives_a_paused_run_to_completion_across_processes() 
 )]
 #[tokio::test]
 async fn a_cancelled_run_is_never_driven_by_a_later_worker_tick() {
-    let Some(url) = db_url() else { return };
-    let _guard = scheduler_guard().await;
+    let Some(db) = Db::new().await else { return };
 
     let run = RunId(uuid::Uuid::new_v4());
     let marker = run.0.to_string();
     let clock = FakeClock::new(DateTime::<Utc>::from_timestamp(2_000_000, 0).unwrap());
 
-    let store_a = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
-    let journal_a = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let store_a = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_a = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let exec_a = Executor::new(Arc::new(gated_gateway().await), journal_a.clone(), "v1")
-        .with_content_store(Arc::new(PostgresContentStore::new(
-            connect(&url).await.unwrap(),
-        )))
+        .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
     let submitted = torii::cmd::run::submit(&sched_a, run, one_node_graph(&marker), None, || {})
@@ -847,7 +868,7 @@ async fn a_cancelled_run_is_never_driven_by_a_later_worker_tick() {
         .expect("a timed pause has a next_wake");
 
     // The operator cancels through torii, on a fresh pool.
-    let store_b = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
+    let store_b = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
     let cancelled = torii::cmd::run::cancel(store_b.as_ref(), run)
         .await
         .expect("cancel");
@@ -855,7 +876,7 @@ async fn a_cancelled_run_is_never_driven_by_a_later_worker_tick() {
     assert!(cancelled.text.contains("cancelled"), "{}", cancelled.text);
 
     // A worker tick an hour past the ORIGINAL deadline must not touch it.
-    let (sched_b, calls_b) = fresh_worker(&url, deadline + Duration::seconds(3600)).await;
+    let (sched_b, calls_b) = fresh_worker(&db, deadline + Duration::seconds(3600)).await;
     let served = serve_once(&sched_b).await;
     assert_eq!(served.code, torii::errors::EXIT_OK, "{}", served.text);
 
@@ -899,15 +920,10 @@ async fn a_cancelled_run_is_never_driven_by_a_later_worker_tick() {
 )]
 #[tokio::test]
 async fn a_stale_config_generation_fails_a_wake_at_the_fence_before_spending_anything() {
-    let Some(url) = db_url() else { return };
-    // BOTH classes, in the documented global order (config-tables before scheduled-runs).
-    // This is the one test here that also writes the SINGLETON `config_versions` row, and it
-    // asserts an exact generation twice — `current == Some(gen_before)` ("nothing else may
-    // move the shared generation between pin and bump") and `gen_after == gen_before + 1`.
-    // Any concurrent config writer breaks both, and the scheduler guard it used to take
-    // alone is a DIFFERENT lock class that excludes none of them.
-    let _config = config_guard().await;
-    let _guard = scheduler_guard().await;
+    let Some(db) = Db::new().await else { return };
+    // It asserts an exact generation twice — `current == Some(gen_before)` and
+    // `gen_after == gen_before + 1`. The generation is this test's TENANT's (TM-8c), so no
+    // other test's config write can move it: the isolation a shared lock used to buy.
 
     let run = RunId(uuid::Uuid::new_v4());
     let marker = run.0.to_string();
@@ -915,18 +931,16 @@ async fn a_stale_config_generation_fails_a_wake_at_the_fence_before_spending_any
     let clock = FakeClock::new(DateTime::<Utc>::from_timestamp(4_000_000, 0).unwrap());
 
     // ---- Process A: submit, PINNED to the config generation at submit time ---------
-    let config_source = PostgresConfigSource::new(connect(&url).await.unwrap());
+    let config_source = PgConfigStore::new(db.pool().await, db.tenant);
     let handle_a = RegistryHandle::from_source(&config_source)
         .await
         .expect("a registry handle over the shared config source");
     let gen_before = handle_a.snapshot().1;
 
-    let store_a = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
-    let journal_a = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let store_a = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_a = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let exec_a = Executor::new(Arc::new(gated_gateway().await), journal_a.clone(), "v1")
-        .with_content_store(Arc::new(PostgresContentStore::new(
-            connect(&url).await.unwrap(),
-        )))
+        .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
         .with_registry_handle(handle_a)
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
@@ -952,7 +966,7 @@ async fn a_stale_config_generation_fails_a_wake_at_the_fence_before_spending_any
     assert_eq!(
         current,
         Some(gen_before),
-        "nothing else may move the shared generation between pin and bump"
+        "nothing else may move the tenant's generation between pin and bump"
     );
     let gen_after = config_source
         .store_and_bump_if(&cfg, gen_before)
@@ -962,7 +976,7 @@ async fn a_stale_config_generation_fails_a_wake_at_the_fence_before_spending_any
     assert_eq!(gen_after, gen_before + 1);
 
     // ---- Process B: a FRESH worker, pinned to the NOW-DRIFTED generation, ticks ----
-    let (sched_b, calls_b) = fresh_worker_pinned(&url, deadline + Duration::seconds(1)).await;
+    let (sched_b, calls_b) = fresh_worker_pinned(&db, deadline + Duration::seconds(1)).await;
     let served = serve_until_settled(&sched_b, store_a.as_ref(), run).await;
     assert_eq!(served.code, torii::errors::EXIT_OK, "{}", served.text);
 
@@ -1062,8 +1076,7 @@ async fn a_stale_config_generation_fails_a_wake_at_the_fence_before_spending_any
 )]
 #[tokio::test]
 async fn a_budget_exhausted_run_is_raised_by_an_operator_and_completes_in_a_fresh_process() {
-    let Some(url) = db_url() else { return };
-    let _guard = scheduler_guard().await;
+    let Some(db) = Db::new().await else { return };
 
     const PER_CALL: u32 = 1_500;
     const CAP: u64 = 1_000;
@@ -1076,13 +1089,11 @@ async fn a_budget_exhausted_run_is_raised_by_an_operator_and_completes_in_a_fres
     let clock = FakeClock::new(DateTime::<Utc>::from_timestamp(5_000_000, 0).unwrap());
 
     // ---- Process A: submit under a cap one call already exceeds --------------------
-    let store_a = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
-    let journal_a = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let store_a = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_a = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let (gw_a, calls_a) = metered_gateway(Some(usage(PER_CALL))).await;
     let exec_a = Executor::new(Arc::new(gw_a), journal_a.clone(), "v1")
-        .with_content_store(Arc::new(PostgresContentStore::new(
-            connect(&url).await.unwrap(),
-        )))
+        .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
     let submitted = torii::cmd::run::submit(
@@ -1139,8 +1150,8 @@ async fn a_budget_exhausted_run_is_raised_by_an_operator_and_completes_in_a_fres
     // ---- The operator, light tier: read spend out of the DURABLE journal ------------
     // A separate pool and a separate journal handle — this process has no gateway, no
     // model credentials, and shares nothing in-process with A.
-    let store_b = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
-    let journal_b = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let store_b = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_b = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let shown = torii::cmd::run::status(store_b.as_ref(), journal_b.as_ref(), run, false)
         .await
         .expect("status");
@@ -1182,7 +1193,7 @@ async fn a_budget_exhausted_run_is_raised_by_an_operator_and_completes_in_a_fres
 
     // ---- Process B: a FRESH metered worker drives it to completion ------------------
     let (sched_b, calls_b) =
-        fresh_metered_worker(&url, queued_at + Duration::seconds(1), PER_CALL).await;
+        fresh_metered_worker(&db, queued_at + Duration::seconds(1), PER_CALL).await;
     let served = serve_until_settled(&sched_b, store_b.as_ref(), run).await;
     assert_eq!(served.code, torii::errors::EXIT_OK, "{}", served.text);
     assert_eq!(
@@ -1251,8 +1262,7 @@ async fn a_budget_exhausted_run_is_raised_by_an_operator_and_completes_in_a_fres
 )]
 #[tokio::test]
 async fn a_signalled_gate_is_answered_by_an_operator_and_completes_in_a_fresh_process() {
-    let Some(url) = db_url() else { return };
-    let _guard = scheduler_guard().await;
+    let Some(db) = Db::new().await else { return };
 
     let run = RunId(uuid::Uuid::new_v4());
     let marker = run.0.to_string();
@@ -1266,16 +1276,12 @@ async fn a_signalled_gate_is_answered_by_an_operator_and_completes_in_a_fresh_pr
     let clock = FakeClock::new(t0);
 
     // ---- Process A: the prefix is paid for, then the gate pauses the run -------------
-    let store_a = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
-    let journal_a = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let store_a = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_a = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let (gw_a, calls_a) = recording_gateway().await;
     let exec_a = Executor::new(Arc::new(gw_a), journal_a.clone(), "v1")
-        .with_content_store(Arc::new(PostgresContentStore::new(
-            connect(&url).await.unwrap(),
-        )))
-        .with_context_store(Arc::new(PostgresContextStore::new(
-            connect(&url).await.unwrap(),
-        )))
+        .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
+        .with_context_store(Arc::new(PgContextStore::new(db.pool().await, db.tenant)))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
     let submitted = torii::cmd::run::submit(&sched_a, run, graph.clone(), None, || {})
@@ -1312,8 +1318,8 @@ async fn a_signalled_gate_is_answered_by_an_operator_and_completes_in_a_fresh_pr
     // ---- The operator, light tier: WHICH node is waiting, and until when? ------------
     // A separate pool and a separate journal handle — no gateway, no model credentials,
     // nothing in-process shared with A.
-    let store_b = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
-    let journal_b = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let store_b = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_b = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let listed = torii::cmd::run::list_paused(store_b.as_ref(), journal_b.as_ref(), false)
         .await
         .expect("list-paused");
@@ -1367,7 +1373,7 @@ async fn a_signalled_gate_is_answered_by_an_operator_and_completes_in_a_fresh_pr
     // ---- Process B: a FRESH worker drives it ------------------------------------------
     // The only thing carried over from A is the run id; the graph included, everything
     // else B needs it reads out of Postgres.
-    let (sched_b, calls_b) = fresh_context_worker(&url, signalled_at + Duration::seconds(1)).await;
+    let (sched_b, calls_b) = fresh_context_worker(&db, signalled_at + Duration::seconds(1)).await;
     let served = serve_until_settled(&sched_b, store_b.as_ref(), run).await;
     assert_eq!(served.code, torii::errors::EXIT_OK, "{}", served.text);
 
@@ -1425,7 +1431,7 @@ async fn a_signalled_gate_is_answered_by_an_operator_and_completes_in_a_fresh_pr
     // Read back through a THIRD context store on its own pool, so this is the durable row,
     // not B's in-process blackboard. Not asserted via a terminal re-`start`: see this
     // test's doc comment for why that would be empty here.
-    let ctx = PostgresContextStore::new(connect(&url).await.unwrap());
+    let ctx = PgContextStore::new(db.pool().await, db.tenant);
     let published = ctx
         .get(run, Scope::Run, ContextKey(gate.0.clone()))
         .await
@@ -1477,8 +1483,7 @@ async fn a_signalled_gate_is_answered_by_an_operator_and_completes_in_a_fresh_pr
 )]
 #[tokio::test]
 async fn a_human_gate_decided_in_another_process_completes_the_run() {
-    let Some(url) = db_url() else { return };
-    let _guard = scheduler_guard().await;
+    let Some(db) = Db::new().await else { return };
 
     let run = RunId(uuid::Uuid::new_v4());
     let marker = run.0.to_string();
@@ -1491,16 +1496,12 @@ async fn a_human_gate_decided_in_another_process_completes_the_run() {
     let clock = FakeClock::new(t0);
 
     // ---- Process A: the prefix is paid for, then the gate asks and pauses -------------
-    let store_a = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
-    let journal_a = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let store_a = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_a = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let (gw_a, calls_a) = recording_gateway().await;
     let exec_a = Executor::new(Arc::new(gw_a), journal_a.clone(), "v1")
-        .with_content_store(Arc::new(PostgresContentStore::new(
-            connect(&url).await.unwrap(),
-        )))
-        .with_context_store(Arc::new(PostgresContextStore::new(
-            connect(&url).await.unwrap(),
-        )))
+        .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
+        .with_context_store(Arc::new(PgContextStore::new(db.pool().await, db.tenant)))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
     let submitted = torii::cmd::run::submit(&sched_a, run, graph.clone(), None, || {})
@@ -1538,8 +1539,8 @@ async fn a_human_gate_decided_in_another_process_completes_the_run() {
     // A separate pool and a separate journal handle — no gateway, no model credentials,
     // nothing in-process shared with A. The menu comes out of the durable `GateAwaited`;
     // `list-paused` has no graph in hand and must not need one.
-    let store_b = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
-    let journal_b = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let store_b = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_b = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let listed = torii::cmd::run::list_paused(store_b.as_ref(), journal_b.as_ref(), false)
         .await
         .expect("list-paused");
@@ -1599,7 +1600,7 @@ async fn a_human_gate_decided_in_another_process_completes_the_run() {
         .await
         .expect("wake");
     assert_eq!(woken.code, torii::errors::EXIT_OK, "{}", woken.text);
-    let (sched_w, calls_w) = fresh_context_worker(&url, woken_at + Duration::seconds(1)).await;
+    let (sched_w, calls_w) = fresh_context_worker(&db, woken_at + Duration::seconds(1)).await;
     let served_w = serve_once(&sched_w).await;
     assert_eq!(served_w.code, torii::errors::EXIT_OK, "{}", served_w.text);
     let after_wake = store_b.status(run).await.unwrap().unwrap();
@@ -1620,8 +1621,8 @@ async fn a_human_gate_decided_in_another_process_completes_the_run() {
     // Two minutes in — far short of the hour — so the gate is genuinely still waiting and
     // the completion below cannot be the timeout firing.
     let decided_at = t0 + Duration::seconds(120);
-    let store_c = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
-    let journal_c = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let store_c = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_c = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let decided = torii::cmd::gate::decide(
         store_c.as_ref(),
         journal_c.as_ref(),
@@ -1653,7 +1654,7 @@ async fn a_human_gate_decided_in_another_process_completes_the_run() {
     // ---- Process B: a FRESH worker drives it -----------------------------------------
     // The only thing carried over from A is the run id; everything else B needs — the
     // graph included — it reads out of Postgres.
-    let (sched_b, calls_b) = fresh_context_worker(&url, decided_at + Duration::seconds(1)).await;
+    let (sched_b, calls_b) = fresh_context_worker(&db, decided_at + Duration::seconds(1)).await;
     let served = serve_until_settled(&sched_b, store_b.as_ref(), run).await;
     assert_eq!(served.code, torii::errors::EXIT_OK, "{}", served.text);
 
@@ -1720,7 +1721,7 @@ async fn a_human_gate_decided_in_another_process_completes_the_run() {
     // Read back through a THIRD context store on its own pool, so this is the durable row,
     // not B's in-process blackboard. `{decision, actor, note}` is the shape a downstream
     // `Branch` matches on, which is why the whole object is asserted rather than the name.
-    let ctx = PostgresContextStore::new(connect(&url).await.unwrap());
+    let ctx = PgContextStore::new(db.pool().await, db.tenant);
     let published = ctx
         .get(run, Scope::Run, ContextKey(release.0.clone()))
         .await
@@ -1774,8 +1775,7 @@ async fn a_human_gate_decided_in_another_process_completes_the_run() {
 )]
 #[tokio::test]
 async fn a_human_backed_agent_answered_in_another_process_completes_the_run() {
-    let Some(url) = db_url() else { return };
-    let _guard = scheduler_guard().await;
+    let Some(db) = Db::new().await else { return };
 
     let run = RunId(uuid::Uuid::new_v4());
     let marker = run.0.to_string();
@@ -1789,16 +1789,12 @@ async fn a_human_backed_agent_answered_in_another_process_completes_the_run() {
     let clock = FakeClock::new(t0);
 
     // ---- Process A: the prefix is paid for, then the role asks and pauses -------------
-    let store_a = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
-    let journal_a = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let store_a = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_a = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let (gw_a, calls_a) = recording_gateway().await;
     let exec_a = Executor::new(Arc::new(gw_a), journal_a.clone(), "v1")
-        .with_content_store(Arc::new(PostgresContentStore::new(
-            connect(&url).await.unwrap(),
-        )))
-        .with_context_store(Arc::new(PostgresContextStore::new(
-            connect(&url).await.unwrap(),
-        )))
+        .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
+        .with_context_store(Arc::new(PgContextStore::new(db.pool().await, db.tenant)))
         .with_registry(human_registry(sla))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
@@ -1841,8 +1837,8 @@ async fn a_human_backed_agent_answered_in_another_process_completes_the_run() {
     // no registry, nothing in-process shared with A. The question comes out of the durable
     // `AgentAwaited`; `list-paused` has neither the graph nor the config in hand and must
     // not need either.
-    let store_b = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
-    let journal_b = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let store_b = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_b = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let listed = torii::cmd::run::list_paused(store_b.as_ref(), journal_b.as_ref(), false)
         .await
         .expect("list-paused");
@@ -1936,7 +1932,7 @@ async fn a_human_backed_agent_answered_in_another_process_completes_the_run() {
         .await
         .expect("wake");
     assert_eq!(woken.code, torii::errors::EXIT_OK, "{}", woken.text);
-    let (sched_w, calls_w) = fresh_human_worker(&url, woken_at + Duration::seconds(1), sla).await;
+    let (sched_w, calls_w) = fresh_human_worker(&db, woken_at + Duration::seconds(1), sla).await;
     let served_w = serve_once(&sched_w).await;
     assert_eq!(served_w.code, torii::errors::EXIT_OK, "{}", served_w.text);
     let after_wake = store_b.status(run).await.unwrap().unwrap();
@@ -1958,8 +1954,8 @@ async fn a_human_backed_agent_answered_in_another_process_completes_the_run() {
     // the completion below cannot be the timeout firing.
     const ANSWER: &str = "Clause 7 permits sub-processing with 30 days' written notice.";
     let answered_at = t0 + Duration::seconds(120);
-    let store_c = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
-    let journal_c = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let store_c = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_c = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let delivered = torii::cmd::human::answer(
         store_c.as_ref(),
         journal_c.as_ref(),
@@ -1991,8 +1987,7 @@ async fn a_human_backed_agent_answered_in_another_process_completes_the_run() {
     // The only things carried over from A are the run id and the config — everything else
     // B needs, the graph included, it reads out of Postgres. (Why the config is rebuilt
     // rather than read back: see `human_registry`.)
-    let (sched_b, calls_b) =
-        fresh_human_worker(&url, answered_at + Duration::seconds(1), sla).await;
+    let (sched_b, calls_b) = fresh_human_worker(&db, answered_at + Duration::seconds(1), sla).await;
     let served = serve_until_settled(&sched_b, store_b.as_ref(), run).await;
     assert_eq!(served.code, torii::errors::EXIT_OK, "{}", served.text);
 
@@ -2078,7 +2073,7 @@ async fn a_human_backed_agent_answered_in_another_process_completes_the_run() {
     // a downstream `Branch` or prompt consume a human's answer without knowing it was
     // human; `"actor"` is the part a model output has no equivalent of, and it is what makes
     // the run auditable after the fact.
-    let ctx = PostgresContextStore::new(connect(&url).await.unwrap());
+    let ctx = PgContextStore::new(db.pool().await, db.tenant);
     let published = ctx
         .get(run, Scope::Run, ContextKey(review.0.clone()))
         .await
@@ -2133,8 +2128,7 @@ async fn a_human_backed_agent_answered_in_another_process_completes_the_run() {
 )]
 #[tokio::test]
 async fn a_loop_gate_decided_in_another_process_resumes_and_converges() {
-    let Some(url) = db_url() else { return };
-    let _guard = scheduler_guard().await;
+    let Some(db) = Db::new().await else { return };
 
     let run = RunId(uuid::Uuid::new_v4());
     let marker = run.0.to_string();
@@ -2148,16 +2142,12 @@ async fn a_loop_gate_decided_in_another_process_resumes_and_converges() {
     let clock = FakeClock::new(t0);
 
     // ---- Process A: the prefix and iteration 0 are paid for, then the gate asks --------
-    let store_a = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
-    let journal_a = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let store_a = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_a = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let (gw_a, calls_a) = recording_gateway().await;
     let exec_a = Executor::new(Arc::new(gw_a), journal_a.clone(), "v1")
-        .with_content_store(Arc::new(PostgresContentStore::new(
-            connect(&url).await.unwrap(),
-        )))
-        .with_context_store(Arc::new(PostgresContextStore::new(
-            connect(&url).await.unwrap(),
-        )))
+        .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
+        .with_context_store(Arc::new(PgContextStore::new(db.pool().await, db.tenant)))
         .with_registry(human_registry(sla))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
@@ -2205,8 +2195,8 @@ async fn a_loop_gate_decided_in_another_process_resumes_and_converges() {
     // registry, nothing in-process shared with A. Everything asserted here is folded out of
     // A's durable `LoopGateAwaited`, and for this kind there is nowhere else it COULD come
     // from: `list-paused` holds no graph, and the graph would not contain this node anyway.
-    let store_b = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
-    let journal_b = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let store_b = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_b = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let listed = torii::cmd::run::list_paused(store_b.as_ref(), journal_b.as_ref(), false)
         .await
         .expect("list-paused");
@@ -2280,7 +2270,7 @@ async fn a_loop_gate_decided_in_another_process_resumes_and_converges() {
         .await
         .expect("wake");
     assert_eq!(woken.code, torii::errors::EXIT_OK, "{}", woken.text);
-    let (sched_w, calls_w) = fresh_human_worker(&url, woken_at + Duration::seconds(1), sla).await;
+    let (sched_w, calls_w) = fresh_human_worker(&db, woken_at + Duration::seconds(1), sla).await;
     let served_w = serve_once(&sched_w).await;
     assert_eq!(served_w.code, torii::errors::EXIT_OK, "{}", served_w.text);
     let after_wake = store_b.status(run).await.unwrap().unwrap();
@@ -2310,8 +2300,8 @@ async fn a_loop_gate_decided_in_another_process_resumes_and_converges() {
     // dropping it silently. Passing `Some` here would not test the note, it would test the
     // refusal — and get exit 2 instead of a decision.
     let decided_at = t0 + Duration::seconds(120);
-    let store_c = Arc::new(PostgresSchedulerStore::new(connect(&url).await.unwrap()));
-    let journal_c = Arc::new(PostgresJournal::new(connect(&url).await.unwrap()));
+    let store_c = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_c = Arc::new(PgJournal::new(db.pool().await, db.tenant));
     let decided = torii::cmd::gate::decide(
         store_c.as_ref(),
         journal_c.as_ref(),
@@ -2344,7 +2334,7 @@ async fn a_loop_gate_decided_in_another_process_resumes_and_converges() {
     // The only things carried over from A are the run id and the config — everything else
     // B needs, the graph included, it reads out of Postgres. (Why the config is rebuilt
     // rather than read back: see `human_registry`.)
-    let (sched_b, calls_b) = fresh_human_worker(&url, decided_at + Duration::seconds(1), sla).await;
+    let (sched_b, calls_b) = fresh_human_worker(&db, decided_at + Duration::seconds(1), sla).await;
     let served = serve_until_settled(&sched_b, store_b.as_ref(), run).await;
     assert_eq!(served.code, torii::errors::EXIT_OK, "{}", served.text);
 
@@ -2457,7 +2447,7 @@ async fn a_loop_gate_decided_in_another_process_resumes_and_converges() {
     // and would have spent two more gateway calls on iterations nobody authorized. This is
     // therefore also where "the menu is read from the JOURNAL" pays off across the
     // boundary: process B resolved `ship` against A's journaled `stops: true`.
-    let ctx = PostgresContextStore::new(connect(&url).await.unwrap());
+    let ctx = PgContextStore::new(db.pool().await, db.tenant);
     let published = ctx
         .get(run, Scope::Run, ContextKey(lp.0.clone()))
         .await

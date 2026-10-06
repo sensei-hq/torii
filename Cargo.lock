@@ -6034,8 +6034,6 @@ dependencies = [
  "chrono",
  "sensei-orchestrator-core",
  "serde_json",
- "sqlx",
- "tokio",
 ]
 
 [[package]]

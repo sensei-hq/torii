@@ -179,7 +179,7 @@ pub async fn push(
     src: &dyn ConfigStore,
     scheduler: &dyn SchedulerStore,
     dir: &Path,
-    gateway_config: Option<&Path>,
+    gateway_config: Option<&dyn crate::boot::GatewayConfigSource>,
     yes: bool,
     confirm: &mut dyn FnMut(&str) -> bool,
 ) -> Result<Outcome, CliError> {
@@ -202,38 +202,7 @@ pub async fn push(
     // registry-visible. Given the catalog, refuse here rather than let the mismatch surface
     // mid-run as an empty candidate set -> `NoCandidates` -> a terminal `NodeFailed` naming
     // neither cause nor remedy. Optional so every existing invocation is unchanged.
-    if let Some(gw_path) = gateway_config {
-        let raw = std::fs::read_to_string(gw_path).map_err(|e| {
-            CliError::error(format!(
-                "refusing to push: cannot read {}: {e}",
-                gw_path.display()
-            ))
-        })?;
-        let gw: kernel::types::config::GatewayConfig = serde_json::from_str(&raw)
-            .map_err(|e| crate::boot::gateway_config_parse_error(gw_path, &e))?;
-        let missing = crate::boot::unresolved_chain_refs(
-            incoming.agents.iter(),
-            incoming
-                .chain_bindings
-                .iter()
-                .map(|b| (b.area.as_str(), b.kind.as_str(), b.chain.as_str())),
-            &gw.chains,
-        );
-        if !missing.is_empty() {
-            let detail = missing
-                .iter()
-                .map(|(what, chain)| format!("  {what} -> chain {chain:?}"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            return Err(CliError::error(format!(
-                "refusing to push: {} references {} chain id(s) that {} does not define:\n{}",
-                dir.display(),
-                missing.len(),
-                gw_path.display(),
-                detail
-            )));
-        }
-    }
+    let _ = gateway_config; // TM-8c red: the chain check is not wired to the source yet
 
     // 2. One atomic read of the durable (content, generation) pair.
     let (current, current_v) = src.load_versioned().await?;
@@ -335,6 +304,90 @@ mod tests {
                 .map(|b| (b.area.as_str(), b.kind.as_str(), b.chain.as_str())),
             chains,
         )
+    }
+
+    /// A gateway-config source defining exactly `chains` (TM-8c: `push` checks through the
+    /// same seam boot uses — torii's catalog in production).
+    struct StaticSource(Vec<&'static str>);
+
+    #[async_trait::async_trait]
+    impl crate::boot::GatewayConfigSource for StaticSource {
+        async fn load(&self) -> Result<kernel::types::config::GatewayConfig, CliError> {
+            let mut gw = kernel::types::config::GatewayConfig::default();
+            for c in &self.0 {
+                gw.chains.insert(
+                    c.to_string(),
+                    serde_json::from_value(serde_json::json!({
+                        "id": c, "capability": "text_chat", "models": [], "fallback_triggers": []
+                    }))
+                    .unwrap(),
+                );
+            }
+            Ok(gw)
+        }
+        fn describe(&self) -> String {
+            "the static test catalog".to_string()
+        }
+    }
+
+    /// A registry dir with one agent bound to `chain`.
+    fn agent_dir(chain: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("torii-cfg-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("agents")).unwrap();
+        std::fs::write(
+            root.join("agents/researcher.md"),
+            format!(
+                "---\nname: researcher\narea: research\nkind: lead\nchain: {chain}\ntools: []\nskills: []\n---\nYou research.\n"
+            ),
+        )
+        .unwrap();
+        root
+    }
+
+    /// SP-REG-5 through the source seam (TM-8c): given the gateway config, `push` refuses a
+    /// registry naming a chain it does not define — naming the chain, the agent and the
+    /// source — and writes nothing.
+    #[tokio::test]
+    async fn push_refuses_a_registry_whose_chains_the_gateway_config_lacks() {
+        let src = orchestrator_store::InMemoryConfigStore::new();
+        let dir = agent_dir("nobody-defines-this");
+        let err = push(
+            &src,
+            &no_paused_runs(),
+            &dir,
+            Some(&StaticSource(vec!["chat"])),
+            true,
+            &mut |_| true,
+        )
+        .await
+        .expect_err("must refuse");
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(
+            err.message.contains("nobody-defines-this")
+                && err.message.contains("researcher")
+                && err.message.contains("the static test catalog"),
+            "{}",
+            err.message
+        );
+        assert_eq!(src.version().await.unwrap(), Some(0), "nothing was written");
+    }
+
+    #[tokio::test]
+    async fn push_accepts_a_registry_whose_chains_the_gateway_config_defines() {
+        let src = orchestrator_store::InMemoryConfigStore::new();
+        let dir = agent_dir("chat");
+        push(
+            &src,
+            &no_paused_runs(),
+            &dir,
+            Some(&StaticSource(vec!["chat"])),
+            true,
+            &mut |_| true,
+        )
+        .await
+        .expect("defined chain");
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(src.version().await.unwrap(), Some(1));
     }
 
     fn skill(name: &str, body: &str) -> SkillDef {

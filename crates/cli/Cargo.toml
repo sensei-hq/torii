@@ -21,6 +21,9 @@ orchestrator = { package = "sensei-orchestrator", git = "https://github.com/sens
 orchestrator-store = { package = "sensei-orchestrator-store", git = "https://github.com/sensei-hq/gateway", branch = "develop", features = ["postgres"] }
 gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", branch = "develop" }
 kernel = { package = "sensei-kernel", git = "https://github.com/sensei-hq/gateway", branch = "develop" }
+# torii's shared data layer: the catalog GatewayConfig loader the API uses, tenant resolution
+# and the tenant-scoped stores (TM-8c). The CLI reads torii's database through it only.
+torii-core = { path = "../core" }
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }

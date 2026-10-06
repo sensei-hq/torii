@@ -7644,6 +7644,7 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
+ "torii-core",
  "tracing",
  "tracing-subscriber",
  "uuid",

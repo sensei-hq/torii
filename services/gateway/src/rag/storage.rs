@@ -53,8 +53,17 @@ pub struct SupabaseStorage {
 }
 
 impl SupabaseStorage {
-    pub fn new(base: impl Into<String>, service_key: impl Into<String>, bucket: impl Into<String>) -> Self {
-        Self { base: base.into(), service_key: service_key.into(), bucket: bucket.into(), http: reqwest::Client::new() }
+    pub fn new(
+        base: impl Into<String>,
+        service_key: impl Into<String>,
+        bucket: impl Into<String>,
+    ) -> Self {
+        Self {
+            base: base.into(),
+            service_key: service_key.into(),
+            bucket: bucket.into(),
+            http: reqwest::Client::new(),
+        }
     }
 
     /// Build from the environment: `PUBLIC_SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`
@@ -88,7 +97,10 @@ impl ObjectStore for SupabaseStorage {
             .await
             .map_err(|e| RagError::Storage(format!("put {path}: {e}")))?;
         if !resp.status().is_success() {
-            return Err(RagError::Storage(format!("put {path}: HTTP {}", resp.status())));
+            return Err(RagError::Storage(format!(
+                "put {path}: HTTP {}",
+                resp.status()
+            )));
         }
         Ok(())
     }
@@ -102,13 +114,18 @@ impl ObjectStore for SupabaseStorage {
             .await
             .map_err(|e| RagError::Storage(format!("get {path}: {e}")))?;
         if !resp.status().is_success() {
-            return Err(RagError::Storage(format!("get {path}: HTTP {}", resp.status())));
+            return Err(RagError::Storage(format!(
+                "get {path}: HTTP {}",
+                resp.status()
+            )));
         }
         // Bound the download (OOM defense): reject on the advertised length, then hard-cap the read.
         let max = max_object_bytes();
         if let Some(len) = resp.content_length() {
             if len > max {
-                return Err(RagError::Storage(format!("object {path} too large ({len} > {max})")));
+                return Err(RagError::Storage(format!(
+                    "object {path} too large ({len} > {max})"
+                )));
             }
         }
         let body = resp
@@ -116,14 +133,20 @@ impl ObjectStore for SupabaseStorage {
             .await
             .map_err(|e| RagError::Storage(format!("get {path} body: {e}")))?;
         if body.len() as u64 > max {
-            return Err(RagError::Storage(format!("object {path} too large ({} > {max})", body.len())));
+            return Err(RagError::Storage(format!(
+                "object {path} too large ({} > {max})",
+                body.len()
+            )));
         }
         Ok(body.to_vec())
     }
 
     async fn signed_upload(&self, path: &str) -> Result<String, RagError> {
         // POST /storage/v1/object/upload/sign/{bucket}/{path} → { url, token }
-        let endpoint = format!("{}/storage/v1/object/upload/sign/{}/{}", self.base, self.bucket, path);
+        let endpoint = format!(
+            "{}/storage/v1/object/upload/sign/{}/{}",
+            self.base, self.bucket, path
+        );
         let resp = self
             .http
             .post(&endpoint)
@@ -132,7 +155,10 @@ impl ObjectStore for SupabaseStorage {
             .await
             .map_err(|e| RagError::Storage(format!("sign upload {path}: {e}")))?;
         if !resp.status().is_success() {
-            return Err(RagError::Storage(format!("sign upload {path}: HTTP {}", resp.status())));
+            return Err(RagError::Storage(format!(
+                "sign upload {path}: HTTP {}",
+                resp.status()
+            )));
         }
         let body: serde_json::Value = resp
             .json()
@@ -147,7 +173,10 @@ impl ObjectStore for SupabaseStorage {
 
     async fn signed_download(&self, path: &str, ttl_s: u32) -> Result<String, RagError> {
         // POST /storage/v1/object/sign/{bucket}/{path}  body { expiresIn } → { signedURL }
-        let endpoint = format!("{}/storage/v1/object/sign/{}/{}", self.base, self.bucket, path);
+        let endpoint = format!(
+            "{}/storage/v1/object/sign/{}/{}",
+            self.base, self.bucket, path
+        );
         let resp = self
             .http
             .post(&endpoint)
@@ -157,7 +186,10 @@ impl ObjectStore for SupabaseStorage {
             .await
             .map_err(|e| RagError::Storage(format!("sign download {path}: {e}")))?;
         if !resp.status().is_success() {
-            return Err(RagError::Storage(format!("sign download {path}: HTTP {}", resp.status())));
+            return Err(RagError::Storage(format!(
+                "sign download {path}: HTTP {}",
+                resp.status()
+            )));
         }
         let body: serde_json::Value = resp
             .json()
@@ -182,7 +214,10 @@ pub struct InMemoryStore {
 #[async_trait]
 impl ObjectStore for InMemoryStore {
     async fn put(&self, path: &str, bytes: &[u8], _content_type: &str) -> Result<(), RagError> {
-        self.map.lock().unwrap().insert(path.to_string(), bytes.to_vec());
+        self.map
+            .lock()
+            .unwrap()
+            .insert(path.to_string(), bytes.to_vec());
         Ok(())
     }
     async fn get(&self, path: &str) -> Result<Vec<u8>, RagError> {

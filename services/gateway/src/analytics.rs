@@ -209,9 +209,9 @@ pub fn scope_decision(
         (true, Some(s), _) => ScopeDecision::Scope(s), // admin may scope anywhere
         (true, None, _) => ScopeDecision::Unrestricted, // admin, tenant-wide
         (false, Some(s), Some(_)) if requested_in_own => ScopeDecision::Scope(s),
-        (false, Some(_), _) => ScopeDecision::Denied,  // out-of-subtree without audit.read
+        (false, Some(_), _) => ScopeDecision::Denied, // out-of-subtree without audit.read
         (false, None, Some(own)) => ScopeDecision::Scope(own), // confined to own subtree
-        (false, None, None) => ScopeDecision::Denied,  // no personal node + no audit.read
+        (false, None, None) => ScopeDecision::Denied, // no personal node + no audit.read
     }
 }
 
@@ -254,8 +254,14 @@ mod tests {
     #[test]
     fn spend_group_maps_attribute_dims() {
         assert_eq!(SpendGroup::parse("model").unwrap().attr_column(), "model");
-        assert_eq!(SpendGroup::parse("provider").unwrap().attr_column(), "adapter");
-        assert_eq!(SpendGroup::parse("capability").unwrap().attr_column(), "capability");
+        assert_eq!(
+            SpendGroup::parse("provider").unwrap().attr_column(),
+            "adapter"
+        );
+        assert_eq!(
+            SpendGroup::parse("capability").unwrap().attr_column(),
+            "capability"
+        );
         assert_eq!(SpendGroup::parse("model").unwrap().level(), None);
         assert!(!SpendGroup::parse("model").unwrap().is_node());
     }
@@ -278,8 +284,14 @@ mod tests {
     fn scope_admin_is_unrestricted_or_any_scope() {
         let s = Uuid::new_v4();
         // audit.read holder: tenant-wide when unscoped, any node when scoped.
-        assert_eq!(scope_decision(true, None, None, false), ScopeDecision::Unrestricted);
-        assert_eq!(scope_decision(true, Some(s), None, false), ScopeDecision::Scope(s));
+        assert_eq!(
+            scope_decision(true, None, None, false),
+            ScopeDecision::Unrestricted
+        );
+        assert_eq!(
+            scope_decision(true, Some(s), None, false),
+            ScopeDecision::Scope(s)
+        );
     }
 
     #[test]
@@ -288,19 +300,34 @@ mod tests {
         let child = Uuid::new_v4();
         let sibling = Uuid::new_v4();
         // no audit.read, no scope → confined to own subtree.
-        assert_eq!(scope_decision(false, None, Some(own), false), ScopeDecision::Scope(own));
+        assert_eq!(
+            scope_decision(false, None, Some(own), false),
+            ScopeDecision::Scope(own)
+        );
         // requesting a node WITHIN own subtree → allowed (narrowing).
-        assert_eq!(scope_decision(false, Some(child), Some(own), true), ScopeDecision::Scope(child));
+        assert_eq!(
+            scope_decision(false, Some(child), Some(own), true),
+            ScopeDecision::Scope(child)
+        );
         // requesting a node OUTSIDE own subtree → denied (needs audit.read).
-        assert_eq!(scope_decision(false, Some(sibling), Some(own), false), ScopeDecision::Denied);
+        assert_eq!(
+            scope_decision(false, Some(sibling), Some(own), false),
+            ScopeDecision::Denied
+        );
     }
 
     #[test]
     fn scope_member_without_personal_node_is_denied() {
         // No personal node + no audit.read → no scope at all → deny (fail-closed, never
         // falls back to the org root, which would leak tenant-wide).
-        assert_eq!(scope_decision(false, None, None, false), ScopeDecision::Denied);
-        assert_eq!(scope_decision(false, Some(Uuid::new_v4()), None, false), ScopeDecision::Denied);
+        assert_eq!(
+            scope_decision(false, None, None, false),
+            ScopeDecision::Denied
+        );
+        assert_eq!(
+            scope_decision(false, Some(Uuid::new_v4()), None, false),
+            ScopeDecision::Denied
+        );
     }
 
     #[test]

@@ -75,7 +75,9 @@ pub fn buffer_verdict(
     // stale: the oldest still-unflushed entry is older than the operator threshold.
     if let Some(oldest) = bh.get("oldest_pending_at").and_then(Value::as_str) {
         if let Ok(ts) = DateTime::parse_from_rfc3339(oldest) {
-            let age = now.signed_duration_since(ts.with_timezone(&Utc)).num_seconds();
+            let age = now
+                .signed_duration_since(ts.with_timezone(&Utc))
+                .num_seconds();
             if age > stale_threshold_s {
                 return "stale";
             }
@@ -114,7 +116,10 @@ pub fn validate_sync_policy(v: &Value) -> Result<(), &'static str> {
     }
 
     let config_pull = obj.get("config_pull").and_then(Value::as_str);
-    if !matches!(config_pull, Some("realtime") | Some("interval") | Some("manual")) {
+    if !matches!(
+        config_pull,
+        Some("realtime") | Some("interval") | Some("manual")
+    ) {
         return Err("bad_config_pull");
     }
 
@@ -169,7 +174,10 @@ mod tests {
         assert_eq!(buffer_verdict(Some(&json!({})), now(), 900), "unknown");
         assert_eq!(buffer_verdict(Some(&Value::Null), now(), 900), "unknown");
         // a value with no recognizable status/queues/timestamp is still unknown, not healthy
-        assert_eq!(buffer_verdict(Some(&json!({"clock_skew_ms": 5})), now(), 900), "unknown");
+        assert_eq!(
+            buffer_verdict(Some(&json!({"clock_skew_ms": 5})), now(), 900),
+            "unknown"
+        );
     }
 
     #[test]
@@ -205,8 +213,14 @@ mod tests {
         });
         assert_eq!(buffer_verdict(Some(&recent), now(), 900), "flushing");
         // explicit flushing/retrying status with empty queues is still flushing.
-        assert_eq!(buffer_verdict(Some(&json!({"flush_status": "flushing"})), now(), 900), "flushing");
-        assert_eq!(buffer_verdict(Some(&json!({"flush_status": "retrying"})), now(), 900), "flushing");
+        assert_eq!(
+            buffer_verdict(Some(&json!({"flush_status": "flushing"})), now(), 900),
+            "flushing"
+        );
+        assert_eq!(
+            buffer_verdict(Some(&json!({"flush_status": "retrying"})), now(), 900),
+            "flushing"
+        );
     }
 
     #[test]
@@ -220,16 +234,28 @@ mod tests {
         });
         assert_eq!(buffer_verdict(Some(&bh), now(), 900), "healthy");
         // ok with no pending timestamp and no queues is healthy too.
-        assert_eq!(buffer_verdict(Some(&json!({"flush_status": "ok"})), now(), 900), "healthy");
+        assert_eq!(
+            buffer_verdict(Some(&json!({"flush_status": "ok"})), now(), 900),
+            "healthy"
+        );
     }
 
     #[test]
     fn drift_semantics() {
         assert!(is_drifted(Some(408), Some(412)), "behind → drifted");
         assert!(!is_drifted(Some(412), Some(412)), "in sync → not drifted");
-        assert!(!is_drifted(Some(413), Some(412)), "ahead (impossible but safe) → not drifted");
-        assert!(is_drifted(None, Some(2)), "never synced + tenant has config → drifted");
-        assert!(!is_drifted(Some(5), None), "tenant has no config_versions row → not drifted");
+        assert!(
+            !is_drifted(Some(413), Some(412)),
+            "ahead (impossible but safe) → not drifted"
+        );
+        assert!(
+            is_drifted(None, Some(2)),
+            "never synced + tenant has config → drifted"
+        );
+        assert!(
+            !is_drifted(Some(5), None),
+            "tenant has no config_versions row → not drifted"
+        );
         assert!(!is_drifted(None, None), "no data either side → not drifted");
     }
 
@@ -251,20 +277,28 @@ mod tests {
         });
         assert!(validate_sync_policy(&interval).is_ok());
         // manual mode may omit pull_interval_s.
-        let manual = json!({"config_pull": "manual", "offline_grace_h": 0, "buffer_flush": "on_reconnect"});
+        let manual =
+            json!({"config_pull": "manual", "offline_grace_h": 0, "buffer_flush": "on_reconnect"});
         assert!(validate_sync_policy(&manual).is_ok());
     }
 
     #[test]
     fn sync_policy_rejects_bad_writes() {
-        assert_eq!(validate_sync_policy(&json!("not-an-object")).unwrap_err(), "sync_policy_not_object");
         assert_eq!(
-            validate_sync_policy(&json!({"offline_grace_h": 1, "buffer_flush": "interval"})).unwrap_err(),
+            validate_sync_policy(&json!("not-an-object")).unwrap_err(),
+            "sync_policy_not_object"
+        );
+        assert_eq!(
+            validate_sync_policy(&json!({"offline_grace_h": 1, "buffer_flush": "interval"}))
+                .unwrap_err(),
             "bad_config_pull",
             "missing config_pull"
         );
         assert_eq!(
-            validate_sync_policy(&json!({"config_pull": "weekly", "offline_grace_h": 1, "buffer_flush": "interval"})).unwrap_err(),
+            validate_sync_policy(
+                &json!({"config_pull": "weekly", "offline_grace_h": 1, "buffer_flush": "interval"})
+            )
+            .unwrap_err(),
             "bad_config_pull"
         );
         assert_eq!(
@@ -276,7 +310,10 @@ mod tests {
             "bad_pull_interval_s"
         );
         assert_eq!(
-            validate_sync_policy(&json!({"config_pull": "realtime", "buffer_flush": "on_reconnect"})).unwrap_err(),
+            validate_sync_policy(
+                &json!({"config_pull": "realtime", "buffer_flush": "on_reconnect"})
+            )
+            .unwrap_err(),
             "offline_grace_h_required"
         );
         // offline_grace_h present-but-invalid: negative and non-integer both fail closed.
@@ -294,11 +331,15 @@ mod tests {
             "bad_pull_interval_s"
         );
         assert_eq!(
-            validate_sync_policy(&json!({"config_pull": "realtime", "offline_grace_h": 1})).unwrap_err(),
+            validate_sync_policy(&json!({"config_pull": "realtime", "offline_grace_h": 1}))
+                .unwrap_err(),
             "bad_buffer_flush"
         );
         assert_eq!(
-            validate_sync_policy(&json!({"config_pull": "realtime", "offline_grace_h": 1, "buffer_flush": "hourly"})).unwrap_err(),
+            validate_sync_policy(
+                &json!({"config_pull": "realtime", "offline_grace_h": 1, "buffer_flush": "hourly"})
+            )
+            .unwrap_err(),
             "bad_buffer_flush"
         );
         // fail-closed on an unrecognized key.
@@ -316,9 +357,21 @@ mod tests {
         assert_eq!(parse_stale_threshold(Some("60".into())), 60);
         // unparseable / non-positive overrides fall back to the const default
         assert_eq!(parse_stale_threshold(None), DEFAULT_STALE_THRESHOLD_S);
-        assert_eq!(parse_stale_threshold(Some("".into())), DEFAULT_STALE_THRESHOLD_S);
-        assert_eq!(parse_stale_threshold(Some("banana".into())), DEFAULT_STALE_THRESHOLD_S);
-        assert_eq!(parse_stale_threshold(Some("0".into())), DEFAULT_STALE_THRESHOLD_S);
-        assert_eq!(parse_stale_threshold(Some("-5".into())), DEFAULT_STALE_THRESHOLD_S);
+        assert_eq!(
+            parse_stale_threshold(Some("".into())),
+            DEFAULT_STALE_THRESHOLD_S
+        );
+        assert_eq!(
+            parse_stale_threshold(Some("banana".into())),
+            DEFAULT_STALE_THRESHOLD_S
+        );
+        assert_eq!(
+            parse_stale_threshold(Some("0".into())),
+            DEFAULT_STALE_THRESHOLD_S
+        );
+        assert_eq!(
+            parse_stale_threshold(Some("-5".into())),
+            DEFAULT_STALE_THRESHOLD_S
+        );
     }
 }

@@ -539,8 +539,13 @@ pub async fn post_chat(
         } else {
             // Per-call routing trace (the "why this model" attempt chain) → execution_traces,
             // linked to this ledger row. Best-effort: a trace failure never affects the answer.
-            let stored_trace =
-                build_trace(call.id, call.capability.clone(), &resp, duration_ms, call.recorded_at);
+            let stored_trace = build_trace(
+                call.id,
+                call.capability.clone(),
+                &resp,
+                duration_ms,
+                call.recorded_at,
+            );
             if let Err(e) = store.insert_execution_trace(&stored_trace).await {
                 tracing::warn!("chat: persist execution_trace failed (best-effort): {}", e);
             }
@@ -723,8 +728,13 @@ pub async fn post_chat_stream(
                     // `model` field is moved into the call below).
                     let call_id = Uuid::new_v4();
                     let recorded_at = Utc::now();
-                    let stored_trace =
-                        build_trace(call_id, Capability::TextChat, &resp, duration_ms, recorded_at);
+                    let stored_trace = build_trace(
+                        call_id,
+                        Capability::TextChat,
+                        &resp,
+                        duration_ms,
+                        recorded_at,
+                    );
                     let successful_attempt = resp.attempts.last();
                     let adapter = successful_attempt
                         .map(|a| a.adapter.clone())
@@ -846,9 +856,14 @@ async fn post_chat_with_tools(
 
     // O3-2 governance: a policy can disable the whole tools feature (a locked/off kill-switch)
     // regardless of grants. Ungoverned (no policy) → the allow-list is the gate.
-    let tools_gov =
-        crate::routes::config::resolve_feature(&state.pool, tenant, &claims.role_ids, "tools", req.space_id)
-            .await;
+    let tools_gov = crate::routes::config::resolve_feature(
+        &state.pool,
+        tenant,
+        &claims.role_ids,
+        "tools",
+        req.space_id,
+    )
+    .await;
     let allowed = if tools_gov.governed && !tools_gov.enabled {
         tracing::info!(
             "chat/tools: tools feature disabled by governance ({}) — offering no tools",
@@ -1064,8 +1079,13 @@ impl ModelTurn for GatewayModelTurn<'_> {
             recorded_at: Utc::now(),
         };
         if store.insert_inference_call(&call).await.is_ok() {
-            let stored_trace =
-                build_trace(call.id, call.capability.clone(), &resp, duration_ms, call.recorded_at);
+            let stored_trace = build_trace(
+                call.id,
+                call.capability.clone(),
+                &resp,
+                duration_ms,
+                call.recorded_at,
+            );
             let _ = store.insert_execution_trace(&stored_trace).await;
         }
 
@@ -1175,7 +1195,14 @@ mod tests {
                     Some("429 rate limited"),
                     true,
                 ),
-                attempt(2, "ollama", "gemma2:2b", AttemptStatus::Success, None, false),
+                attempt(
+                    2,
+                    "ollama",
+                    "gemma2:2b",
+                    AttemptStatus::Success,
+                    None,
+                    false,
+                ),
             ],
         };
 

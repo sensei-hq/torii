@@ -17,10 +17,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    auth::Claims,
-    rag::retrieve::RetrieveQuery,
-    routes::rpc::authorize,
-    state::SharedState,
+    auth::Claims, rag::retrieve::RetrieveQuery, routes::rpc::authorize, state::SharedState,
 };
 
 #[derive(Deserialize)]

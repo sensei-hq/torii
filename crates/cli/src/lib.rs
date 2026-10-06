@@ -12,8 +12,8 @@ pub mod diff;
 pub mod errors;
 pub mod render;
 
-/// Test-only helpers: serialization for the durable config tables, and the shared
-/// `DATABASE_URL` guard every DB-gated unit test in this crate goes through.
+/// Test-only: the `DATABASE_URL` skip notice every DB-gated unit test goes through. (Isolation
+/// is a fresh tenant per test — `test_tenant` — not a lock.)
 #[cfg(test)]
 pub(crate) mod test_guard {
     /// The single choke point for every DB-gated unit test in this crate: `Some(url)` to
@@ -54,27 +54,13 @@ pub(crate) mod test_guard {
         url
     }
 
-    /// The raw lookup with no side effects. `db_url()` above stays the single place that
-    /// ANNOUNCES a skip; the guard's advisory-lock connection reads the same variable
-    /// through its own copy of this (and must NOT print a second SKIP line for one test).
+    /// The raw lookup with no side effects; `db_url()` above is the single place that
+    /// ANNOUNCES a skip.
     fn database_url_raw() -> Option<String> {
         std::env::var(crate::boot::ENV_DATABASE_URL)
             .ok()
             .filter(|s| !s.trim().is_empty())
     }
-
-    /// The guard itself lives in `orchestrator_store::test_guard` — the ONE implementation,
-    /// shared with `orchestrator-store`'s own suite AND with `sensei-orchestrator`'s
-    /// `postgres_e2e` (which has no `sqlx` dependency and so could not hold a copy at all; it
-    /// held NONE, which is what made the advisory lock worthless for everyone else). This was
-    /// a second private copy of the same construction, keyed by a `const` that had to be kept
-    /// equal to the store crate's by comment alone; re-exporting is what makes drift
-    /// impossible rather than merely discouraged.
-    ///
-    /// Re-exported under the old names so every `crate::test_guard::config_guard()` call site
-    /// is unchanged. See the shared module for the two isolation layers, panic safety, and
-    /// re-entrancy.
-    pub(crate) use orchestrator_store::test_guard::config_guard;
 }
 
 /// Test-only: a fresh tenant per DB test (TM-8c). torii's stores are tenant-scoped, so a
@@ -136,21 +122,5 @@ pub(crate) mod test_tenant {
             })
             .join();
         }
-    }
-}
-
-#[cfg(test)]
-mod test_guard_agrees_with_the_shared_one {
-    /// The shared guard opens its OWN advisory-lock connection from `DATABASE_URL`. If this
-    /// crate ever read a DIFFERENT variable, the lock would be taken on one database while
-    /// the test it is isolating ran against another — silently isolating nothing. Cheap to
-    /// pin, impossible to notice otherwise.
-    #[test]
-    fn the_guard_and_this_crate_read_the_same_env_var() {
-        assert_eq!(
-            crate::boot::ENV_DATABASE_URL,
-            orchestrator_store::test_guard::ENV_DATABASE_URL,
-            "torii's DB tests and the guard isolating them must point at the SAME database"
-        );
     }
 }

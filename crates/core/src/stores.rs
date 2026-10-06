@@ -1,7 +1,9 @@
 //! Opening torii's database: one pool, a tenant, and every orchestrator store for it.
 
 use sqlx::PgPool;
-use tenant_stores::{PgConfigStore, PgContentStore, PgContextStore, PgJournal, PgSchedulerStore};
+pub use tenant_stores::{
+    PgConfigStore, PgContentStore, PgContextStore, PgJournal, PgSchedulerStore,
+};
 use uuid::Uuid;
 
 /// Connect one pool to torii's database, capped at `max` connections.

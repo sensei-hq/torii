@@ -946,3 +946,18 @@ fn an_unreadable_payload_file_is_rejected_before_any_connection() {
         "must fail before the connection is attempted: {err}"
     );
 }
+
+/// TM-8c: `config push --help` must describe the flag as it behaves — memory-backend only; on
+/// Postgres the push is ALWAYS checked against torii's catalog and the flag is refused. Help
+/// that calls it an optional cross-check sends an operator to add it to a CI push that then
+/// fails every time.
+#[test]
+fn config_push_help_says_gateway_config_is_memory_only() {
+    let out = torii()
+        .args(["config", "push", "--help"])
+        .output()
+        .expect("runs");
+    let help = String::from_utf8_lossy(&out.stdout);
+    assert!(help.contains("TORII_BACKEND=memory"), "{help}");
+    assert!(!help.contains("Optional: without it"), "{help}");
+}

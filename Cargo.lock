@@ -7453,6 +7453,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "torii-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "sensei-gateway",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "torii-gateway"
 version = "0.1.1"
 dependencies = [

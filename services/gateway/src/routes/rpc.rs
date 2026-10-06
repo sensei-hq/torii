@@ -222,13 +222,12 @@ pub async fn budgets_delete_node(
 
     // Look up the node IN THE CALLER'S TENANT (no cross-tenant delete). A NULL parent
     // identifies the org root, which is refused.
-    let parent: Result<Option<Option<Uuid>>, _> = sqlx::query_scalar(
-        "select parent_id from core.org_units where tenant_id = $1 and id = $2",
-    )
-    .bind(tenant)
-    .bind(body.id)
-    .fetch_optional(&state.pool)
-    .await;
+    let parent: Result<Option<Option<Uuid>>, _> =
+        sqlx::query_scalar("select parent_id from core.org_units where tenant_id = $1 and id = $2")
+            .bind(tenant)
+            .bind(body.id)
+            .fetch_optional(&state.pool)
+            .await;
 
     match parent {
         Ok(None) => return (StatusCode::NOT_FOUND, "no such budget node").into_response(),
@@ -452,13 +451,12 @@ pub async fn apikeys_revoke(
         return (StatusCode::NOT_FOUND, "api key not found in tenant").into_response();
     }
 
-    let write = sqlx::query(
-        "update core.api_keys set status = 'revoked' where id = $1 and tenant_id = $2",
-    )
-    .bind(body.id)
-    .bind(tenant)
-    .execute(&state.pool)
-    .await;
+    let write =
+        sqlx::query("update core.api_keys set status = 'revoked' where id = $1 and tenant_id = $2")
+            .bind(body.id)
+            .bind(tenant)
+            .execute(&state.pool)
+            .await;
     if let Err(e) = write {
         tracing::error!("apikeys_revoke: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
@@ -981,10 +979,7 @@ pub(crate) fn validate_feature_write(
 /// §D Phase 4: resolve a feature `slug` (the stable API key) to its `governance.features.id`
 /// (feature_policies is keyed by the uuid FK after the fold). `Ok(None)` = no such feature (the
 /// caller decides 400 vs no-op); `Err` = a DB error surfaced as a 500 response.
-async fn resolve_feature_id(
-    state: &SharedState,
-    slug: &str,
-) -> Result<Option<Uuid>, Response> {
+async fn resolve_feature_id(state: &SharedState, slug: &str) -> Result<Option<Uuid>, Response> {
     sqlx::query_scalar::<_, Uuid>("select id from governance.features where slug = $1")
         .bind(slug)
         .fetch_optional(&state.pool)
@@ -1018,7 +1013,10 @@ pub async fn governance_set_feature(
     let feature_id = match resolve_feature_id(&state, &body.feature_key).await {
         Ok(Some(id)) => id,
         Ok(None) => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "unknown_feature" })))
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "unknown_feature" })),
+            )
                 .into_response()
         }
         Err(resp) => return resp,
@@ -1038,7 +1036,10 @@ pub async fn governance_set_feature(
         .await
         {
             Ok(true) => {
-                return (StatusCode::CONFLICT, Json(json!({ "error": "locked_by_workspace" })))
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({ "error": "locked_by_workspace" })),
+                )
                     .into_response()
             }
             Ok(false) => {}
@@ -1118,13 +1119,18 @@ pub async fn governance_clear_feature(
         Err(resp) => return resp,
     };
     if !matches!(body.scope_type.as_str(), "workspace" | "space" | "role") {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "bad_scope_type" })))
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "bad_scope_type" })),
+        )
             .into_response();
     }
     // §D Phase 4: resolve slug→feature_id (clearing an unknown feature is a no-op, still idempotent).
     let feature_id = match resolve_feature_id(&state, &body.feature_key).await {
         Ok(Some(id)) => id,
-        Ok(None) => return (StatusCode::OK, Json(json!({ "ok": true, "cleared": 0 }))).into_response(),
+        Ok(None) => {
+            return (StatusCode::OK, Json(json!({ "ok": true, "cleared": 0 }))).into_response()
+        }
         Err(resp) => return resp,
     };
     let deleted = sqlx::query(
@@ -1336,7 +1342,8 @@ async fn insert_tenant_dedup_slug(
             }
             Err(e)
                 if attempt == 0
-                    && e.as_database_error().is_some_and(|d| d.is_unique_violation()) =>
+                    && e.as_database_error()
+                        .is_some_and(|d| d.is_unique_violation()) =>
             {
                 let _ = sp.rollback().await; // ROLLBACK TO SAVEPOINT — un-poison the outer tx
                 slug = format!("{base}-{}", &Uuid::new_v4().to_string()[..6]);
@@ -1370,15 +1377,18 @@ pub async fn orgs_create(
         return (StatusCode::BAD_REQUEST, "organization name is required").into_response();
     }
 
-    let has_tenant: bool = sqlx::query_scalar(
-        "select exists(select 1 from core.memberships where profile_id = $1)",
-    )
-    .bind(actor)
-    .fetch_one(&state.pool)
-    .await
-    .unwrap_or(true); // fail closed
+    let has_tenant: bool =
+        sqlx::query_scalar("select exists(select 1 from core.memberships where profile_id = $1)")
+            .bind(actor)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or(true); // fail closed
     if has_tenant {
-        return (StatusCode::CONFLICT, "you already belong to an organization").into_response();
+        return (
+            StatusCode::CONFLICT,
+            "you already belong to an organization",
+        )
+            .into_response();
     }
 
     let owner_role: Uuid = match sqlx::query_scalar(
@@ -1522,7 +1532,11 @@ pub async fn orgs_transfer_ownership(
     .await
     .unwrap_or(false);
     if !is_owner {
-        return (StatusCode::FORBIDDEN, "only the owner can transfer ownership").into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            "only the owner can transfer ownership",
+        )
+            .into_response();
     }
     if body.profile_id == actor {
         return (StatusCode::BAD_REQUEST, "you are already the owner").into_response();
@@ -1537,7 +1551,10 @@ pub async fn orgs_transfer_ownership(
     .await
     .unwrap_or(false);
     if !target_member {
-        return (StatusCode::NOT_FOUND, "target is not a member of this organization")
+        return (
+            StatusCode::NOT_FOUND,
+            "target is not a member of this organization",
+        )
             .into_response();
     }
 
@@ -1915,14 +1932,13 @@ pub async fn devices_set_sync_policy(
     if let Err(reason) = crate::devices::validate_sync_policy(&body.sync_policy) {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": reason }))).into_response();
     }
-    let write = sqlx::query(
-        "update device.devices set sync_policy = $3 where id = $1 and tenant_id = $2",
-    )
-    .bind(body.id)
-    .bind(tenant)
-    .bind(&body.sync_policy)
-    .execute(&state.pool)
-    .await;
+    let write =
+        sqlx::query("update device.devices set sync_policy = $3 where id = $1 and tenant_id = $2")
+            .bind(body.id)
+            .bind(tenant)
+            .bind(&body.sync_policy)
+            .execute(&state.pool)
+            .await;
     let affected = match write {
         Ok(r) => r.rows_affected(),
         Err(e) => {
@@ -2290,7 +2306,11 @@ pub async fn retrieval_set_config(
         Some(body.space_id),
     )
     .await;
-    (StatusCode::OK, Json(json!({ "ok": true, "space_id": body.space_id }))).into_response()
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "space_id": body.space_id })),
+    )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -2316,16 +2336,28 @@ mod tests {
         assert!(validate_feature_write("space", Some(Uuid::new_v4()), "default-on").is_ok());
         assert!(validate_feature_write("role", Some(Uuid::new_v4()), "user-overridable").is_ok());
         // bad state → 4-state enum only.
-        assert_eq!(validate_feature_write("workspace", None, "on"), Err("bad_state"));
+        assert_eq!(
+            validate_feature_write("workspace", None, "on"),
+            Err("bad_state")
+        );
         // scope_id ↔ scope_type mismatches.
         assert_eq!(
             validate_feature_write("workspace", Some(Uuid::new_v4()), "locked"),
             Err("scope_id_forbidden")
         );
-        assert_eq!(validate_feature_write("space", None, "locked"), Err("scope_id_required"));
-        assert_eq!(validate_feature_write("role", None, "locked"), Err("scope_id_required"));
+        assert_eq!(
+            validate_feature_write("space", None, "locked"),
+            Err("scope_id_required")
+        );
+        assert_eq!(
+            validate_feature_write("role", None, "locked"),
+            Err("scope_id_required")
+        );
         // unknown scope.
-        assert_eq!(validate_feature_write("tenant", None, "locked"), Err("bad_scope_type"));
+        assert_eq!(
+            validate_feature_write("tenant", None, "locked"),
+            Err("bad_scope_type")
+        );
     }
 
     /// O3-3 SQL invariants against the live schema: (1) feature_policies rejects an
@@ -2338,12 +2370,14 @@ mod tests {
     async fn governance_feature_policy_invariants() {
         let pool = pool().await;
         let t = Uuid::new_v4();
-        sqlx::query("insert into core.tenants (id,name,slug,modified_by) values ($1,'gov-test',$2,'test')")
-            .bind(t)
-            .bind(format!("gov-test-{t}"))
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "insert into core.tenants (id,name,slug,modified_by) values ($1,'gov-test',$2,'test')",
+        )
+        .bind(t)
+        .bind(format!("gov-test-{t}"))
+        .execute(&pool)
+        .await
+        .unwrap();
         // §D Phase 4: feature_policies is keyed by feature_id (FK→governance.features). Resolve a
         // real seeded slug once; the invariants (state CHECK, workspace-lock existence, clear grain)
         // are feature-agnostic.
@@ -2368,7 +2402,11 @@ mod tests {
                    where tenant_id=$1 and feature_id=$2 \
                      and scope_type='workspace' and state='locked')",
             )
-            .bind(t).bind(fid).fetch_one(&p).await.unwrap()
+            .bind(t)
+            .bind(fid)
+            .fetch_one(&p)
+            .await
+            .unwrap()
         };
         assert!(!locked(pool.clone(), t, feat_id).await, "no lock yet");
 
@@ -2378,7 +2416,10 @@ mod tests {
              values ($1,$2,'workspace',null,'locked','test')",
         )
         .bind(t).bind(feat_id).execute(&pool).await.unwrap();
-        assert!(locked(pool.clone(), t, feat_id).await, "workspace lock now blocks narrower writes");
+        assert!(
+            locked(pool.clone(), t, feat_id).await,
+            "workspace lock now blocks narrower writes"
+        );
 
         // (3) clear the workspace row (the clear-feature grain) → gone.
         let del = sqlx::query(
@@ -2386,10 +2427,18 @@ mod tests {
               where tenant_id=$1 and feature_id=$2 and scope_type='workspace' and scope_id is not distinct from null",
         )
         .bind(t).bind(feat_id).execute(&pool).await.unwrap();
-        assert_eq!(del.rows_affected(), 1, "clear removes exactly the workspace row");
+        assert_eq!(
+            del.rows_affected(),
+            1,
+            "clear removes exactly the workspace row"
+        );
         assert!(!locked(pool.clone(), t, feat_id).await, "lock cleared");
 
-        sqlx::query("delete from core.tenants where id=$1").bind(t).execute(&pool).await.unwrap();
+        sqlx::query("delete from core.tenants where id=$1")
+            .bind(t)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     /// The two SQL contracts `rbac_create_role` relies on: (1) the no-shadowing key-check flags a
@@ -2406,13 +2455,20 @@ mod tests {
             .bind(tenant).bind(format!("crole-test-{tenant}")).execute(&pool).await.unwrap();
 
         // (1) no-shadowing: a default key is "taken" for this tenant; a fresh key is free.
-        let taken = |k: &'static str, t: Uuid, p: PgPool| async move {
-            sqlx::query_scalar::<_, bool>(
+        let taken =
+            |k: &'static str, t: Uuid, p: PgPool| async move {
+                sqlx::query_scalar::<_, bool>(
                 "select exists(select 1 from core.effective_roles where tenant_id=$1 and key=$2)")
                 .bind(t).bind(k).fetch_one(&p).await.unwrap()
-        };
-        assert!(taken("owner", tenant, pool.clone()).await, "default 'owner' must be flagged taken");
-        assert!(!taken("support", tenant, pool.clone()).await, "a fresh custom key must be free");
+            };
+        assert!(
+            taken("owner", tenant, pool.clone()).await,
+            "default 'owner' must be flagged taken"
+        );
+        assert!(
+            !taken("support", tenant, pool.clone()).await,
+            "a fresh custom key must be free"
+        );
 
         // (2) create a custom role + grant; assert it resolves via the effective view for the tenant.
         let role_id: Uuid = sqlx::query_scalar(
@@ -2423,11 +2479,21 @@ mod tests {
         let resolves: bool = sqlx::query_scalar(
             "select exists(select 1 from core.effective_role_permissions where tenant_id=$1 and role_id=$2 and capability='budget.read')")
             .bind(tenant).bind(role_id).fetch_one(&pool).await.unwrap();
-        assert!(resolves, "custom-role grant must resolve via effective_role_permissions");
-        assert!(taken("support", tenant, pool.clone()).await, "created custom key is now taken (409 on re-create)");
+        assert!(
+            resolves,
+            "custom-role grant must resolve via effective_role_permissions"
+        );
+        assert!(
+            taken("support", tenant, pool.clone()).await,
+            "created custom key is now taken (409 on re-create)"
+        );
 
         // cleanup: dropping the tenant cascades to its roles + grants.
-        sqlx::query("delete from core.tenants where id=$1").bind(tenant).execute(&pool).await.unwrap();
+        sqlx::query("delete from core.tenants where id=$1")
+            .bind(tenant)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     /// The SQL contracts `budgets_delete_node` relies on: (1) the org root is identified by a
@@ -2448,7 +2514,12 @@ mod tests {
             .bind(tenant).execute(&pool).await.unwrap();
         // org (root, level 0) → dept (1) → user (3), plus alert/floor to prove the columns round-trip.
         let (org, dept, user) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-        let ins = |id: Uuid, parent: Option<Uuid>, level: i32, personal: bool, p: PgPool, t: Uuid| async move {
+        let ins = |id: Uuid,
+                   parent: Option<Uuid>,
+                   level: i32,
+                   personal: bool,
+                   p: PgPool,
+                   t: Uuid| async move {
             sqlx::query("insert into core.org_units (tenant_id,id,parent_id,level,name,is_personal,modified_by) \
                          values ($1,$2,$3,$4,'n',$5,'test')")
                 .bind(t).bind(id).bind(parent).bind(level).bind(personal).execute(&p).await.unwrap();
@@ -2461,10 +2532,17 @@ mod tests {
         ins(user, Some(dept), 3, true, pool.clone(), tenant).await;
 
         // (1) root guard: the org node has a NULL parent → the handler refuses to delete it.
-        let root_parent: Option<Uuid> = sqlx::query_scalar(
-            "select parent_id from core.org_units where tenant_id=$1 and id=$2")
-            .bind(tenant).bind(org).fetch_one(&pool).await.unwrap();
-        assert!(root_parent.is_none(), "org root must have a NULL parent (undeletable)");
+        let root_parent: Option<Uuid> =
+            sqlx::query_scalar("select parent_id from core.org_units where tenant_id=$1 and id=$2")
+                .bind(tenant)
+                .bind(org)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(
+            root_parent.is_none(),
+            "org root must have a NULL parent (undeletable)"
+        );
         // alert/floor persisted on the cap node (columns exposed by the read + upsert).
         let (alert, floor): (Option<f64>, bool) = sqlx::query_as(
             "select alert_threshold::float8, free_floor_enabled from governance.nodes where tenant_id=$1 and id=$2")
@@ -2475,13 +2553,27 @@ mod tests {
         // (2) delete the dept org_unit → cascade removes dept + its user child (org-tree self-FK) and
         // each unit's cap node (nodes.org_unit_id FK); only the org root remains.
         sqlx::query("delete from core.org_units where tenant_id=$1 and id=$2")
-            .bind(tenant).bind(dept).execute(&pool).await.unwrap();
-        let remaining: i64 = sqlx::query_scalar(
-            "select count(*) from core.org_units where tenant_id=$1")
-            .bind(tenant).fetch_one(&pool).await.unwrap();
-        assert_eq!(remaining, 1, "cascade must remove dept + user, leaving only the org root");
+            .bind(tenant)
+            .bind(dept)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let remaining: i64 =
+            sqlx::query_scalar("select count(*) from core.org_units where tenant_id=$1")
+                .bind(tenant)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            remaining, 1,
+            "cascade must remove dept + user, leaving only the org root"
+        );
 
-        sqlx::query("delete from core.tenants where id=$1").bind(tenant).execute(&pool).await.unwrap();
+        sqlx::query("delete from core.tenants where id=$1")
+            .bind(tenant)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     /// `orgs_create`'s DB contract end-to-end: the seeding transaction and — the regression
@@ -2503,19 +2595,25 @@ mod tests {
 
         // Caller profile (FK target for memberships + the claims_version bump).
         sqlx::query("insert into core.profiles (id) values ($1)")
-            .bind(actor).execute(&pool).await.unwrap();
+            .bind(actor)
+            .execute(&pool)
+            .await
+            .unwrap();
         // A pre-existing org already owns the 'acme-inc' slug → forces a collision.
         let pre = Uuid::new_v4();
         sqlx::query("insert into core.tenants (id,name,slug,status,modified_by) values ($1,$2,'acme-inc','trial','test')")
             .bind(pre).bind(name).execute(&pool).await.unwrap();
-        let owner_role: Uuid = sqlx::query_scalar(
-            "select id from core.roles where tenant_id is null and key='owner'")
-            .fetch_one(&pool).await.unwrap();
+        let owner_role: Uuid =
+            sqlx::query_scalar("select id from core.roles where tenant_id is null and key='owner'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
 
         // --- The handler's seeding transaction (code under test) ---
         let mut tx = pool.begin().await.unwrap();
         // (regression) collision must be deduped via savepoint, NOT surfaced as an error.
-        let tenant = super::insert_tenant_dedup_slug(&mut tx, name, &actor.to_string()).await
+        let tenant = super::insert_tenant_dedup_slug(&mut tx, name, &actor.to_string())
+            .await
             .expect("slug collision must dedup, not error (savepoint must un-poison the tx)");
         // The rest of the seeding must still succeed on the SAME (un-poisoned) outer tx.
         sqlx::query("insert into core.memberships (profile_id,tenant_id,assigned_by) values ($1,$2,'self_create')")
@@ -2531,14 +2629,26 @@ mod tests {
         sqlx::query("insert into governance.nodes (tenant_id,id,org_unit_id,cap_amount,enforcement,modified_by) values ($1,$2,$2,null,'hard',$3)")
             .bind(tenant).bind(ou).bind(actor.to_string()).execute(&mut *tx).await.unwrap();
         sqlx::query("update core.profiles set claims_version = claims_version + 1 where id=$1")
-            .bind(actor).execute(&mut *tx).await.unwrap();
+            .bind(actor)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
 
         // (a) the new org got a distinct, base-preserving suffixed slug — not 'acme-inc'.
         let slug: String = sqlx::query_scalar("select slug from core.tenants where id=$1")
-            .bind(tenant).fetch_one(&pool).await.unwrap();
-        assert_ne!(slug, "acme-inc", "collision must fall back to a suffixed slug");
-        assert!(slug.starts_with("acme-inc-"), "suffixed slug must keep the base; got {slug}");
+            .bind(tenant)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_ne!(
+            slug, "acme-inc",
+            "collision must fall back to a suffixed slug"
+        );
+        assert!(
+            slug.starts_with("acme-inc-"),
+            "suffixed slug must keep the base; got {slug}"
+        );
         // (b) caller is owner; fail-closed budget org-root exists; claims_version bumped 0→1.
         let is_owner: bool = sqlx::query_scalar(
             "select exists(select 1 from core.profile_roles where tenant_id=$1 and profile_id=$2 and role_id=$3)")
@@ -2551,35 +2661,59 @@ mod tests {
             .bind(tenant).fetch_one(&pool).await.unwrap();
         assert!(root_ok, "fail-closed budget org-root must be seeded");
         let cv: i64 = sqlx::query_scalar("select claims_version from core.profiles where id=$1")
-            .bind(actor).fetch_one(&pool).await.unwrap();
+            .bind(actor)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(cv, 1, "claims_version must be bumped");
         // (c) the already-has-tenant guard (the 409 condition) now trips.
-        let has_tenant: bool = sqlx::query_scalar(
-            "select exists(select 1 from core.memberships where profile_id=$1)")
-            .bind(actor).fetch_one(&pool).await.unwrap();
-        assert!(has_tenant, "caller now belongs to an org (a re-create would 409)");
+        let has_tenant: bool =
+            sqlx::query_scalar("select exists(select 1 from core.memberships where profile_id=$1)")
+                .bind(actor)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(
+            has_tenant,
+            "caller now belongs to an org (a re-create would 409)"
+        );
 
         // --- Negative control: WITHOUT a savepoint, the collision poisons the whole tx ---
         let mut bad = pool.begin().await.unwrap();
         let dup = sqlx::query("insert into core.tenants (name,slug,status,modified_by) values ('x','acme-inc','trial','t')")
             .execute(&mut *bad).await;
-        assert!(dup.is_err(), "duplicate slug must violate the unique constraint");
+        assert!(
+            dup.is_err(),
+            "duplicate slug must violate the unique constraint"
+        );
         // The tx is now aborted: the next statement fails with 25P02 (in_failed_sql_transaction),
         // NOT a unique_violation — which is precisely why the naive same-tx retry 500'd.
         let poisoned = sqlx::query("insert into core.tenants (name,slug,status,modified_by) values ('y','acme-inc-xyz','trial','t')")
             .execute(&mut *bad).await;
-        let sqlstate = poisoned.as_ref().err()
+        let sqlstate = poisoned
+            .as_ref()
+            .err()
             .and_then(|e| e.as_database_error())
             .and_then(|d| d.code())
             .map(|c| c.to_string());
-        assert_eq!(sqlstate.as_deref(), Some("25P02"),
-            "an aborted tx poisons the retry — the bug the savepoint fixes");
+        assert_eq!(
+            sqlstate.as_deref(),
+            Some("25P02"),
+            "an aborted tx poisons the retry — the bug the savepoint fixes"
+        );
         let _ = bad.rollback().await;
 
         // cleanup: delete the profile first (cascades memberships + role grants — memberships
         // FKs tenants ON DELETE RESTRICT), then the tenants (cascades budget_nodes).
-        sqlx::query("delete from core.profiles where id=$1").bind(actor).execute(&pool).await.unwrap();
+        sqlx::query("delete from core.profiles where id=$1")
+            .bind(actor)
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("delete from core.tenants where id = any($1)")
-            .bind(vec![tenant, pre]).execute(&pool).await.unwrap();
+            .bind(vec![tenant, pre])
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }

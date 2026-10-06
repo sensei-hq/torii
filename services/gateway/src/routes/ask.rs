@@ -37,7 +37,10 @@ use crate::{
     auth::Claims,
     rag::retrieve::{RetrieveQuery, ScoredChunk},
     routes::{
-        chat::{auto_fallback_enabled, build_trace, inject_tenant_credentials, masking_enabled, reserve_budget},
+        chat::{
+            auto_fallback_enabled, build_trace, inject_tenant_credentials, masking_enabled,
+            reserve_budget,
+        },
         rpc::authorize,
     },
     state::SharedState,
@@ -206,7 +209,11 @@ pub async fn ask(
         doc_ids: None,
         inspect: false,
     };
-    let retrieved = match state.retriever.retrieve(tenant, Some(space_id), &rq, &cfg).await {
+    let retrieved = match state
+        .retriever
+        .retrieve(tenant, Some(space_id), &rq, &cfg)
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("ask: retrieve (space {space_id}): {e}");
@@ -232,8 +239,8 @@ pub async fn ask(
         query.clone()
     };
     let max_tokens = body.max_tokens.unwrap_or(1024);
-    let input_est = ((clean_query.chars().count() + system.chars().count()) / 4)
-        .min(u32::MAX as usize) as u32;
+    let input_est =
+        ((clean_query.chars().count() + system.chars().count()) / 4).min(u32::MAX as usize) as u32;
 
     let mut ireq = InferenceRequest {
         capability: Capability::TextChat,
@@ -326,15 +333,30 @@ pub async fn ask(
             tracing::warn!("ask: ensure_conversation failed (answer returned anyway): {e}");
             return (
                 StatusCode::OK,
-                Json(build_response(Uuid::nil(), content, model, cost_usd, &sources)),
+                Json(build_response(
+                    Uuid::nil(),
+                    content,
+                    model,
+                    cost_usd,
+                    &sources,
+                )),
             )
                 .into_response();
         }
     };
 
     // user turn, then the grounded assistant turn.
-    let _ = insert_message(&state.pool, tenant, conversation_id, "user", &query, None, None, None)
-        .await;
+    let _ = insert_message(
+        &state.pool,
+        tenant,
+        conversation_id,
+        "user",
+        &query,
+        None,
+        None,
+        None,
+    )
+    .await;
     let plane = execution_location(resp.attempts.last().map(|a| a.adapter.as_str()));
     match insert_message(
         &state.pool,
@@ -400,8 +422,13 @@ pub async fn ask(
     if let Err(e) = store.insert_inference_call(&call).await {
         tracing::warn!("ask: persist inference_call failed (best-effort): {e}");
     } else {
-        let stored_trace =
-            build_trace(call.id, call.capability.clone(), &resp, duration_ms, call.recorded_at);
+        let stored_trace = build_trace(
+            call.id,
+            call.capability.clone(),
+            &resp,
+            duration_ms,
+            call.recorded_at,
+        );
         if let Err(e) = store.insert_execution_trace(&stored_trace).await {
             tracing::warn!("ask: persist execution_trace failed (best-effort): {e}");
         }
@@ -409,7 +436,13 @@ pub async fn ask(
 
     (
         StatusCode::OK,
-        Json(build_response(conversation_id, content, model, cost_usd, &sources)),
+        Json(build_response(
+            conversation_id,
+            content,
+            model,
+            cost_usd,
+            &sources,
+        )),
     )
         .into_response()
 }
@@ -664,9 +697,18 @@ mod tests {
         );
 
         // user + assistant turns, then a citation on the assistant turn.
-        let _u = insert_message(&pool, a, conv, "user", "What is our refund policy?", None, None, None)
-            .await
-            .expect("user msg");
+        let _u = insert_message(
+            &pool,
+            a,
+            conv,
+            "user",
+            "What is our refund policy?",
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("user msg");
         let asst = insert_message(
             &pool,
             a,

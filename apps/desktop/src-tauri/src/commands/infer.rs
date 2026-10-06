@@ -24,8 +24,8 @@ pub struct InferArgs {
 pub struct InferResult {
     pub content: String,
     pub model: Option<String>,
-    pub plane: String,    // always "local" for the embedded engine
-    pub cost_usd: f64,    // 0.0 for local inference
+    pub plane: String, // always "local" for the embedded engine
+    pub cost_usd: f64, // 0.0 for local inference
     pub duration_ms: u64,
 }
 
@@ -105,9 +105,7 @@ pub async fn infer(
 
 /// List all models configured in the embedded gateway.
 #[tauri::command]
-pub async fn list_models(
-    state: tauri::State<'_, Arc<Gateway>>,
-) -> Result<Vec<ModelInfo>, String> {
+pub async fn list_models(state: tauri::State<'_, Arc<Gateway>>) -> Result<Vec<ModelInfo>, String> {
     let models = state.list_models().await.map_err(|e| e.to_string())?;
     let result = models
         .into_iter()
@@ -149,6 +147,7 @@ mod tests {
         let gw = crate::gateway::build_gateway().await;
 
         let req = InferenceRequest {
+            routing: None, // no per-request provider routing preferences
             capability: Capability::TextChat,
             model: Some("gemma2:2b".into()),
             router: None,
@@ -175,7 +174,10 @@ mod tests {
 
         let res = gw.execute(&req).await.expect("infer ok");
         assert!(
-            res.content.as_deref().map(|s| !s.is_empty()).unwrap_or(false),
+            res.content
+                .as_deref()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false),
             "expected non-empty content from local inference, got: {:?}",
             res.content
         );

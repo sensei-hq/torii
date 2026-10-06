@@ -56,6 +56,9 @@ mod tests {
         let commit = v["commit"].as_str().expect("commit must be present");
         // "unknown" is the honest fallback when building without a .git dir (e.g. a Docker
         // build that does not COPY it) — empty would read as "no answer" rather than "asked".
-        assert!(!commit.is_empty(), "commit must never be empty; use \"unknown\"");
+        assert!(
+            !commit.is_empty(),
+            "commit must never be empty; use \"unknown\""
+        );
     }
 }

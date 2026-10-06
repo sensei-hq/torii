@@ -147,7 +147,11 @@ fn window_tokens(text: &str, target: usize, overlap: usize) -> Vec<(String, usiz
         let end = (i + target).min(toks.len());
         let start_byte = toks[i].1;
         let end_byte = toks[end - 1].2;
-        windows.push((trimmed[start_byte..end_byte].to_string(), start_byte, end_byte));
+        windows.push((
+            trimmed[start_byte..end_byte].to_string(),
+            start_byte,
+            end_byte,
+        ));
         if end == toks.len() {
             break;
         }
@@ -162,7 +166,13 @@ mod tests {
     use crate::rag::parse::{Block, DocIR, Table};
 
     fn ir(blocks: Vec<Block>, tables: Vec<Table>) -> DocIR {
-        DocIR { markdown: String::new(), blocks, tables, images: vec![], page_count: None }
+        DocIR {
+            markdown: String::new(),
+            blocks,
+            tables,
+            images: vec![],
+            page_count: None,
+        }
     }
     fn prose(text: &str, section: &[&str]) -> Block {
         Block {
@@ -176,30 +186,68 @@ mod tests {
     #[test]
     fn prose_split_into_windows_with_overlap() {
         // 30 tokens, target 10, overlap 20% (=2) → step 8 → windows at 0,8,16,24.
-        let body = (0..30).map(|i| format!("w{i}")).collect::<Vec<_>>().join(" ");
-        let cfg = ChunkConfig { strategy: "structural".into(), target_tokens: 10, overlap_pct: 0.2, tables_whole: true };
-        let chunks = StructuralChunker.chunk(&ir(vec![prose(&body, &["Intro"])], vec![]), &cfg).unwrap();
-        assert!(chunks.len() >= 3, "expected multiple windows, got {}", chunks.len());
+        let body = (0..30)
+            .map(|i| format!("w{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let cfg = ChunkConfig {
+            strategy: "structural".into(),
+            target_tokens: 10,
+            overlap_pct: 0.2,
+            tables_whole: true,
+        };
+        let chunks = StructuralChunker
+            .chunk(&ir(vec![prose(&body, &["Intro"])], vec![]), &cfg)
+            .unwrap();
+        assert!(
+            chunks.len() >= 3,
+            "expected multiple windows, got {}",
+            chunks.len()
+        );
         assert!(chunks.iter().all(|c| c.token_count <= 10));
         // overlap: consecutive windows share tokens (window1 starts before window0 ends).
         assert!(chunks[0].text.split_whitespace().last() == Some("w9"));
-        assert!(chunks[1].text.split_whitespace().next() == Some("w8"), "2-token overlap");
+        assert!(
+            chunks[1].text.split_whitespace().next() == Some("w8"),
+            "2-token overlap"
+        );
         // section_path + monotonic seq preserved.
-        assert!(chunks.iter().all(|c| c.section_path.as_deref() == Some("Intro")));
-        assert_eq!(chunks.iter().map(|c| c.seq).collect::<Vec<_>>(), (0..chunks.len() as i32).collect::<Vec<_>>());
+        assert!(chunks
+            .iter()
+            .all(|c| c.section_path.as_deref() == Some("Intro")));
+        assert_eq!(
+            chunks.iter().map(|c| c.seq).collect::<Vec<_>>(),
+            (0..chunks.len() as i32).collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn table_is_one_whole_chunk_never_split() {
-        let big_csv = (0..500).map(|i| format!("r{i},v{i}")).collect::<Vec<_>>().join("\n");
+        let big_csv = (0..500)
+            .map(|i| format!("r{i},v{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let cfg = ChunkConfig::default(); // target 512
         let chunks = StructuralChunker
-            .chunk(&ir(vec![], vec![Table { caption: Some("Sheet1".into()), csv: big_csv.clone(), page_ref: Some(3) }]), &cfg)
+            .chunk(
+                &ir(
+                    vec![],
+                    vec![Table {
+                        caption: Some("Sheet1".into()),
+                        csv: big_csv.clone(),
+                        page_ref: Some(3),
+                    }],
+                ),
+                &cfg,
+            )
             .unwrap();
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].is_table);
         assert_eq!(chunks[0].element_type, "table");
-        assert_eq!(chunks[0].text, big_csv, "table content is intact (not windowed)");
+        assert_eq!(
+            chunks[0].text, big_csv,
+            "table content is intact (not windowed)"
+        );
         assert_eq!(chunks[0].section_path.as_deref(), Some("Sheet1"));
         assert_eq!(chunks[0].page_ref, Some(3));
     }
@@ -207,10 +255,17 @@ mod tests {
     #[test]
     fn headings_fold_into_section_path_not_own_chunk() {
         let blocks = vec![
-            Block { text: "Overview".into(), section_path: vec![], page_ref: None, element_type: ElementType::Heading },
+            Block {
+                text: "Overview".into(),
+                section_path: vec![],
+                page_ref: None,
+                element_type: ElementType::Heading,
+            },
             prose("short body here", &["Overview"]),
         ];
-        let chunks = StructuralChunker.chunk(&ir(blocks, vec![]), &ChunkConfig::default()).unwrap();
+        let chunks = StructuralChunker
+            .chunk(&ir(blocks, vec![]), &ChunkConfig::default())
+            .unwrap();
         assert_eq!(chunks.len(), 1, "heading is not its own chunk");
         assert_eq!(chunks[0].element_type, "prose");
         assert_eq!(chunks[0].section_path.as_deref(), Some("Overview"));
@@ -218,14 +273,31 @@ mod tests {
 
     #[test]
     fn config_changes_output_no_code_change() {
-        let body = (0..40).map(|i| format!("t{i}")).collect::<Vec<_>>().join(" ");
-        let mk = |target| ChunkConfig { strategy: "structural".into(), target_tokens: target, overlap_pct: 0.1, tables_whole: true };
-        let few = StructuralChunker.chunk(&ir(vec![prose(&body, &[])], vec![]), &mk(40)).unwrap();
-        let many = StructuralChunker.chunk(&ir(vec![prose(&body, &[])], vec![]), &mk(8)).unwrap();
+        let body = (0..40)
+            .map(|i| format!("t{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mk = |target| ChunkConfig {
+            strategy: "structural".into(),
+            target_tokens: target,
+            overlap_pct: 0.1,
+            tables_whole: true,
+        };
+        let few = StructuralChunker
+            .chunk(&ir(vec![prose(&body, &[])], vec![]), &mk(40))
+            .unwrap();
+        let many = StructuralChunker
+            .chunk(&ir(vec![prose(&body, &[])], vec![]), &mk(8))
+            .unwrap();
         assert_eq!(few.len(), 1);
-        assert!(many.len() > few.len(), "smaller target_tokens ⇒ more chunks (config-driven)");
+        assert!(
+            many.len() > few.len(),
+            "smaller target_tokens ⇒ more chunks (config-driven)"
+        );
         // deterministic
-        let again = StructuralChunker.chunk(&ir(vec![prose(&body, &[])], vec![]), &mk(8)).unwrap();
+        let again = StructuralChunker
+            .chunk(&ir(vec![prose(&body, &[])], vec![]), &mk(8))
+            .unwrap();
         assert_eq!(many, again);
     }
 }

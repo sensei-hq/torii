@@ -64,8 +64,9 @@ fn signed_url_ttl_s() -> u32 {
 /// to gate mutations on existing docs (ingest/delete) so a caller can't act on a doc they can't see
 /// (no cross-classification over-reach, no existence leak — the caller gets a 404).
 async fn can_access_doc(pool: &sqlx::PgPool, tenant: Uuid, actor: Uuid, doc: Uuid) -> bool {
-    let sql =
-        format!("select exists(select 1 from public.documents d where d.id = $3 and {DOC_READ_PREDICATE})");
+    let sql = format!(
+        "select exists(select 1 from public.documents d where d.id = $3 and {DOC_READ_PREDICATE})"
+    );
     sqlx::query_scalar(&sql)
         .bind(tenant)
         .bind(actor)
@@ -155,7 +156,15 @@ pub async fn create_document(
             None
         }
     };
-    audit(&state, tenant, actor, "document.created", "document", Some(doc_id)).await;
+    audit(
+        &state,
+        tenant,
+        actor,
+        "document.created",
+        "document",
+        Some(doc_id),
+    )
+    .await;
     (
         StatusCode::OK,
         Json(json!({ "document_id": doc_id, "version_no": version_no, "upload_url": upload_url })),
@@ -179,7 +188,15 @@ pub async fn ingest_document(
         return (StatusCode::NOT_FOUND, "document not found").into_response();
     }
     spawn_ingest(&state, tenant, actor, id);
-    audit(&state, tenant, actor, "document.ingest.queued", "document", Some(id)).await;
+    audit(
+        &state,
+        tenant,
+        actor,
+        "document.ingest.queued",
+        "document",
+        Some(id),
+    )
+    .await;
     (
         StatusCode::OK,
         Json(json!({ "document_id": id, "status": "queued" })),
@@ -212,7 +229,15 @@ pub async fn reingest_document(
         return (StatusCode::NOT_FOUND, "document not found").into_response();
     }
     spawn_ingest(&state, tenant, actor, id);
-    audit(&state, tenant, actor, "document.reingest.queued", "document", Some(id)).await;
+    audit(
+        &state,
+        tenant,
+        actor,
+        "document.reingest.queued",
+        "document",
+        Some(id),
+    )
+    .await;
     (
         StatusCode::OK,
         Json(json!({ "document_id": id, "status": "queued" })),
@@ -375,24 +400,31 @@ pub async fn get_assets(
         return (StatusCode::NOT_FOUND, "document not found").into_response();
     }
 
-    let assets: Vec<(Uuid, String, Option<String>, Option<String>, Option<i32>, Option<i32>, Option<String>)> =
-        match sqlx::query_as(
-            "select id, kind::text, storage_path, label, sequence, page_ref, caption \
+    let assets: Vec<(
+        Uuid,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<i32>,
+        Option<i32>,
+        Option<String>,
+    )> = match sqlx::query_as(
+        "select id, kind::text, storage_path, label, sequence, page_ref, caption \
                from public.document_assets \
               where tenant_id = $1 and document_id = $2 \
               order by kind, sequence",
-        )
-        .bind(tenant)
-        .bind(id)
-        .fetch_all(&state.pool)
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!("get_assets list: {e}");
-                return (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response();
-            }
-        };
+    )
+    .bind(tenant)
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("get_assets list: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response();
+        }
+    };
 
     let ttl = signed_url_ttl_s();
     let mut out: Vec<Value> = Vec::with_capacity(assets.len());
@@ -440,7 +472,15 @@ pub async fn delete_document(
     match store.delete_document(tenant, id).await {
         Ok(0) => (StatusCode::NOT_FOUND, "document not found in tenant").into_response(),
         Ok(_) => {
-            audit(&state, tenant, actor, "document.deleted", "document", Some(id)).await;
+            audit(
+                &state,
+                tenant,
+                actor,
+                "document.deleted",
+                "document",
+                Some(id),
+            )
+            .await;
             (StatusCode::OK, Json(json!({ "deleted": true }))).into_response()
         }
         Err(e) => {

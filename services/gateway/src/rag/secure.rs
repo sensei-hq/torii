@@ -26,6 +26,8 @@ pub struct NoopSecureExecutor;
 
 impl SecureExecutor for NoopSecureExecutor {
     fn execute(&self, _plan: &Plan, _ds: &DatasetHandle) -> Result<GatedResult, RagError> {
-        Err(RagError::Unsupported("§3c dataset compute is deferred (v1)"))
+        Err(RagError::Unsupported(
+            "§3c dataset compute is deferred (v1)",
+        ))
     }
 }

@@ -75,7 +75,7 @@ pub fn is_blocked_ipv4(ip: &Ipv4Addr) -> bool {
         || o[0] == 0                                   // 0.0.0.0/8 "this network"
         || (o[0] == 100 && (o[1] & 0xC0) == 64)        // 100.64.0.0/10 CGNAT
         || (o[0] == 198 && (o[1] & 0xFE) == 18)        // 198.18.0.0/15 benchmarking
-        || o[0] >= 240                                 // 240.0.0.0/4 reserved
+        || o[0] >= 240 // 240.0.0.0/4 reserved
 }
 
 /// Is an IP in a denied range? IPv4-in-IPv6 forms are unwrapped and re-checked (a classic
@@ -100,7 +100,7 @@ fn is_blocked_ipv6(ip: &Ipv6Addr) -> bool {
     ip.is_loopback()                              // ::1
         || ip.is_unspecified()                    // ::
         || (ip.segments()[0] & 0xFE00) == 0xFC00  // fc00::/7 unique-local
-        || (ip.segments()[0] & 0xFFC0) == 0xFE80  // fe80::/10 link-local
+        || (ip.segments()[0] & 0xFFC0) == 0xFE80 // fe80::/10 link-local
 }
 
 /// Vets `http`/`sse` egress and pins a safe IP.
@@ -214,15 +214,29 @@ mod tests {
 
     #[test]
     fn allows_ordinary_public_addresses() {
-        for ip in ["1.1.1.1", "8.8.8.8", "93.184.216.34", "2606:4700:4700::1111"] {
-            assert!(!is_blocked_ip(&ip.parse().unwrap()), "{ip} should be allowed");
+        for ip in [
+            "1.1.1.1",
+            "8.8.8.8",
+            "93.184.216.34",
+            "2606:4700:4700::1111",
+        ] {
+            assert!(
+                !is_blocked_ip(&ip.parse().unwrap()),
+                "{ip} should be allowed"
+            );
         }
     }
 
     #[test]
     fn blocks_ipv4_mapped_ipv6_bypass() {
         // the classic bypass: private/metadata v4 tunnelled through a v6 form.
-        for ip in ["::ffff:127.0.0.1", "::ffff:169.254.169.254", "::1", "fe80::1", "fc00::1"] {
+        for ip in [
+            "::ffff:127.0.0.1",
+            "::ffff:169.254.169.254",
+            "::1",
+            "fe80::1",
+            "fc00::1",
+        ] {
             assert!(is_blocked_ip(&ip.parse().unwrap()), "{ip} must be blocked");
         }
     }
@@ -230,7 +244,9 @@ mod tests {
     #[test]
     fn check_rejects_literal_metadata_ip_before_dns() {
         let f = prod(resolver(&[]));
-        let err = f.check("https://169.254.169.254/latest/meta-data").unwrap_err();
+        let err = f
+            .check("https://169.254.169.254/latest/meta-data")
+            .unwrap_err();
         assert!(matches!(err, ToolError::Ssrf(_)));
     }
 

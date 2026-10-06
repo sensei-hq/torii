@@ -242,7 +242,12 @@ pub async fn require_auth(State(state): State<SharedState>, req: Request, next: 
 /// person-bound) — else **403**. This is what makes a device REVOKE effective: a
 /// revoked device with a still-live JWT/API-key cannot keep spending. Requests without
 /// the header (web / session-only clients) are unaffected. Best-effort `last_seen_at`.
-async fn finish_authed(state: &SharedState, mut req: Request, claims: Claims, next: Next) -> Response {
+async fn finish_authed(
+    state: &SharedState,
+    mut req: Request,
+    claims: Claims,
+    next: Next,
+) -> Response {
     if let Some(raw) = req
         .headers()
         .get("x-torii-device")

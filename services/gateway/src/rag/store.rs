@@ -89,7 +89,11 @@ impl DocStore {
     }
 
     /// The latest version row for a document: `(version_id, version_no, storage_path)`.
-    pub async fn current_version(&self, tenant: Uuid, doc: Uuid) -> Result<(Uuid, i32, String), RagError> {
+    pub async fn current_version(
+        &self,
+        tenant: Uuid,
+        doc: Uuid,
+    ) -> Result<(Uuid, i32, String), RagError> {
         let row: (Uuid, i32, Option<String>) = sqlx::query_as(
             "select id, version_no, storage_path from document_versions \
              where tenant_id=$1 and document_id=$2 order by version_no desc limit 1",
@@ -122,7 +126,11 @@ impl DocStore {
     }
 
     /// Tenant-partitioned content-hash dedup: an existing document with this exact hash, if any.
-    pub async fn find_by_hash(&self, tenant: Uuid, content_hash: &str) -> Result<Option<Uuid>, RagError> {
+    pub async fn find_by_hash(
+        &self,
+        tenant: Uuid,
+        content_hash: &str,
+    ) -> Result<Option<Uuid>, RagError> {
         let r: Option<(Uuid,)> = sqlx::query_as(
             "select document_id from document_versions where tenant_id=$1 and content_hash=$2 limit 1",
         )

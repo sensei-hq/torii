@@ -6,7 +6,7 @@ engine, and persists every call. (Module: [`docs/modules/C1-gateway-service.md`]
 
 ## What it does
 
-1. **Boot** — connect a `sqlx` Postgres pool → `load_gateway_config(pool)` builds a `GatewayConfig`
+1. **Boot** — connect a `sqlx` Postgres pool → `torii_core::load_gateway_config(pool)` (the shared data layer the CLI uses too) builds a `GatewayConfig`
    from `config.routers` / `config.models` / `config.model_endpoints` / `public.fallback_chains` →
    `Gateway::new(config, adapters, breaker)` with the cloud adapters + (if Ollama is up) the local
    `ollama` adapter → `refresh_router_keys(env)` injects provider keys.

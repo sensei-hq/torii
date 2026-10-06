@@ -854,6 +854,7 @@ mod trace_roundtrip {
             .expect("insert call");
 
         let trace = ExecutionTrace {
+            routing: None,
             request_id: call_id.to_string(),
             capability: Capability::TextChat,
             status: TraceStatus::Success,

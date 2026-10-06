@@ -62,6 +62,7 @@ pub async fn infer(
         .collect();
 
     let req = InferenceRequest {
+        routing: None, // no per-request provider routing preferences
         capability: Capability::TextChat,
         // Default to the user's persisted choice (falls back to "gemma2:2b" when
         // unset) — see `commands::models::{set_default_model, read_default}`.
@@ -145,6 +146,7 @@ mod tests {
         let gw = crate::gateway::build_gateway().await;
 
         let req = InferenceRequest {
+            routing: None, // no per-request provider routing preferences
             capability: Capability::TextChat,
             model: Some("gemma2:2b".into()),
             router: None,

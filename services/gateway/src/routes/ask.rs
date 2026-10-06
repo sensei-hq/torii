@@ -243,6 +243,7 @@ pub async fn ask(
         ((clean_query.chars().count() + system.chars().count()) / 4).min(u32::MAX as usize) as u32;
 
     let mut ireq = InferenceRequest {
+        routing: None, // no per-request provider routing preferences
         capability: Capability::TextChat,
         model: None,
         router: None,

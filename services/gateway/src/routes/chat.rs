@@ -142,6 +142,7 @@ fn build_inference_request(
     let system = req.system.as_ref().map(|s| clean_of(s));
 
     let ireq = InferenceRequest {
+        routing: None, // no per-request provider routing preferences
         capability: Capability::TextChat,
         model: req.model.clone(),
         router: None,
@@ -370,6 +371,7 @@ pub(crate) fn build_trace(
     recorded_at: chrono::DateTime<Utc>,
 ) -> StoredTrace {
     let trace = ExecutionTrace {
+        routing: resp.routing.clone(), // the routing decision the gateway made (gateway 0.6+)
         request_id: call_id.to_string(),
         capability,
         status: if resp.success {
@@ -994,6 +996,7 @@ impl ModelTurn for GatewayModelTurn<'_> {
         .min(u32::MAX as usize) as u32;
 
         let mut ireq = InferenceRequest {
+            routing: None,
             capability: Capability::TextChat,
             model: None,
             router: None,
@@ -1149,7 +1152,12 @@ mod tests {
     // the per-call "why this model" data Activity/Requests replay.
     #[test]
     fn build_trace_captures_the_attempt_chain() {
-        use gateway::types::trace::{Attempt, AttemptStatus, TraceStatus};
+        use gateway::types::trace::{Attempt, AttemptStatus, RoutingDecision, TraceStatus};
+        let decision = RoutingDecision {
+            strategy: "price".into(),
+            degraded: true,
+            order: vec![],
+        };
 
         fn attempt(
             sequence: u8,
@@ -1174,6 +1182,8 @@ mod tests {
         }
 
         let resp = InferenceResponse {
+            decisions: None,
+            routing: Some(decision.clone()),
             success: true,
             content: Some("hi".into()),
             embeddings: None,
@@ -1209,6 +1219,9 @@ mod tests {
         let call_id = Uuid::new_v4();
         let now = Utc::now();
         let stored = build_trace(call_id, Capability::TextChat, &resp, 1_500, now);
+        // gateway 0.6+: the routing decision (strategy, degraded, ranked order) the engine made
+        // is the other half of "why this model" — the trace must keep it, not drop it.
+        assert_eq!(stored.trace.routing, Some(decision));
 
         assert_eq!(stored.inference_call_id, Some(call_id));
         assert_eq!(stored.trace.request_id, call_id.to_string());

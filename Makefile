@@ -10,7 +10,7 @@
 ## Bun workspaces: packages/* apps/*
 ## Cargo workspace: Cargo.toml at monorepo root → target/ at monorepo root
 
-.PHONY: install build test check lint e2e clean clean-cache clean-all help bump \
+.PHONY: install build test check lint fmt fmt-check hooks e2e clean clean-cache clean-all help bump \
         gateway-build gateway-service gateway-restart gateway-stop gateway-logs gateway-status
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -38,6 +38,21 @@ check: ## Type-check all workspaces (svelte-check + tsc)
 
 lint: ## Prettier format-check + ESLint across all workspaces
 	bun run lint
+
+# ── Rust formatting ───────────────────────────────────────────────────────────
+#
+# Every commit is rustfmt-clean: the tracked .githooks/pre-commit runs fmt-check, and CI
+# (coverage.yml) runs it too. `make hooks` once per clone enables the hook.
+
+fmt: ## Format all Rust code (cargo fmt --all) — run before every commit
+	cargo fmt --all
+
+fmt-check: ## Check Rust formatting without modifying files
+	cargo fmt --all --check
+
+hooks: ## Install the tracked git pre-commit hook (cargo fmt --all --check)
+	git config core.hooksPath .githooks
+	@echo "pre-commit hook enabled (.githooks/pre-commit)"
 
 # ── E2E ───────────────────────────────────────────────────────────────────────
 

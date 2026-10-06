@@ -30,6 +30,7 @@ pub const ENV_FENCE_VERSION: &str = "TORII_FENCE_VERSION";
 pub const ENV_POOL_SIZE: &str = "TORII_POOL_SIZE";
 pub const ENV_BACKEND: &str = "TORII_BACKEND";
 pub const ENV_REGISTRY_DIR: &str = "TORII_REGISTRY_DIR";
+pub const ENV_TENANT: &str = "TORII_TENANT";
 
 /// [`connect_with_max`]'s own default, restated here as the fallback when
 /// `TORII_POOL_SIZE` is unset — see that function's doc comment for why 8.
@@ -49,8 +50,12 @@ const MAX_POOL_SIZE: u32 = 1000;
 /// Where every store lives (TM-5, gateway#81). Chosen by `TORII_BACKEND`.
 #[derive(PartialEq)]
 pub enum Backend {
-    /// The default: one Postgres pool behind every store. Needs `DATABASE_URL`.
-    Postgres { database_url: String },
+    /// The default: torii's database, one pool behind every store, scoped to ONE tenant.
+    /// Needs `DATABASE_URL` and `TORII_TENANT` (a tenant id or slug).
+    Postgres {
+        database_url: String,
+        tenant: String,
+    },
     /// Every store in this process's memory — no database at all. For development and
     /// tests: nothing survives the process, so a run submitted here can be observed or
     /// woken only by the same process. The registry is seeded at boot from
@@ -75,7 +80,10 @@ pub struct EnvConfig {
 impl std::fmt::Debug for EnvConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let backend = match &self.backend {
-            Backend::Postgres { database_url } => format!("postgres({})", redact_url(database_url)),
+            Backend::Postgres {
+                database_url,
+                tenant,
+            } => format!("postgres({}, tenant {tenant:?})", redact_url(database_url)),
             Backend::Memory { registry_dir } => format!("memory({registry_dir:?})"),
         };
         f.debug_struct("EnvConfig")
@@ -149,7 +157,11 @@ fn postgres_backend(non_empty: &impl Fn(&str) -> Option<String>) -> Result<Backe
              database at all, set {ENV_BACKEND}=memory.)"
         ))
     })?;
-    Ok(Backend::Postgres { database_url })
+    let tenant = non_empty(ENV_TENANT).unwrap_or_default(); // TM-8c red: not yet required
+    Ok(Backend::Postgres {
+        database_url,
+        tenant,
+    })
 }
 
 pub fn env_config() -> Result<EnvConfig, CliError> {
@@ -256,6 +268,32 @@ impl GatewayConfigSource for FileGatewayConfigSource {
     }
     fn describe(&self) -> String {
         self.path.display().to_string()
+    }
+}
+
+/// torii's catalog (`catalog.routers / models / chains`, platform tenant) — the SAME loader the
+/// API uses (`torii_core::load_gateway_config`), so the CLI and the API cannot disagree about
+/// which chains exist. The only gateway-config source on the Postgres backend.
+pub struct CatalogGatewayConfigSource {
+    pool: sqlx::PgPool,
+}
+
+impl CatalogGatewayConfigSource {
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait::async_trait]
+impl GatewayConfigSource for CatalogGatewayConfigSource {
+    async fn load(&self) -> Result<kernel::types::config::GatewayConfig, CliError> {
+        let _ = &self.pool;
+        Err(CliError::error(
+            "TM-8c red: the catalog source is not implemented",
+        ))
+    }
+    fn describe(&self) -> String {
+        "torii's catalog".to_string()
     }
 }
 
@@ -434,6 +472,9 @@ pub struct LightDeps {
     pub scheduler_store: Arc<dyn SchedulerStore>,
     pub journal: Arc<dyn ExecutionJournal>,
     pub config_source: Arc<dyn ConfigStore>,
+    /// The backend's own gateway config: torii's catalog on Postgres; `None` on the memory
+    /// backend, which has no catalog and takes `--gateway-config` instead.
+    pub gateway_config: Option<Arc<dyn GatewayConfigSource>>,
 }
 
 /// Every store one backend provides — the light tier's three plus the heavy tier's CAS and
@@ -446,7 +487,7 @@ struct Stores {
 
 async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
     match &env.backend {
-        Backend::Postgres { database_url } => {
+        Backend::Postgres { database_url, .. } => {
             // ONE pool for every store: cloning a `PgPool` is an `Arc::clone`, not a new
             // connection, so the whole process is capped at `TORII_POOL_SIZE` connections
             // (see `connect_with_max`'s doc comment for why 8 is the default).
@@ -458,6 +499,7 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                     scheduler_store: Arc::new(PostgresSchedulerStore::new(pool.clone())),
                     journal: Arc::new(PostgresJournal::new(pool.clone())),
                     config_source: Arc::new(PostgresConfigSource::new(pool.clone())),
+                    gateway_config: None, // TM-8c red
                 },
                 content: Arc::new(PostgresContentStore::new(pool.clone())),
                 context: Arc::new(PostgresContextStore::new(pool)),
@@ -480,6 +522,7 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                     scheduler_store: Arc::new(InMemorySchedulerStore::new()),
                     journal: Arc::new(InMemoryJournal::default()),
                     config_source: Arc::new(config),
+                    gateway_config: None,
                 },
                 context: Arc::new(InMemoryContextStore::new(content.clone())),
                 content,
@@ -507,10 +550,15 @@ pub struct HeavyDeps {
 
 pub async fn heavy(
     env: &EnvConfig,
-    gateway_config: &dyn GatewayConfigSource,
+    gateway_config_file: Option<&Path>,
     workspace_root: Option<&Path>,
 ) -> Result<HeavyDeps, CliError> {
     let fence = require_fence(env)?.to_string();
+    // TM-8c red: still the file, whatever the backend.
+    let file = FileGatewayConfigSource::new(
+        gateway_config_file.ok_or_else(|| CliError::error("TM-8c red: no gateway config"))?,
+    );
+    let gateway_config: &dyn GatewayConfigSource = &file;
 
     // Load the gateway config FIRST: for a file source that is pure and offline, so the most
     // likely operator typo — a bad `--gateway-config` path — is caught instantly instead of
@@ -657,26 +705,92 @@ pub async fn heavy(
 mod tests {
     use super::*;
     use orchestrator_core::ConfigStore;
-    // Only this probe test connects unconditionally (production code goes through
-    // `connect_with_max` so `env.pool_size` is honored) — imported here, not at module
-    // scope, so a non-test build of this lib (linked into `main.rs`) doesn't carry an
-    // unused import.
-    use orchestrator_store::postgres::connect;
 
     fn pg_url(e: &EnvConfig) -> &str {
         match &e.backend {
-            Backend::Postgres { database_url } => database_url,
+            Backend::Postgres { database_url, .. } => database_url,
             Backend::Memory { .. } => panic!("expected the postgres backend"),
         }
     }
 
-    fn getter<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+    /// The environment exactly as given — see `the_postgres_backend_needs_a_tenant`.
+    fn raw_getter<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
         move |k| {
             pairs
                 .iter()
                 .find(|(key, _)| *key == k)
                 .map(|(_, v)| v.to_string())
         }
+    }
+
+    /// As given, plus `TORII_TENANT=acme` unless the pairs set it: the tests below are about
+    /// other variables, and the tenant requirement has its own test.
+    fn getter<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |k| raw_getter(pairs)(k).or_else(|| (k == ENV_TENANT).then(|| "acme".to_string()))
+    }
+
+    /// TM-8c: the Postgres backend is torii's database, which is multi-tenant — every store
+    /// is one tenant's, so the tenant is required, and named when missing.
+    #[test]
+    fn the_postgres_backend_needs_a_tenant() {
+        let err = env_config_from(raw_getter(&[(ENV_DATABASE_URL, "postgres://h/db")]))
+            .expect_err("no tenant");
+        assert!(err.message.contains(ENV_TENANT), "{}", err.message);
+        let e = env_config_from(raw_getter(&[
+            (ENV_DATABASE_URL, "postgres://h/db"),
+            (ENV_TENANT, " acme "),
+        ]))
+        .expect("ok");
+        assert!(
+            matches!(&e.backend, Backend::Postgres { tenant, .. } if tenant == "acme"),
+            "trimmed tenant"
+        );
+        // The memory backend has no tenants.
+        env_config_from(raw_getter(&[(ENV_BACKEND, "memory")])).expect("memory needs no tenant");
+    }
+
+    /// TM-8c: on the Postgres backend the gateway config IS torii's catalog — the same loader
+    /// the API uses. A `--gateway-config` file there would be a second source the API never
+    /// sees, so it is refused (before any connection is attempted).
+    #[tokio::test]
+    async fn heavy_refuses_a_gateway_config_file_on_the_postgres_backend() {
+        let env = EnvConfig {
+            backend: Backend::Postgres {
+                database_url: "postgres://127.0.0.1:1/unreachable".into(),
+                tenant: "acme".into(),
+            },
+            fence_version: Some("v1".into()),
+            pool_size: DEFAULT_POOL_SIZE,
+        };
+        let err = match heavy(&env, Some(Path::new("/tmp/gateway.json")), None).await {
+            Ok(_) => panic!("must refuse a file on the postgres backend"),
+            Err(e) => e,
+        };
+        assert!(
+            err.message.contains("--gateway-config") && err.message.contains("catalog"),
+            "{}",
+            err.message
+        );
+    }
+
+    /// The memory backend has no catalog: its gateway config is the `--gateway-config` file,
+    /// and a missing one is named.
+    #[tokio::test]
+    async fn heavy_on_the_memory_backend_requires_a_gateway_config_file() {
+        let env = EnvConfig {
+            backend: Backend::Memory { registry_dir: None },
+            fence_version: Some("v1".into()),
+            pool_size: DEFAULT_POOL_SIZE,
+        };
+        let err = match heavy(&env, None, None).await {
+            Ok(_) => panic!("must require a file on the memory backend"),
+            Err(e) => e,
+        };
+        assert!(
+            err.message.contains("--gateway-config") && err.message.contains("memory"),
+            "{}",
+            err.message
+        );
     }
 
     /// TM-5: the memory backend needs no DATABASE_URL, and takes its registry dir.
@@ -1138,264 +1252,133 @@ mod tests {
         require_agents(1, 0, 0, 3).expect("one agent is enough");
     }
 
-    /// Minor 1 (re-review of `f7e6eb8`): the test this replaces
-    /// (`heavy_shares_one_pool_across_every_postgres_adapter`) asserted
-    /// `pool.size() <= 8` on a pool it built itself and never called `heavy()` —
-    /// true by construction for ANY `connect()` result, so it could not fail even
-    /// against the pre-fix four-separate-`connect()` shape (mutation-proven by the
-    /// reviewer). This version drives the REAL `heavy()` and counts REAL backend
-    /// connections in `pg_stat_activity`: the four-pool shape shows ~4 (each
-    /// `connect()` eagerly opens a backend), this one ~1. Discrimination was
-    /// verified by hand: temporarily reverting `heavy()`'s pool sharing to four
-    /// separate `connect()` calls made this exact test fail with a reported 4;
-    /// restoring the fix made it pass with 1.
-    ///
-    /// It counts backends carrying a UNIQUE `application_name` this call put in
-    /// `heavy()`'s connection URL, NOT a before/after delta of every backend on the
-    /// database. The delta form measured a global: any concurrent DB test in this
-    /// binary opening its own pool between the two reads was charged to `heavy()`,
-    /// which made it fail 5 runs out of 6 under default threads —
-    ///
-    /// ```text
-    /// saw a delta of 3 (before=5, after=8)
-    /// ```
-    ///
-    /// — with nothing wrong. `config_guard` cannot fix that: the noise is every
-    /// OTHER DB test, not a config writer. Naming the connections is strictly more
-    /// discriminating than counting them, since it can no longer credit `heavy()`
-    /// with a stranger's pool NOR excuse one of its own.
-    ///
-    /// `before` is asserted to be 0 (the tag is unique to this call) and `after` to
-    /// be at least 1 — that lower bound is what proves sqlx actually honoured the
-    /// `application_name` parameter, so a silently-ignored tag fails loudly here
-    /// rather than making the upper bound vacuously true.
-    ///
-    /// `config_agents`/`config_versions` are process-wide shared tables and
-    /// `store_and_bump` is replace-all (see its own doc comment: concurrent
-    /// writers serialize and last-writer-wins, which is clean, not corruption) —
-    /// so a concurrent `cmd::config` test's write can legitimately race this
-    /// seed away between the write and `heavy()`'s read. `config_guard` now
-    /// serializes every durable-config writer in this crate, which closes that
-    /// race at the source; the retry below is kept as the backstop for any
-    /// TM-4 at the boot path: `heavy()` itself refuses a registry bound to a chain the
-    /// gateway config does not define, naming the chain — the unit tests prove the check,
-    /// this proves `heavy()` runs it, against a real database.
-    #[cfg_attr(
-        not(have_database_url),
-        ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
-    )]
-    #[tokio::test]
-    async fn heavy_refuses_a_registry_bound_to_a_chain_the_gateway_config_lacks() {
-        let Some(url) = crate::test_guard::db_url() else {
-            return;
-        };
-        let _guard = crate::test_guard::config_guard().await;
-        let config_source = PostgresConfigSource::new(connect(&url).await.expect("connect"));
-        let seed = orchestrator_core::RegistryConfig {
+    /// The Postgres env for one test tenant (by id), with an explicit fence.
+    fn tenant_env(url: &str, tenant: uuid::Uuid, fence: &str) -> EnvConfig {
+        EnvConfig {
+            backend: Backend::Postgres {
+                database_url: url.to_string(),
+                tenant: tenant.to_string(),
+            },
+            fence_version: Some(fence.to_string()),
+            pool_size: DEFAULT_POOL_SIZE,
+        }
+    }
+
+    fn probe_agent(name: &str, chain: &str) -> orchestrator_core::RegistryConfig {
+        orchestrator_core::RegistryConfig {
             agents: vec![orchestrator_core::AgentDefinition {
                 default_planner: false,
-                name: "torii-unbound-probe-agent".to_string(),
+                name: name.to_string(),
                 area: "test".to_string(),
                 kind: "test".to_string(),
-                chain: Some("torii-chain-nobody-defined".to_string()),
+                chain: Some(chain.to_string()),
                 chains: Default::default(),
                 grants: Default::default(),
                 tools: vec![],
                 skills: vec![],
                 system_prompt: "probe".to_string(),
-                backed_by: Default::default(),
+                backed_by: orchestrator_core::AgentBacking::Model,
             }],
             ..Default::default()
-        };
-        config_source.store_and_bump(&seed).await.expect("seed");
+        }
+    }
 
-        let gw_dir = tempfile::tempdir().expect("tmp dir");
-        let gw_path = gw_dir.path().join("gateway.json");
-        std::fs::write(
-            &gw_path,
-            r#"{"routers":{"ollama":{"url":"http://127.0.0.1:11434"}}}"#,
-        )
-        .expect("write gateway config");
-        let env = EnvConfig {
-            backend: Backend::Postgres {
-                database_url: url.clone(),
-            },
-            fence_version: Some("torii-unbound-probe-fence".to_string()),
-            pool_size: DEFAULT_POOL_SIZE,
+    /// TM-4 at the boot path, against torii's catalog (TM-8c): `heavy()` refuses a registry
+    /// bound to a chain the catalog does not define, naming the chain, the agent and the
+    /// source. Each test owns a fresh tenant, so no shared lock or seed race.
+    #[cfg_attr(
+        not(have_database_url),
+        ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+    )]
+    #[tokio::test]
+    async fn heavy_refuses_a_registry_bound_to_a_chain_the_catalog_lacks() {
+        let Some(url) = crate::test_guard::db_url() else {
+            return;
         };
-        let err = match heavy(&env, &FileGatewayConfigSource::new(&gw_path), None).await {
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        t.stores()
+            .config
+            .store_and_bump(&probe_agent(
+                "torii-unbound-probe-agent",
+                "torii-chain-nobody-defined",
+            ))
+            .await
+            .expect("seed");
+        let env = tenant_env(&url, t.id, "torii-unbound-probe-fence");
+        let err = match heavy(&env, None, None).await {
             Ok(_) => panic!("heavy() must refuse a registry bound to an undefined chain"),
             Err(e) => e,
         };
+        t.drop().await;
         assert!(
             err.message.contains("torii-chain-nobody-defined")
-                && err.message.contains("torii-unbound-probe-agent"),
+                && err.message.contains("torii-unbound-probe-agent")
+                && err.message.contains("torii's catalog"),
             "{}",
             err.message
         );
     }
 
-    /// **SP-REG-0 — the production executor must have a planner selector wired.**
-    ///
-    /// `PlannerRef::Select` fails for TWO independent reasons, and only the first is
-    /// about config: `expand.rs` refuses once when `planner_candidates()` is empty, and
-    /// again immediately after when `self.selector` is `None`. Before this slice every
-    /// `with_planner_selector` call in the workspace was inside `executor/tests.rs`, so
-    /// the shipped binary always took the second refusal — a whole SP-3 slice-4B feature
-    /// dead in production, invisible to a suite that was entirely green.
-    ///
-    /// Asserted on the built executor rather than by driving a `Select` node, because
-    /// driving one requires a real model completion (`drive_planner_agent` → `drive_agent`)
-    /// and CI has Postgres but no model backend. This test is the honest, checkable
-    /// property: whatever `heavy()` hands the scheduler has a selector.
+    /// **SP-REG-0 — the production executor must have a planner selector wired** (and
+    /// SP-OPS-1.5: `fs_write` has its reconciler). Booted for a tenant whose registry binds
+    /// the catalog's seeded `chat` chain.
     #[cfg_attr(
         not(have_database_url),
-        ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+        ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
     )]
     #[tokio::test]
     async fn heavy_wires_a_planner_selector_so_select_is_not_dead_in_the_binary() {
         let Some(url) = crate::test_guard::db_url() else {
             return;
         };
-        let _guard = crate::test_guard::config_guard().await;
-
-        let probe_pool = connect(&url).await.expect("connect");
-        let config_source = PostgresConfigSource::new(probe_pool.clone());
-        let seed = orchestrator_core::RegistryConfig {
-            agents: vec![orchestrator_core::AgentDefinition {
-                default_planner: false,
-                name: "torii-selector-probe-agent".to_string(),
-                area: "test".to_string(),
-                kind: "test".to_string(),
-                chain: Some("torii-selector-probe-chain".to_string()),
-                chains: Default::default(),
-                grants: Default::default(),
-                tools: vec![],
-                skills: vec![],
-                system_prompt: "probe".to_string(),
-                backed_by: Default::default(),
-            }],
-            skills: vec![],
-            tools: vec![],
-            chain_bindings: vec![],
-        };
-
-        let gw_dir = std::env::temp_dir().join(format!("torii-sel-gw-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&gw_dir).expect("tmp dir");
-        let gw_path = gw_dir.join("gateway.json");
-        std::fs::write(
-            &gw_path,
-            r#"{"routers":{"ollama":{"url":"http://127.0.0.1:11434"}},"chains":{"torii-selector-probe-chain":{"id":"torii-selector-probe-chain","capability":"text_chat","models":[],"fallback_triggers":[]}}}"#,
-        )
-        .expect("write gateway config");
-
-        let env = EnvConfig {
-            backend: Backend::Postgres {
-                database_url: url.clone(),
-            },
-            fence_version: Some("torii-selector-probe-fence".to_string()),
-            pool_size: DEFAULT_POOL_SIZE,
-        };
-
-        // Same seed-race tolerance as the pool test below: a concurrent config test can
-        // replace-all our probe agent between the store and the boot.
-        let mut deps = None;
-        for _ in 0..5 {
-            config_source
-                .store_and_bump(&seed)
-                .await
-                .expect("seed the probe agent");
-            match heavy(&env, &FileGatewayConfigSource::new(&gw_path), None).await {
-                Ok(d) => {
-                    deps = Some(d);
-                    break;
-                }
-                Err(e) if e.message.contains("zero agents") => continue,
-                Err(e) => panic!("heavy() failed for a reason other than the seed race: {e:?}"),
-            }
-        }
-        let _ = std::fs::remove_dir_all(&gw_dir);
-        let deps = deps.expect("heavy() never won the probe-agent seed race after 5 attempts");
-
-        // SP-OPS-1.5: the same class of bug as the selector below — a Mutation tool with no
-        // reconciler parks an interrupted run forever, and nothing short of crashing a real
-        // run mid-mutation would reveal it.
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        t.stores()
+            .config
+            .store_and_bump(&probe_agent("torii-selector-probe-agent", "chat"))
+            .await
+            .expect("seed");
+        let env = tenant_env(&url, t.id, "torii-selector-probe-fence");
+        let deps = heavy(&env, None, None).await;
+        t.drop().await;
+        let deps = deps.expect("boots against the catalog's chat chain");
         assert!(
             deps.scheduler.executor().has_reconciler_for("fs_write"),
-            "heavy() registered fs_write (a Mutation tool) with NO reconciler — a crash \
-             between its EffectIntent and EffectRecorded parks the run on Indeterminate \
-             with a NULL next_wake, which no timer wakes and force_wake cannot resolve",
+            "heavy() registered fs_write (a Mutation tool) with NO reconciler",
         );
         assert!(
             deps.scheduler.executor().has_planner_selector(),
-            "heavy() built an executor with NO planner selector — every \
-             `PlannerRef::Select` node in this binary takes expand.rs's \
-             \"Select planner but no selector wired\" refusal, whatever the registry \
-             contains",
+            "heavy() built an executor with NO planner selector",
         );
     }
 
-    /// future writer that forgets the guard, and any OTHER failure is a real bug
-    /// and is not retried.
+    /// `heavy()` shares ONE pool across every store AND the catalog read: a regression to a
+    /// pool per store shows ~5 backends, this ~1 (verified by hand in the gateway against the
+    /// four-pool shape). Counted by a unique `application_name` carried only by the pool
+    /// `heavy()` opens — a before/after delta of all backends charged concurrent tests'
+    /// pools to `heavy()` and failed 5 runs in 6 with nothing wrong. `after >= 1` proves sqlx
+    /// honoured the tag, so the upper bound is never vacuous.
     #[cfg_attr(
         not(have_database_url),
-        ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+        ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
     )]
     #[tokio::test]
     async fn heavy_boots_on_one_pools_worth_of_real_backend_connections() {
         let Some(url) = crate::test_guard::db_url() else {
             return;
         };
-        let _guard = crate::test_guard::config_guard().await;
-
-        let probe_pool = connect(&url).await.expect("connect");
-        let config_source = PostgresConfigSource::new(probe_pool.clone());
-        let agent = orchestrator_core::AgentDefinition {
-            default_planner: false,
-            name: "torii-boot-probe-agent".to_string(),
-            area: "test".to_string(),
-            kind: "test".to_string(),
-            // An explicit override so this doesn't also need a chain-binding row.
-            chain: Some("torii-boot-probe-chain".to_string()),
-            chains: Default::default(),
-            grants: Default::default(),
-            tools: vec![],
-            skills: vec![],
-            system_prompt: "probe".to_string(),
-            backed_by: orchestrator_core::AgentBacking::Model,
-        };
-        let seed = orchestrator_core::RegistryConfig {
-            agents: vec![agent],
-            skills: vec![],
-            tools: vec![],
-            chain_bindings: vec![],
-        };
-
-        let gw_dir = std::env::temp_dir().join(format!("torii-boot-gw-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&gw_dir).expect("tmp dir");
-        let gw_path = gw_dir.join("gateway.json");
-        // `ollama` registers WITHOUT credentials (the key resolves lazily per
-        // request, confirmed by the review) — exactly what lets this test drive
-        // a real `heavy()` boot with no live provider.
-        std::fs::write(
-            &gw_path,
-            r#"{"routers":{"ollama":{"url":"http://127.0.0.1:11434"}},"chains":{"torii-boot-probe-chain":{"id":"torii-boot-probe-chain","capability":"text_chat","models":[],"fallback_triggers":[]}}}"#,
-        )
-        .expect("write gateway config");
-
-        // The tag that makes the count attributable. Unique per call, and carried
-        // ONLY by the pool `heavy()` opens from this URL — the probe pool above
-        // connects to the bare `url` and so is never counted.
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        t.stores()
+            .config
+            .store_and_bump(&probe_agent("torii-boot-probe-agent", "chat"))
+            .await
+            .expect("seed");
         let tag = format!("torii-boot-probe-{}", uuid::Uuid::new_v4());
         let sep = if url.contains('?') { '&' } else { '?' };
-        let env = EnvConfig {
-            backend: Backend::Postgres {
-                database_url: format!("{url}{sep}application_name={tag}"),
-            },
-            fence_version: Some("torii-boot-probe-fence".to_string()),
-            pool_size: DEFAULT_POOL_SIZE,
-        };
-
+        let env = tenant_env(
+            &format!("{url}{sep}application_name={tag}"),
+            t.id,
+            "torii-boot-probe-fence",
+        );
         async fn backend_count(pool: &sqlx::PgPool, tag: &str) -> i64 {
             let (n,): (i64,) = sqlx::query_as(
                 "select count(*) from pg_stat_activity
@@ -1407,42 +1390,19 @@ mod tests {
             .expect("count backends");
             n
         }
-
-        let mut outcome = None;
-        for _ in 0..5 {
-            config_source
-                .store_and_bump(&seed)
-                .await
-                .expect("seed the probe agent");
-            let before = backend_count(&probe_pool, &tag).await;
-            match heavy(&env, &FileGatewayConfigSource::new(&gw_path), None).await {
-                Ok(deps) => {
-                    let after = backend_count(&probe_pool, &tag).await;
-                    outcome = Some((deps, before, after));
-                    break;
-                }
-                Err(e) if e.message.contains("zero agents") => continue,
-                Err(e) => panic!("heavy() failed for a reason other than the seed race: {e:?}"),
-            }
-        }
-        let _ = std::fs::remove_dir_all(&gw_dir);
-        let (deps, before, after) =
-            outcome.expect("heavy() never won the probe-agent seed race after 5 attempts");
-        assert_eq!(
-            before, 0,
-            "the probe tag is unique to this call, so nothing may carry it before \
-             heavy() connects (saw {before})",
-        );
+        let before = backend_count(&t.pool, &tag).await;
+        let deps = heavy(&env, None, None).await;
+        let after = backend_count(&t.pool, &tag).await;
+        t.drop().await;
+        let deps = deps.expect("boots");
+        assert_eq!(before, 0, "the probe tag is unique to this call");
         assert!(
             after >= 1,
-            "no backend carried the probe tag — sqlx did not honour the \
-             `application_name` URL parameter, so this test is measuring nothing",
+            "sqlx did not honour application_name — measuring nothing"
         );
         assert!(
             after <= 2,
-            "heavy() must share ONE pool (~1 backend connection), saw {after} \
-             carrying the probe tag — a regression to a separate connect() per \
-             adapter would show ~4",
+            "heavy() must share ONE pool (~1 backend connection), saw {after}"
         );
         drop(deps);
     }

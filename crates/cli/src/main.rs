@@ -60,8 +60,10 @@ enum RunAction {
         graph: PathBuf,
         #[arg(long)]
         run_id: Option<String>,
+        /// The gateway config file — ONLY with TORII_BACKEND=memory. On the Postgres backend
+        /// the gateway config is torii's catalog (the same one the API uses).
         #[arg(long)]
-        gateway_config: PathBuf,
+        gateway_config: Option<PathBuf>,
         #[arg(long)]
         workspace_root: Option<PathBuf>,
         /// Stop this run once it has spent this many tokens, and pause it durably so
@@ -290,8 +292,10 @@ enum WorkerAction {
         /// Run exactly one tick and exit (cron-friendly)
         #[arg(long)]
         once: bool,
+        /// The gateway config file — ONLY with TORII_BACKEND=memory. On the Postgres backend
+        /// the gateway config is torii's catalog (the same one the API uses).
         #[arg(long)]
-        gateway_config: PathBuf,
+        gateway_config: Option<PathBuf>,
         #[arg(long)]
         workspace_root: Option<PathBuf>,
     },
@@ -602,12 +606,8 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 let g: Graph = serde_json::from_str(&raw).map_err(|e| {
                     CliError::error(format!("{} is not a valid graph: {e}", graph.display()))
                 })?;
-                let d = boot::heavy(
-                    &env,
-                    &boot::FileGatewayConfigSource::new(&gateway_config),
-                    workspace_root.as_deref(),
-                )
-                .await?;
+                let d =
+                    boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
                 let budget = budget_tokens
                     .map(|total_tokens| orchestrator_core::TokenBudget { total_tokens });
                 // Print the id BEFORE driving: an operator who loses the terminal
@@ -627,12 +627,8 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 gateway_config,
                 workspace_root,
             } => {
-                let d = boot::heavy(
-                    &env,
-                    &boot::FileGatewayConfigSource::new(&gateway_config),
-                    workspace_root.as_deref(),
-                )
-                .await?;
+                let d =
+                    boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
                 let shutdown = shutdown_signal()?;
                 cmd::worker::serve(
                     &d.scheduler,
@@ -660,6 +656,7 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                             &mut std::io::stderr(),
                         )
                     };
+                    let file_source = gateway_config.map(boot::FileGatewayConfigSource::new); // TM-8c red
                     // The scheduler store rides the same pool `light` already opened —
                     // `push` reads it to disclose how much paused work a generation
                     // bump would strand.
@@ -667,7 +664,9 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                         d.config_source.as_ref(),
                         d.scheduler_store.as_ref(),
                         &dir,
-                        gateway_config.as_deref(),
+                        file_source
+                            .as_ref()
+                            .map(|f| f as &dyn boot::GatewayConfigSource),
                         yes,
                         &mut confirm,
                     )

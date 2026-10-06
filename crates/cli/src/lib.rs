@@ -77,6 +77,47 @@ pub(crate) mod test_guard {
     pub(crate) use orchestrator_store::test_guard::config_guard;
 }
 
+/// Test-only: a fresh tenant per DB test (TM-8c). torii's stores are tenant-scoped, so a
+/// tenant of its own isolates a test completely — store-wide sweeps and the registry
+/// generation included — with no shared lock and no table truncation.
+#[cfg(test)]
+pub(crate) mod test_tenant {
+    pub(crate) struct TestTenant {
+        pub(crate) id: uuid::Uuid,
+        pub(crate) pool: sqlx::PgPool,
+    }
+
+    impl TestTenant {
+        pub(crate) async fn new(database_url: &str) -> Self {
+            let pool = torii_core::connect(database_url, 4).await.expect("connect");
+            let id = uuid::Uuid::new_v4();
+            sqlx::query(
+                "insert into core.tenants (id, name, slug, modified_by) \
+                 values ($1, $2, $2, 'torii-cli-test')",
+            )
+            .bind(id)
+            .bind(format!("torii-cli-test-{id}"))
+            .execute(&pool)
+            .await
+            .expect("create the test tenant");
+            Self { id, pool }
+        }
+
+        pub(crate) fn stores(&self) -> torii_core::TenantStores {
+            torii_core::TenantStores::open(&self.pool, self.id)
+        }
+
+        /// Cascades every row the tenant owns away.
+        pub(crate) async fn drop(self) {
+            sqlx::query("delete from core.tenants where id = $1")
+                .bind(self.id)
+                .execute(&self.pool)
+                .await
+                .expect("drop the test tenant");
+        }
+    }
+}
+
 #[cfg(test)]
 mod test_guard_agrees_with_the_shared_one {
     /// The shared guard opens its OWN advisory-lock connection from `DATABASE_URL`. If this

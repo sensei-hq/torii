@@ -303,17 +303,32 @@ const TERMINAL_STATUS_LITERALS: &str = "'completed','failed','cancelled'";
 mod tests {
     use super::*;
 
-    /// Pins the hand-written allowlist to `RunStatus::is_terminal()`. A new variant must be
-    /// added to `all` — the arity assertion makes forgetting visible.
-    #[test]
-    fn the_prune_allowlist_matches_run_status_is_terminal() {
-        let all = [
+    /// Every `RunStatus`. The `match` has no wildcard arm, so adding a variant in
+    /// orchestrator-core fails to COMPILE here until it is listed — `all` cannot silently fall
+    /// behind the enum.
+    fn every_status() -> [RunStatus; 5] {
+        fn _listed(s: RunStatus) {
+            match s {
+                RunStatus::Waking
+                | RunStatus::Paused
+                | RunStatus::Completed
+                | RunStatus::Failed
+                | RunStatus::Cancelled => {}
+            }
+        }
+        [
             RunStatus::Waking,
             RunStatus::Paused,
             RunStatus::Completed,
             RunStatus::Failed,
             RunStatus::Cancelled,
-        ];
+        ]
+    }
+
+    /// Pins the hand-written allowlist to `RunStatus::is_terminal()` over every variant.
+    #[test]
+    fn the_prune_allowlist_matches_run_status_is_terminal() {
+        let all = every_status();
         for st in all {
             let quoted = format!("'{}'", st.as_str());
             assert_eq!(

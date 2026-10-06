@@ -1,7 +1,8 @@
 //! TM-7 (torii#25): two tenants cannot see each other's runs, journal, content, blackboard,
 //! schedule or registry config — even when they use the SAME run id, the same content and the
 //! same names. The conformance suite proves each store against one tenant; this proves the
-//! tenant is really part of every key and every predicate.
+//! tenant is part of every key and predicate — each test puts the OTHER tenant's row in exactly
+//! the state the acting statement would change, so a dropped `tenant_id` predicate is visible.
 mod common;
 use chrono::{DateTime, Utc};
 use common::{Tenant, pool};
@@ -292,8 +293,91 @@ async fn registry_config_and_generation_are_per_tenant() {
     let (cfg_a, gen_a) = ca.load_versioned().await.unwrap();
     assert_eq!(cfg_a.skills.len(), 1, "B's replace-all never reaches A");
     assert_eq!(gen_a, Some(1), "nor A's generation");
-    assert_eq!(cb.load().await.unwrap().skills.len(), 0);
+    let cfg_b = cb.load().await.unwrap();
+    assert!(
+        cfg_b.skills.is_empty() && cfg_b.chain_bindings.is_empty(),
+        "B's own rows are gone"
+    );
+    assert_eq!(
+        cfg_a.chain_bindings.len(),
+        1,
+        "A's binding survives B's replace-all"
+    );
 
+    a.drop_tenant().await;
+    b.drop_tenant().await;
+}
+
+/// Every scheduler WRITE is tenant-bound: with B holding the same run id in exactly the state
+/// A's statement would change, A's `record_paused` / `force_wake` / `record_terminal` leave B's
+/// row untouched.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn scheduler_transitions_never_reach_another_tenants_row() {
+    let Some(pool) = pool().await else { return };
+    let (a, b) = (Tenant::new(&pool).await, Tenant::new(&pool).await);
+    let (sa, sb) = (a.scheduler(), b.scheduler());
+    let run = RunId(uuid::Uuid::new_v4());
+    let now = ts(3_100_000);
+    let g = Graph { nodes: vec![] };
+
+    // B: waking (in flight). A pauses / terminates "its" run of the same id — B stays waking.
+    sb.enqueue(run, &g, now).await.unwrap();
+    sa.record_paused(run, Some(now), "a").await.unwrap();
+    sa.record_terminal(run, RunStatus::Failed, Some("a"))
+        .await
+        .unwrap();
+    let st = sb.status(run).await.unwrap().unwrap();
+    assert_eq!(
+        st.status,
+        RunStatus::Waking,
+        "A's transitions never reach B's in-flight run"
+    );
+    assert_eq!(st.reason, None);
+
+    // B: paused with NO deadline (in doubt). A force-wakes — B's deadline stays None.
+    sb.record_paused(run, None, "in doubt").await.unwrap();
+    sa.force_wake(run, now).await.unwrap();
+    assert_eq!(
+        sb.status(run).await.unwrap().unwrap().next_wake,
+        None,
+        "A's force_wake never re-times B's pause"
+    );
+    a.drop_tenant().await;
+    b.drop_tenant().await;
+}
+
+/// The format fence is per tenant: A's run carrying an incompatible format_version never
+/// fences B's run of the same id.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn the_format_fence_is_per_tenant() {
+    let Some(pool) = pool().await else { return };
+    let (a, b) = (Tenant::new(&pool).await, Tenant::new(&pool).await);
+    let run = RunId(uuid::Uuid::new_v4());
+    a.journal().append(run, started()).await.unwrap();
+    b.journal().append(run, started()).await.unwrap();
+    sqlx::query("update runs.runs set format_version = -999 where tenant_id = $1 and run_id = $2")
+        .bind(a.id)
+        .bind(run.0)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(a.journal().load(run).await.is_err(), "A's run is fenced");
+    assert_eq!(
+        b.journal()
+            .load(run)
+            .await
+            .expect("B's run is not fenced by A's")
+            .len(),
+        1
+    );
     a.drop_tenant().await;
     b.drop_tenant().await;
 }

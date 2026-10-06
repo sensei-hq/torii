@@ -848,7 +848,10 @@ mod trace_roundtrip {
             fallback_sequence: 2,
             recorded_at: Utc::now(),
         };
-        store_a.insert_inference_call(&call).await.expect("insert call");
+        store_a
+            .insert_inference_call(&call)
+            .await
+            .expect("insert call");
 
         let trace = ExecutionTrace {
             request_id: call_id.to_string(),
@@ -866,7 +869,14 @@ mod trace_roundtrip {
                     Some("429 rate limited"),
                     true,
                 ),
-                attempt(2, "ollama", "gemma2:2b", AttemptStatus::Success, None, false),
+                attempt(
+                    2,
+                    "ollama",
+                    "gemma2:2b",
+                    AttemptStatus::Success,
+                    None,
+                    false,
+                ),
             ],
             estimated_cost: None,
             actual_cost: None,

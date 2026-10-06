@@ -31,7 +31,10 @@ pub trait Embedder: Send + Sync {
 /// Validate a single embedding row's dimensionality (fail-closed).
 pub fn validate_dim(v: &[f32]) -> Result<(), RagError> {
     if v.len() != EMBED_DIM {
-        return Err(RagError::Dim { expected: EMBED_DIM, got: v.len() });
+        return Err(RagError::Dim {
+            expected: EMBED_DIM,
+            got: v.len(),
+        });
     }
     Ok(())
 }
@@ -123,7 +126,9 @@ impl Embedder for EngineEmbedder {
             model: None,
             router: None,
             chain: Some(self.chain.clone()),
-            payload: Payload::Embed { texts: texts.to_vec() },
+            payload: Payload::Embed {
+                texts: texts.to_vec(),
+            },
             budget: None,
             auth: None,
             panel: None,
@@ -184,14 +189,26 @@ mod tests {
         let dot: f32 = same[0].iter().zip(&same[1]).map(|(x, y)| x * y).sum();
         assert!(dot > 0.999, "identical text → cosine ~1, got {dot}");
 
-        let diff = e.embed(&["totally different content".to_string()]).await.unwrap();
+        let diff = e
+            .embed(&["totally different content".to_string()])
+            .await
+            .unwrap();
         let dot2: f32 = same[0].iter().zip(&diff[0]).map(|(x, y)| x * y).sum();
-        assert!(dot2.abs() < 0.2, "distinct text → near-orthogonal, got {dot2}");
+        assert!(
+            dot2.abs() < 0.2,
+            "distinct text → near-orthogonal, got {dot2}"
+        );
     }
 
     #[tokio::test]
     async fn wrong_dim_stub_fails_validation() {
-        let rows = WrongDimStubEmbedder(768).embed(&["x".to_string()]).await.unwrap();
-        assert!(matches!(validate_dims(&rows), Err(RagError::Dim { got: 768, .. })));
+        let rows = WrongDimStubEmbedder(768)
+            .embed(&["x".to_string()])
+            .await
+            .unwrap();
+        assert!(matches!(
+            validate_dims(&rows),
+            Err(RagError::Dim { got: 768, .. })
+        ));
     }
 }

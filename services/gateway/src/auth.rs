@@ -410,3 +410,50 @@ fn extract_bearer(headers: &HeaderMap) -> Result<String, AuthError> {
         .map(str::to_owned)
         .ok_or(AuthError::InvalidHeader)
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jsonwebtoken::{encode, EncodingKey, Header};
+
+    /// Regression: `jsonwebtoken = "10"` with DEFAULT features compiles cleanly but has NO
+    /// crypto backend — `default = ["use_pem"]`, and neither `rust_crypto` nor `aws_lc_rs`.
+    /// The first verification then panics inside the crate:
+    ///
+    ///   panicked at jsonwebtoken-10.4.0/src/crypto/mod.rs:125:
+    ///   Could not automatically determine the process-level CryptoProvider
+    ///
+    /// A panic in a tokio worker aborts the connection, so EVERY authenticated request
+    /// returned an empty response — the gateway was up, healthy, and unusable. Nothing in
+    /// the type system catches this; only exercising a real verify does.
+    #[test]
+    fn hs256_verification_does_not_panic_for_want_of_a_crypto_backend() {
+        let secret = "regression-secret-at-least-32-bytes-long!!";
+        // SAFETY: single-threaded test process; no other thread reads env concurrently.
+        unsafe { std::env::set_var("SUPABASE_JWT_SECRET", secret) };
+
+        let claims = serde_json::json!({
+            "sub": "00000000-0000-0000-0000-000000000001",
+            "aud": "authenticated",
+            "exp": (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
+        });
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .expect("signing must work — it needs the same backend verification does");
+
+        let got = validate_hs256(&token).expect("env var is set, so the path must be attempted");
+        assert!(
+            got.is_ok(),
+            "a freshly-signed HS256 token must verify; got {:?}",
+            got.err()
+        );
+        assert_eq!(got.unwrap().sub, "00000000-0000-0000-0000-000000000001");
+    }
+}

@@ -2,6 +2,8 @@
 	// Seiki admin sign-in — magic-link-primary. Passwordless email link is the primary
 	// path (and the domain-based register path); password is a secondary, revealed option;
 	// GitHub OAuth is a convenience login. All flows land on /auth/callback.
+	import { goto } from '$app/navigation'
+	import { resolve } from '$app/paths'
 	import { api } from '$lib/api'
 	import { looksLikeEmail, normalizeEmail } from '$lib/auth-flow'
 	import { BrandMark } from '@torii/ui'
@@ -35,8 +37,12 @@
 		error = ''
 		try {
 			await api.signIn(normalizeEmail(email), password)
-			// On success supabase persists the session; go to the shell (it resolves the tenant).
-			window.location.assign('/')
+			// Hand off to /auth/callback like every other flow, instead of assuming '/'. It is
+			// the one place that resolves the destination (whoami → tenant_id ? '/' :
+			// '/onboarding'), so a user with no organization reaches the create-org screen
+			// rather than an Overview whose every fetch 403s. goto(), not
+			// window.location.assign() — a full page load drops the client-only session guard.
+			goto(resolve('/auth/callback'))
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e)
 		} finally {

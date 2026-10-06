@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import { signIn } from './helpers'
+import { mockups } from './mockups'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fidelity harness — the REPEATABLE mock-vs-app verification the runbook mandates.
@@ -11,11 +12,21 @@ import { signIn } from './helpers'
 //   · card border colour (the dark hairline that must stay subtle)
 // Extend a screen by adding rows to OVERVIEW; add a screen by adding a table.
 //
+// LOCAL DEVELOPMENT ONLY — excluded from the e2e suite by default, because it needs an
+// export of the untracked design mockups. Run it with:
+//   bun run mockup-fidelity                    (fidelity alone; errors if no export)
+//   bun run e2e --with-mockup-fidelity         (whole suite; skips fidelity if no export)
+//   MOCKUPS_DIR=<path> bun run mockup-fidelity (a different export)
+//
 // Requires the live gateway + Supabase + seeded owner + the mock server
-// (auto-started by playwright.config webServer).
+// (auto-started by playwright.config webServer when enabled).
 // ─────────────────────────────────────────────────────────────────────────────
 
-const MOCK = 'http://localhost:8890/Seiki.html'
+// playwright.config testIgnore keeps this file out of the run unless `mockups.enabled`,
+// so reaching here while disabled means the config and the spec disagree — fail loudly
+// rather than diff against a URL nothing is serving.
+if (!mockups.enabled) throw new Error(`fidelity spec collected while disabled: ${mockups.reason}`)
+const MOCK = mockups.url
 type Mode = 'light' | 'dark'
 
 /** How to find one element: a CSS selector, or a text needle matched exact/contains. */

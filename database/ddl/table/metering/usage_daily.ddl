@@ -15,6 +15,12 @@ create table if not exists usage_daily (
 , provider              text          not null                    -- inference_calls.adapter
 , capability            text          not null
 , execution_location    core.execution_location not null            -- {local,cloud} enum
+  -- G3: the free-tier quota POOL this usage drew on, denormalized from the call's model
+  -- (catalog.models.free_pool_key) at rollup. NOT part of the grain — it is functionally
+  -- determined by served_model — but carried here so headroom sums tokens per pool without
+  -- re-joining the catalog per read. NULL when the model has no free tier, or is un-pooled
+  -- (those stand alone on their own allowance; see metering.pool_headroom).
+, pool_key              varchar(100)
 , calls                 bigint        not null default 0
 , input_tokens          bigint        not null default 0
 , output_tokens         bigint        not null default 0

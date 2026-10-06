@@ -22,6 +22,11 @@ begin
     ('core',   'tenant_languages'),
     ('catalog', 'chains'),
     ('catalog', 'chain_models'),
+    -- G2: tiers are routing config in the same class as chains — a tenant reads its own
+    -- (plus the platform defaults it inherits) and writes go through the gateway as
+    -- service_role. Curated membership is as privileged as the chain it feeds.
+    ('catalog', 'tiers'),
+    ('catalog', 'tier_models'),
     ('public', 'spaces'),
     ('public', 'space_members'),
     ('governance', 'nodes'),  -- §D Phase 5: was public.budget_nodes (budget cap facet)

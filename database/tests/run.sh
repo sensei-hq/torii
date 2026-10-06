@@ -21,6 +21,11 @@ suite=(
   dataset.sql   # §3c: sensitive-data safe schema + k-anonymity
   retrieval.sql # C5: hybrid_search dual-write + cross-tenant/classification isolation
   analytics.sql # O2: daily usage rollup + idempotency
+  catalog_meta.sql # G1: gateway CatalogMeta/FreeTier attrs + pool-dedup expressibility
+  catalog_tiers.sql # G2: tiers (strategy + curated∪derived membership) + tier-ref chain steps
+  metering_pools.sql # G3: free-tier pools (dedup) + reset windows → pool_headroom
+  health_gates.sql # G4: durable cooldown/lockout; terminal locks must not fail open
+  resilience_config.sql # G5: ResilienceConfig parity with the engine's defaults + guardrails
   orchestrator.sql # TM-6: registry.*/runs.* tenant isolation + registry generation CAS
 )
 

@@ -122,7 +122,6 @@ impl Embedder for EngineEmbedder {
         // whether that is an in-process embedded adapter (feature `embed-local`) or a cloud/ollama
         // model — no-hardcoded-ops. allow_fallback walks the chain's circuit-broken alternates.
         let req = InferenceRequest {
-            routing: None, // no per-request provider routing preferences
             capability: Capability::TextEmbed,
             model: None,
             router: None,
@@ -136,6 +135,8 @@ impl Embedder for EngineEmbedder {
             consensus: None,
             allow_fallback: true,
             credentials: HashMap::new(),
+            // SP-ROUTE-1: embeddings follow the chain's own order.
+            routing: None,
         };
         let resp = self
             .gw

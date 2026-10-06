@@ -854,7 +854,6 @@ mod trace_roundtrip {
             .expect("insert call");
 
         let trace = ExecutionTrace {
-            routing: None,
             request_id: call_id.to_string(),
             capability: Capability::TextChat,
             status: TraceStatus::Success,
@@ -882,6 +881,7 @@ mod trace_roundtrip {
             estimated_cost: None,
             actual_cost: None,
             created_at: Utc::now(),
+            routing: None,
         };
         let stored = StoredTrace {
             id: Uuid::new_v4(),

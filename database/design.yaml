@@ -43,6 +43,10 @@ import:
     - import/rework_admin_grants.sql
     # C5: the 'embedding' fallback chain → Ollama mxbai-embed-large (1024d). Idempotent.
     - import/embedding_chain.sql
+    # Re-anchor core.profiles for auth users that predate this reset. auth.* is not
+    # dbd-managed, so it survives `reset` while profiles do not, and the signup trigger
+    # never re-fires — leaving onboarding to fail on a memberships FK. Idempotent.
+    - import/backfill_profiles.sql
 dbml:
   exclude:
     schemas:

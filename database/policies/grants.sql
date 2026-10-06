@@ -32,6 +32,10 @@ grant usage on schema content to authenticated, service_role;
 -- design's `vault` to avoid colliding with Supabase's built-in vault schema). router_credentials
 -- moves here in a later phase. `authenticated` usage is for the future masked read view.
 grant usage on schema keyvault to authenticated, service_role;
+-- registry + runs: the orchestrator's durable state (TM-6, torii#24). Agent/skill/tool definitions
+-- and chain bindings; run schedule/journal/snapshots/blobs/blackboard. Table grants + RLS live in
+-- orchestrator.sql (SELECT-only for authenticated; service_role writes).
+grant usage on schema registry, runs to authenticated, service_role;
 
 -- (1) Privileged tables — SELECT only. Writes are service_role via the gateway.
 do $$

@@ -166,6 +166,8 @@ pub(crate) fn build_models(rows: &[ModelRow]) -> HashMap<String, ModelConfig> {
         models.insert(
             m.full_name.clone(),
             ModelConfig {
+                // gateway 0.6+: free-tier terms + attribute tags; the catalog does not carry them yet.
+                catalog: None,
                 id: m.full_name.clone(),
                 api_model_id: m
                     .default_router_model_id

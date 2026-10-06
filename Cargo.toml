@@ -1,13 +1,13 @@
 [workspace]
-members = ["apps/desktop/src-tauri", "crates/orchestrator-store", "crates/tools", "services/gateway"]
+members = ["apps/desktop/src-tauri", "crates/cli", "crates/core", "crates/orchestrator-store", "crates/tools", "services/gateway"]
 # "services/gateway" added in the Phase 2 plan
 resolver = "2"
 
-# Dev-in-place against the sibling engine repo (production consumes the pinned git tag v0.4.6).
-# MIG-1 (2026-07-24): the engine was refactored to six `sensei-*` packages @ v0.4.6;
-# `gateway`/`gateway-embedded` no longer exist. Patch the real package names to the sibling
-# checkout. Transitive crates (sensei-kernel/-cloud-providers/-kokoro) resolve via intra-workspace
-# path deps inside ../gateway and need no entry here.
+# Dev-in-place against the sibling engine repo. Production (and CI, which strips this section)
+# resolves every `sensei-*` dependency from the ONE gateway git ref they all pin (TM-8a: the API,
+# the desktop app, torii-core, the stores and the CLI never mix gateway versions). Patch the real
+# package names to the sibling checkout; transitive crates (sensei-cloud-providers/-kokoro) resolve
+# via intra-workspace path deps inside ../gateway.
 [patch."https://github.com/sensei-hq/gateway"]
 sensei-gateway         = { path = "../gateway/crates/gateway" }
 sensei-local-engine    = { path = "../gateway/crates/local-engine" }
@@ -16,6 +16,11 @@ sensei-vault           = { path = "../gateway/crates/vault" }  # V5: shared BYOK
 # TM-7: the orchestrator's persistence traits + the store conformance suite (gateway TM-2/TM-3).
 sensei-orchestrator-core    = { path = "../gateway/crates/orchestrator-core" }
 sensei-orchestrator-testkit = { path = "../gateway/crates/orchestrator-testkit" }
+# TM-8c: the operator CLI (crates/cli) uses the executor and the kernel types directly; they must
+# resolve to the SAME sibling checkout as sensei-gateway, or two copies of the kernel types meet.
+sensei-orchestrator       = { path = "../gateway/crates/orchestrator" }
+sensei-orchestrator-store = { path = "../gateway/crates/orchestrator-store" }
+sensei-kernel             = { path = "../gateway/crates/kernel" }
 
 [profile.release]
 opt-level = 3

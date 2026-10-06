@@ -75,13 +75,14 @@ fn db_url() -> Option<String> {
 struct Db {
     url: String,
     tenant: uuid::Uuid,
+    pool: sqlx::PgPool,
 }
 
 impl Db {
     async fn new() -> Option<Db> {
         let url = db_url()?;
         let tenant = uuid::Uuid::new_v4();
-        let pool = torii_core::connect(&url, 1).await.expect("connect");
+        let pool = torii_core::connect(&url, 4).await.expect("connect");
         sqlx::query(
             "insert into core.tenants (id, name, slug, modified_by) values ($1, $2, $2, 'torii-e2e')",
         )
@@ -90,12 +91,18 @@ impl Db {
         .execute(&pool)
         .await
         .expect("create the test tenant");
-        Some(Db { url, tenant })
+        Some(Db { url, tenant, pool })
     }
 
-    /// A NEW pool — one per store, as before: each "process" shares nothing in-process.
+    /// The test's ONE pool (capped at 4). Every "process" still gets its OWN store, journal and
+    /// executor instances — which is what "shares nothing in-process" means: none of them holds
+    /// state outside the database. (The drive lock detaches its own session from the pool.)
+    ///
+    /// Not a pool per store: the suite runs in parallel, every pool keeps its connections until
+    /// the test ends, and a pool per store peaked at ~85 of Postgres's default 100 connections —
+    /// 20 other sessions on the database then failed 7 of 8 tests on pool acquisition.
     async fn pool(&self) -> sqlx::PgPool {
-        torii_core::connect(&self.url, 8).await.expect("connect")
+        self.pool.clone()
     }
 }
 

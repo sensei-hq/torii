@@ -13,26 +13,33 @@ pub async fn connect(database_url: &str, max: u32) -> Result<PgPool, sqlx::Error
 
 /// Resolve an operator-supplied tenant — a UUID or a `core.tenants.slug` — to its id.
 ///
-/// A UUID must name an existing tenant — a typo'd id must not silently open an empty, unrelated
-/// scope that later writes would create rows under.
+/// Matched against BOTH columns, always: slugs are free text, so a slug can look exactly like
+/// another tenant's id (an org can be named after one). An input matching one tenant by id and
+/// a DIFFERENT tenant by slug is refused as ambiguous, naming both — never silently resolved to
+/// either. A typo'd id that matches nothing is refused too, rather than opening an empty scope.
 pub async fn resolve_tenant(pool: &PgPool, tenant: &str) -> anyhow::Result<Uuid> {
     let tenant = tenant.trim();
-    let row: Option<(Uuid,)> = match Uuid::parse_str(tenant) {
-        Ok(id) => {
-            sqlx::query_as("select id from core.tenants where id = $1")
-                .bind(id)
-                .fetch_optional(pool)
-                .await?
-        }
-        Err(_) => {
-            sqlx::query_as("select id from core.tenants where slug = $1")
-                .bind(tenant)
-                .fetch_optional(pool)
-                .await?
-        }
-    };
-    row.map(|(id,)| id)
-        .ok_or_else(|| anyhow::anyhow!("no tenant {tenant:?} (looked up as an id and as a slug)"))
+    let as_id = Uuid::parse_str(tenant).ok();
+    let rows: Vec<(Uuid,)> =
+        sqlx::query_as("select id from core.tenants where id = $1 or slug = $2 order by id")
+            .bind(as_id)
+            .bind(tenant)
+            .fetch_all(pool)
+            .await?;
+    match rows.as_slice() {
+        [(id,)] => Ok(*id),
+        [] => Err(anyhow::anyhow!(
+            "no tenant {tenant:?} (looked up as an id and as a slug)"
+        )),
+        many => Err(anyhow::anyhow!(
+            "tenant {tenant:?} is ambiguous: it is one tenant's id and another's slug ({}) — \
+             name the tenant by its id",
+            many.iter()
+                .map(|(id,)| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
 }
 
 /// Every orchestrator store of ONE tenant, over one pool.

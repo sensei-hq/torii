@@ -1,0 +1,25 @@
+[package]
+name = "torii-orchestrator-store"
+version = "0.1.0"
+edition = "2024"
+description = "Tenant-scoped Postgres stores for the gateway orchestrator (registry.* + runs.*) — torii owns persistence (DECISIONS §11)"
+
+[lib]
+name = "orchestrator_store"
+
+[dependencies]
+# The persistence traits + domain types. Dev resolves via the workspace [patch] to ../gateway;
+# `branch = "develop"` until a gateway release carries ConfigStore + the testkit (TM-2/TM-3),
+# then pin that tag like the other sensei-* deps. Cargo.lock pins the exact commit meanwhile.
+orchestrator-core = { package = "sensei-orchestrator-core", git = "https://github.com/sensei-hq/gateway", branch = "develop" }
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+serde = "1"
+serde_json = "1"
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+# The gateway's store conformance suite (TM-3) — the contract these stores must keep.
+orchestrator-testkit = { package = "sensei-orchestrator-testkit", git = "https://github.com/sensei-hq/gateway", branch = "develop" }
+tokio = { version = "1", features = ["full"] }

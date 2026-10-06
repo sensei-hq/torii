@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/desktop/src-tauri", "crates/tools", "services/gateway"]
+members = ["apps/desktop/src-tauri", "crates/orchestrator-store", "crates/tools", "services/gateway"]
 # "services/gateway" added in the Phase 2 plan
 resolver = "2"
 
@@ -13,6 +13,9 @@ sensei-gateway         = { path = "../gateway/crates/gateway" }
 sensei-local-engine    = { path = "../gateway/crates/local-engine" }
 sensei-local-providers = { path = "../gateway/crates/local-providers" }
 sensei-vault           = { path = "../gateway/crates/vault" }  # V5: shared BYOK vault
+# TM-7: the orchestrator's persistence traits + the store conformance suite (gateway TM-2/TM-3).
+sensei-orchestrator-core    = { path = "../gateway/crates/orchestrator-core" }
+sensei-orchestrator-testkit = { path = "../gateway/crates/orchestrator-testkit" }
 
 [profile.release]
 opt-level = 3

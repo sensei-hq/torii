@@ -22,8 +22,8 @@ jobs:
       - uses: actions/checkout@v4
 
       # Strip the dev-in-place [patch] (points sensei-* at the local sibling ../gateway,
-      # absent in CI) so the build resolves the pinned git tag v0.4.6 from the PUBLIC
-      # sensei-hq/gateway repo. Cloud/HTTP-only crate -> a plain Rust build.
+      # absent in CI) so the build resolves the ONE gateway git ref every sensei-* dependency
+      # pins, from the PUBLIC sensei-hq/gateway repo. Cloud/HTTP-only crate -> a plain Rust build.
       - name: Strip dev [patch]
         run: sed -i '/^\[patch\./,/^$/d' Cargo.toml
       - uses: dtolnay/rust-toolchain@stable

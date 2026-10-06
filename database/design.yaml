@@ -20,6 +20,8 @@ schemas:
   - audit
   - content
   - keyvault
+  - registry
+  - runs
   - extensions
   - history
   - public

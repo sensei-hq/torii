@@ -80,7 +80,7 @@ impl GatewayStore for PgGatewayStore {
         //
         // §D LN-3b: FK-normalize the routing identity at write. The `ep` LATERAL resolves the winning
         // catalog endpoint from (adapter=$5 → routers.name, api_model_id=$7 → model_endpoints.router_model_id)
-        // using the is_default desc / priority asc tiebreak — the SAME lateral config_loader uses to *derive*
+        // using the is_default desc / priority asc tiebreak — the SAME lateral torii_core::config uses to *derive*
         // api_model_id, so a recorded api_model_id resolves back to the identical endpoint by construction.
         // LEFT JOIN LATERAL over a 1-row source ⇒ a no-match still inserts the call with NULL endpoint/model/
         // router_id (fail-soft — a resolution miss NEVER blocks a call). adapter/model/chain_id free-text are
@@ -346,13 +346,18 @@ mod tests {
     async fn insert_resolves_catalog_fks_and_fails_soft_on_miss() {
         let pool = pool().await;
         let t = Uuid::new_v4();
-        sqlx::query("insert into core.tenants (id,name,slug,modified_by) values ($1,'ln3b',$2,'test')")
-            .bind(t)
-            .bind(format!("ln3b-{t}"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        let store = PgGatewayStore { pool: pool.clone(), tenant_id: t };
+        sqlx::query(
+            "insert into core.tenants (id,name,slug,modified_by) values ($1,'ln3b',$2,'test')",
+        )
+        .bind(t)
+        .bind(format!("ln3b-{t}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let store = PgGatewayStore {
+            pool: pool.clone(),
+            tenant_id: t,
+        };
 
         // The resolution target: the winning seeded anthropic endpoint (+ its model/router).
         let (exp_ep, exp_model, exp_router): (Uuid, Uuid, Uuid) = sqlx::query_as(
@@ -376,13 +381,20 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(ep, Some(exp_ep), "endpoint_id resolves to the winning seeded endpoint");
+        assert_eq!(
+            ep,
+            Some(exp_ep),
+            "endpoint_id resolves to the winning seeded endpoint"
+        );
         assert_eq!(m, Some(exp_model), "model_id resolves from that endpoint");
         assert_eq!(r, Some(exp_router), "router_id resolves from that endpoint");
 
         // (2) unresolvable api_model_id → FK ids NULL, but the call IS still stored.
         let miss = call("anthropic", "claude", Some("no-such-api-model-zzz"));
-        store.insert_inference_call(&miss).await.expect("insert miss must not block");
+        store
+            .insert_inference_call(&miss)
+            .await
+            .expect("insert miss must not block");
         let (present, ep2, m2, r2): (bool, Option<Uuid>, Option<Uuid>, Option<Uuid>) = sqlx::query_as(
             "select true, endpoint_id, model_id, router_id from metering.inference_calls where tenant_id=$1 and id=$2",
         )
@@ -392,11 +404,18 @@ mod tests {
         .await
         .unwrap();
         assert!(present, "the unresolved call is still recorded (fail-soft)");
-        assert_eq!((ep2, m2, r2), (None, None, None), "a resolution miss leaves the FK cols NULL");
+        assert_eq!(
+            (ep2, m2, r2),
+            (None, None, None),
+            "a resolution miss leaves the FK cols NULL"
+        );
 
         // (3) NULL api_model_id → also fail-soft NULL (the null-eq predicate matches nothing, no crash).
         let null_amid = call("anthropic", "claude", None);
-        store.insert_inference_call(&null_amid).await.expect("insert null api_model_id");
+        store
+            .insert_inference_call(&null_amid)
+            .await
+            .expect("insert null api_model_id");
         let (ep3,): (Option<Uuid>,) = sqlx::query_as(
             "select endpoint_id from metering.inference_calls where tenant_id=$1 and id=$2",
         )
@@ -405,12 +424,18 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(ep3, None, "NULL api_model_id resolves to NULL endpoint (fail-soft)");
+        assert_eq!(
+            ep3, None,
+            "NULL api_model_id resolves to NULL endpoint (fail-soft)"
+        );
 
         // §D LN-4: cost_estimated snapshots the gateway's pre-call estimate alongside actual cost_usd.
         let mut est = call("anthropic", "claude", Some("claude-3-5-sonnet-20241022"));
         est.cost_estimated = Some(0.042);
-        store.insert_inference_call(&est).await.expect("insert with estimate");
+        store
+            .insert_inference_call(&est)
+            .await
+            .expect("insert with estimate");
         let (ce,): (Option<f64>,) = sqlx::query_as(
             "select cost_estimated::float8 from metering.inference_calls where tenant_id=$1 and id=$2",
         )
@@ -419,8 +444,16 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(ce, Some(0.042), "cost_estimated persists the gateway pre-call estimate");
+        assert_eq!(
+            ce,
+            Some(0.042),
+            "cost_estimated persists the gateway pre-call estimate"
+        );
 
-        sqlx::query("delete from core.tenants where id=$1").bind(t).execute(&pool).await.unwrap();
+        sqlx::query("delete from core.tenants where id=$1")
+            .bind(t)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }

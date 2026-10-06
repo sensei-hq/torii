@@ -254,7 +254,9 @@ mod tests {
         let redactor = NoopRedactor;
         let audit = CountAudit::default();
         let invoker = ToolInvoker::new(&transport, &redactor, &audit);
-        let r = run_tool_loop(&cfg, &ctx(), allowed, &invoker, model).await.unwrap();
+        let r = run_tool_loop(&cfg, &ctx(), allowed, &invoker, model)
+            .await
+            .unwrap();
         let n = *audit.0.lock().unwrap();
         (r, n)
     }
@@ -297,7 +299,12 @@ mod tests {
     async fn only_allowed_tools_are_offered_to_the_model() {
         // an empty allow-list means zero tools offered (default-deny at the offer point).
         let model = ScriptedModel::new(vec![TurnOutput::Answer("no tools".into())]);
-        let (_r, _) = run(ToolLoopConfig::default(), &AllowedToolSet::default(), &model).await;
+        let (_r, _) = run(
+            ToolLoopConfig::default(),
+            &AllowedToolSet::default(),
+            &model,
+        )
+        .await;
         assert_eq!(*model.first_offer_len.lock().unwrap(), Some(0));
     }
 

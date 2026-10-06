@@ -28,7 +28,6 @@ mod apikeys; // H2: API-key generation + argon2 hash/verify (identity-bound)
 mod auth;
 mod budgets; // C3: budget-node resolution + hard reserve→commit on the inference hot path
 mod capabilities; // F2: server-side capability resolution + claims-version gate
-mod config_loader;
 mod devices; // O3-4: device-fleet pure logic (buffer-health verdict, config drift, sync-policy validation)
 mod governance; // C4: output redaction + injection scan + why-this-model governance
 mod judge; // C6: opt-in LLM-as-judge (local gemma4) → judge_score signal
@@ -166,7 +165,7 @@ async fn main() -> anyhow::Result<()> {
     // Load the real GatewayConfig from the Postgres config tables (Task 4).
     // Reads catalog.routers, catalog.models, and catalog.chains for the
     // platform tenant; logs router/model/chain counts on success.
-    let config = config_loader::load_gateway_config(&pool).await?;
+    let config = torii_core::load_gateway_config(&pool).await?;
 
     // Build the router_id → env_var_name map before Gateway::new moves config.
     let router_env = keys::router_env_map(&config);
@@ -285,9 +284,18 @@ async fn main() -> anyhow::Result<()> {
         .route("/settings", get(routes::ledger::get_settings))
         // O2 · analytics read model (P12): tenant-scoped dashboards over the one ledger.
         .route("/analytics/overview", get(routes::analytics::get_overview))
-        .route("/analytics/cost-trend", get(routes::analytics::get_cost_trend))
-        .route("/analytics/model-mix", get(routes::analytics::get_model_mix))
-        .route("/analytics/plane-split", get(routes::analytics::get_plane_split))
+        .route(
+            "/analytics/cost-trend",
+            get(routes::analytics::get_cost_trend),
+        )
+        .route(
+            "/analytics/model-mix",
+            get(routes::analytics::get_model_mix),
+        )
+        .route(
+            "/analytics/plane-split",
+            get(routes::analytics::get_plane_split),
+        )
         .route("/analytics/spend", get(routes::analytics::get_spend))
         .route("/analytics/quality", get(routes::analytics::get_quality))
         .route("/analytics/export", get(routes::analytics::get_export))
@@ -311,10 +319,7 @@ async fn main() -> anyhow::Result<()> {
             "/documents/{id}/reingest",
             post(routes::documents::reingest_document),
         )
-        .route(
-            "/documents/{id}/assets",
-            get(routes::documents::get_assets),
-        )
+        .route("/documents/{id}/assets", get(routes::documents::get_assets))
         .route(
             "/spaces/{space_id}/retrieve",
             post(routes::retrieve::retrieve),

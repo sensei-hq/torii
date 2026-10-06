@@ -29,7 +29,9 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::{
-    analytics::{scope_decision, Bucket, ExportReport, ScopeDecision, ScopeFilter, SpendGroup, Window},
+    analytics::{
+        scope_decision, Bucket, ExportReport, ScopeDecision, ScopeFilter, SpendGroup, Window,
+    },
     auth::Claims,
     capabilities::{check_claims_version, CapabilitySet},
     state::SharedState,
@@ -52,7 +54,11 @@ enum ScopeErr {
 /// All node ids in the subtree rooted at `root` (root + descendants) — a bounded
 /// budget-tree walk used only for authz scoping, NOT on the spend aggregation path (the
 /// P12 no-recursive-CTE gate is about the spend GROUP BY, which stays recursion-free).
-async fn subtree_ids(pool: &sqlx::PgPool, tenant: Uuid, root: Uuid) -> Result<Vec<Uuid>, sqlx::Error> {
+async fn subtree_ids(
+    pool: &sqlx::PgPool,
+    tenant: Uuid,
+    root: Uuid,
+) -> Result<Vec<Uuid>, sqlx::Error> {
     // §D Phase 5: the subtree is over the org tree (core.org_units.parent_id). The ids are org_unit
     // ids == the ledger's org_unit_id values (DC-1), so the `org_unit_id = any(subtree)` filter
     // on analytics rows still matches.
@@ -99,9 +105,11 @@ async fn scope_filter_for(
 
     match scope_decision(has_wide, requested, own_leaf, in_own) {
         ScopeDecision::Unrestricted => Ok(ScopeFilter::All),
-        ScopeDecision::Scope(root) => {
-            Ok(ScopeFilter::Nodes(subtree_ids(pool, tenant, root).await.map_err(ScopeErr::Db)?))
-        }
+        ScopeDecision::Scope(root) => Ok(ScopeFilter::Nodes(
+            subtree_ids(pool, tenant, root)
+                .await
+                .map_err(ScopeErr::Db)?,
+        )),
         ScopeDecision::Denied => Err(ScopeErr::Denied),
     }
 }
@@ -122,13 +130,23 @@ async fn resolve_scope(
     check_claims_version(&state.pool, claims)
         .await
         .map_err(|_| (StatusCode::UNAUTHORIZED, "stale token — re-authenticate").into_response())?;
-    let caps = CapabilitySet::resolve(&state.pool, claims).await.map_err(|e| {
-        tracing::error!("analytics caps: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR.into_response()
-    })?;
+    let caps = CapabilitySet::resolve(&state.pool, claims)
+        .await
+        .map_err(|e| {
+            tracing::error!("analytics caps: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        })?;
     let subject = Uuid::parse_str(&claims.sub)
         .map_err(|_| (StatusCode::UNAUTHORIZED, "bad subject").into_response())?;
-    match scope_filter_for(&state.pool, tenant, subject, caps.has("audit.read"), requested).await {
+    match scope_filter_for(
+        &state.pool,
+        tenant,
+        subject,
+        caps.has("audit.read"),
+        requested,
+    )
+    .await
+    {
         Ok(filter) => Ok((tenant, filter)),
         Err(ScopeErr::Denied) => Err(capability_required("audit.read")),
         Err(ScopeErr::Db(e)) => Err(read_err("scope", e)),
@@ -391,7 +409,9 @@ fn spend_sql(group: SpendGroup) -> String {
     // tier level via core.org_unit_ancestor_at_level (a per-call tree walk); attribute dims group by a
     // scalar ledger column. `grp` is a uuid (node) or text (attribute) — one shape per generated query.
     let grp = match group.level() {
-        Some(lvl) => format!("core.org_unit_ancestor_at_level(ic.tenant_id, ic.org_unit_id, {lvl})"),
+        Some(lvl) => {
+            format!("core.org_unit_ancestor_at_level(ic.tenant_id, ic.org_unit_id, {lvl})")
+        }
         None => format!("ic.{}", group.attr_column()),
     };
     let per_call = format!(
@@ -401,7 +421,9 @@ fn spend_sql(group: SpendGroup) -> String {
             where ic.tenant_id = $1 \
               and ic.recorded_at >= now() - make_interval(days => $2) \
               and ($3::uuid[] is null or ic.org_unit_id = any($3)))",
-        grp = grp, sav = SAVINGS_EXPR, lat = CE_LATERAL
+        grp = grp,
+        sav = SAVINGS_EXPR,
+        lat = CE_LATERAL
     );
     if group.is_node() {
         format!(
@@ -561,12 +583,7 @@ pub async fn get_export(
     match q.format.as_deref().unwrap_or("json") {
         "csv" => {
             let csv = to_csv(&rows);
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "text/csv")],
-                csv,
-            )
-                .into_response()
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/csv")], csv).into_response()
         }
         _ => (StatusCode::OK, Json(json!({ "rows": rows }))).into_response(),
     }
@@ -627,7 +644,10 @@ pub async fn get_metrics(Query(q): Query<MetricsQ>) -> Response {
             let found = doc
                 .get("metrics")
                 .and_then(Value::as_array)
-                .and_then(|a| a.iter().find(|m| m.get("key").and_then(Value::as_str) == Some(&k)))
+                .and_then(|a| {
+                    a.iter()
+                        .find(|m| m.get("key").and_then(Value::as_str) == Some(&k))
+                })
                 .cloned();
             match found {
                 Some(m) => (StatusCode::OK, Json(m)).into_response(),
@@ -652,9 +672,16 @@ mod descriptor {
     #[test]
     fn descriptor_is_well_formed_and_units_are_valid() {
         let doc: Value = serde_json::from_str(METRICS_DESCRIPTOR).expect("valid JSON");
-        assert!(doc["schema_version"].as_i64().is_some(), "schema_version present");
-        let units: HashSet<&str> = ["usd", "ms", "percent", "ratio", "count"].into_iter().collect();
-        let sources: HashSet<&str> = ["ledger", "quality-signal", "derived"].into_iter().collect();
+        assert!(
+            doc["schema_version"].as_i64().is_some(),
+            "schema_version present"
+        );
+        let units: HashSet<&str> = ["usd", "ms", "percent", "ratio", "count"]
+            .into_iter()
+            .collect();
+        let sources: HashSet<&str> = ["ledger", "quality-signal", "derived"]
+            .into_iter()
+            .collect();
         let metrics = doc["metrics"].as_array().expect("metrics array");
         assert!(!metrics.is_empty(), "at least one metric");
         let mut seen = HashSet::new();
@@ -667,8 +694,17 @@ mod descriptor {
             assert!(sources.contains(source), "{key}: bad source {source:?}");
         }
         // The load-bearing keys the endpoints emit must be published.
-        for required in ["cost_usd", "savings_usd", "cloud_equiv_usd", "share_pct", "calls"] {
-            assert!(seen.contains(required), "descriptor missing required key: {required}");
+        for required in [
+            "cost_usd",
+            "savings_usd",
+            "cloud_equiv_usd",
+            "share_pct",
+            "calls",
+        ] {
+            assert!(
+                seen.contains(required),
+                "descriptor missing required key: {required}"
+            );
         }
     }
 }
@@ -703,8 +739,16 @@ mod gate {
     /// Recursively scan a JSON doc for any object key that names prompt/response content or
     /// a credential — the no-secret-surface invariant (A8). Returns the first offending key.
     fn find_secret_key(v: &Value) -> Option<String> {
-        const FORBIDDEN: [&str; 8] =
-            ["content", "prompt", "response", "secret", "message", "body", "api_key", "token_text"];
+        const FORBIDDEN: [&str; 8] = [
+            "content",
+            "prompt",
+            "response",
+            "secret",
+            "message",
+            "body",
+            "api_key",
+            "token_text",
+        ];
         match v {
             Value::Object(m) => {
                 for (k, val) in m {
@@ -732,9 +776,13 @@ mod gate {
         let model = Uuid::new_v4();
         let chain = Uuid::new_v4();
         let cap_id: Uuid = sqlx::query_scalar("select id from catalog.capability_types limit 1")
-            .fetch_one(&pool).await.expect("a seeded capability");
+            .fetch_one(&pool)
+            .await
+            .expect("a seeded capability");
         let router_id: Uuid = sqlx::query_scalar("select id from catalog.routers limit 1")
-            .fetch_one(&pool).await.expect("a seeded router");
+            .fetch_one(&pool)
+            .await
+            .expect("a seeded router");
 
         sqlx::query("insert into core.tenants (id, name, slug, modified_by) values ($1,'gate','gate-'||$1,'test')")
             .bind(t).execute(&pool).await.unwrap();
@@ -750,13 +798,23 @@ mod gate {
             .bind(t).bind(team).execute(&pool).await.unwrap();
         // priced cloud chain owned by the tenant → the local call's counterfactual
         sqlx::query("insert into catalog.models (id,name,version) values ($1,'gate-cloud','1')")
-            .bind(model).execute(&pool).await.unwrap();
+            .bind(model)
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("insert into catalog.model_endpoints (id,model_id,router_id,capability_id,endpoint_url,cost_per_input_token,cost_per_output_token,is_active) \
                      values (gen_random_uuid(),$1,$2,$3,'http://t',0.00001,0.00003,true)")
             .bind(model).bind(router_id).bind(cap_id).execute(&pool).await.unwrap();
-        sqlx::query("insert into catalog.chains (id,tenant_id,name,capability_id,is_active,modified_by) \
-                     values ($1,$2,'gate-chain',$3,true,'test')")
-            .bind(chain).bind(t).bind(cap_id).execute(&pool).await.unwrap();
+        sqlx::query(
+            "insert into catalog.chains (id,tenant_id,name,capability_id,is_active,modified_by) \
+                     values ($1,$2,'gate-chain',$3,true,'test')",
+        )
+        .bind(chain)
+        .bind(t)
+        .bind(cap_id)
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("insert into catalog.chain_models (id,tenant_id,fallback_chain_id,router_id,model_id,sequence_order,plane,is_active,modified_by) \
                      values (gen_random_uuid(),$1,$2,$3,$4,1,'cloud',true,'test')")
             .bind(t).bind(chain).bind(router_id).bind(model).execute(&pool).await.unwrap();
@@ -777,38 +835,83 @@ mod gate {
 
         // ── gate half 1: spend by team, rolled up the org tree via the ancestor walk ──
         let spend: Value = sqlx::query_scalar(&spend_sql(SpendGroup::Team))
-            .bind(t).bind(3650_i32).bind(None::<Vec<Uuid>>)
-            .fetch_one(&pool).await.expect("spend query runs");
+            .bind(t)
+            .bind(3650_i32)
+            .bind(None::<Vec<Uuid>>)
+            .fetch_one(&pool)
+            .await
+            .expect("spend query runs");
         let rows = spend["rows"].as_array().expect("rows array");
-        let row = rows.iter().find(|r| r["node_id"] == team.to_string())
+        let row = rows
+            .iter()
+            .find(|r| r["node_id"] == team.to_string())
             .expect("a row for the team");
         assert_eq!(row["node_name"], "Gate Team");
-        assert_eq!(row["calls"].as_i64(), Some(3), "3 calls attributed directly to the team");
-        assert!(approx(&row["cost_usd"], 0.02), "cost = 2 cloud calls @0.01 = {}", row["cost_usd"]);
-        assert!(approx(&row["savings_usd"], 0.00896), "savings from the local call = {}", row["savings_usd"]);
+        assert_eq!(
+            row["calls"].as_i64(),
+            Some(3),
+            "3 calls attributed directly to the team"
+        );
+        assert!(
+            approx(&row["cost_usd"], 0.02),
+            "cost = 2 cloud calls @0.01 = {}",
+            row["cost_usd"]
+        );
+        assert!(
+            approx(&row["savings_usd"], 0.00896),
+            "savings from the local call = {}",
+            row["savings_usd"]
+        );
 
         // A7 scope filter (the `org_unit_id = any($3)` predicate): binding the team's
         // subtree keeps its row; binding a foreign node id yields no rows.
         let in_scope: Value = sqlx::query_scalar(&spend_sql(SpendGroup::Team))
-            .bind(t).bind(3650_i32).bind(Some(vec![team]))
-            .fetch_one(&pool).await.expect("scoped spend runs");
-        assert!(in_scope["rows"].as_array().unwrap().iter().any(|r| r["node_id"] == team.to_string()),
-                "in-scope node array keeps the team row");
+            .bind(t)
+            .bind(3650_i32)
+            .bind(Some(vec![team]))
+            .fetch_one(&pool)
+            .await
+            .expect("scoped spend runs");
+        assert!(
+            in_scope["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["node_id"] == team.to_string()),
+            "in-scope node array keeps the team row"
+        );
         let out_scope: Value = sqlx::query_scalar(&spend_sql(SpendGroup::Team))
-            .bind(t).bind(3650_i32).bind(Some(vec![Uuid::new_v4()]))
-            .fetch_one(&pool).await.expect("out-of-scope spend runs");
-        assert!(out_scope["rows"].as_array().unwrap().is_empty(),
-                "out-of-scope node array yields no rows");
+            .bind(t)
+            .bind(3650_i32)
+            .bind(Some(vec![Uuid::new_v4()]))
+            .fetch_one(&pool)
+            .await
+            .expect("out-of-scope spend runs");
+        assert!(
+            out_scope["rows"].as_array().unwrap().is_empty(),
+            "out-of-scope node array yields no rows"
+        );
 
         // ── gate half 2: plane-split $0-local-vs-cloud savings from execution_location ──
         let ps: Value = sqlx::query_scalar(&plane_split_sql())
-            .bind(t).bind(3650_i32).bind(None::<Vec<Uuid>>)
-            .fetch_one(&pool).await.expect("plane-split query runs");
+            .bind(t)
+            .bind(3650_i32)
+            .bind(None::<Vec<Uuid>>)
+            .fetch_one(&pool)
+            .await
+            .expect("plane-split query runs");
         assert_eq!(ps["local"]["calls"].as_i64(), Some(1));
         assert!(approx(&ps["local"]["cost_usd"], 0.0), "local cost is $0");
-        assert!(ps["local"]["cloud_equiv_usd"].as_f64().unwrap() > 0.0, "local has a cloud counterfactual");
+        assert!(
+            ps["local"]["cloud_equiv_usd"].as_f64().unwrap() > 0.0,
+            "local has a cloud counterfactual"
+        );
         assert_eq!(ps["cloud"]["calls"].as_i64(), Some(2));
-        assert!(approx(&ps["savings_usd"], 0.00896), "savings = Σ cloud_equiv(local) = {}", ps["savings_usd"]);
+        assert!(
+            approx(&ps["savings_usd"], 0.00896),
+            "savings = Σ cloud_equiv(local) = {}",
+            ps["savings_usd"]
+        );
         assert_eq!(ps["baseline"], "cheapest_cloud_in_chain");
 
         // §D LN-3c-2b (P12 reversal): spend-by-tier ROLLS UP the org tree via
@@ -827,21 +930,47 @@ mod gate {
             .bind(t).bind(Uuid::new_v4()).bind(personal).execute(&pool).await.unwrap();
 
         let rolled: Value = sqlx::query_scalar(&spend_sql(SpendGroup::Team))
-            .bind(t).bind(3650_i32).bind(None::<Vec<Uuid>>)
-            .fetch_one(&pool).await.expect("rolled-up spend runs");
-        let team_row = rolled["rows"].as_array().unwrap().iter().find(|r| r["node_id"] == team.to_string())
+            .bind(t)
+            .bind(3650_i32)
+            .bind(None::<Vec<Uuid>>)
+            .fetch_one(&pool)
+            .await
+            .expect("rolled-up spend runs");
+        let team_row = rolled["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["node_id"] == team.to_string())
             .expect("team row after rollup");
-        assert_eq!(team_row["calls"].as_i64(), Some(4), "team spend rolls up the personal-unit call (3 direct + 1 descendant)");
-        assert!(approx(&team_row["cost_usd"], 0.05), "team cost absorbs the $0.03 personal call = {}", team_row["cost_usd"]);
+        assert_eq!(
+            team_row["calls"].as_i64(),
+            Some(4),
+            "team spend rolls up the personal-unit call (3 direct + 1 descendant)"
+        );
+        assert!(
+            approx(&team_row["cost_usd"], 0.05),
+            "team cost absorbs the $0.03 personal call = {}",
+            team_row["cost_usd"]
+        );
 
         let by_user: Value = sqlx::query_scalar(&spend_sql(SpendGroup::User))
-            .bind(t).bind(3650_i32).bind(None::<Vec<Uuid>>)
-            .fetch_one(&pool).await.expect("spend-by-user runs");
+            .bind(t)
+            .bind(3650_i32)
+            .bind(None::<Vec<Uuid>>)
+            .fetch_one(&pool)
+            .await
+            .expect("spend-by-user runs");
         let user_rows = by_user["rows"].as_array().unwrap();
-        assert!(user_rows.iter().any(|r| r["node_id"] == personal.to_string()),
-                "the personal (level-3) call groups under the personal unit");
-        assert!(!user_rows.iter().any(|r| r["node_id"] == team.to_string()),
-                "the level-2 team is not a user-tier node (no level-3 ancestor → dropped)");
+        assert!(
+            user_rows
+                .iter()
+                .any(|r| r["node_id"] == personal.to_string()),
+            "the personal (level-3) call groups under the personal unit"
+        );
+        assert!(
+            !user_rows.iter().any(|r| r["node_id"] == team.to_string()),
+            "the level-2 team is not a user-tier node (no level-3 ancestor → dropped)"
+        );
 
         // A8 no-secret-surface: the ledger-reading endpoints return only metadata — no key
         // anywhere in the response may name prompt/response content or a credential.
@@ -856,10 +985,24 @@ mod gate {
             "delete from metering.inference_calls where tenant_id=$1",
             "delete from catalog.chain_models where tenant_id=$1",
             "delete from catalog.chains where tenant_id=$1",
-        ] { sqlx::query(q).bind(t).execute(&pool).await.unwrap(); }
-        sqlx::query("delete from catalog.model_endpoints where model_id=$1").bind(model).execute(&pool).await.unwrap();
-        sqlx::query("delete from catalog.models where id=$1").bind(model).execute(&pool).await.unwrap();
-        sqlx::query("delete from core.tenants where id=$1").bind(t).execute(&pool).await.unwrap();
+        ] {
+            sqlx::query(q).bind(t).execute(&pool).await.unwrap();
+        }
+        sqlx::query("delete from catalog.model_endpoints where model_id=$1")
+            .bind(model)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("delete from catalog.models where id=$1")
+            .bind(model)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("delete from core.tenants where id=$1")
+            .bind(t)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }
 
@@ -878,7 +1021,11 @@ mod scope_authz {
     async fn pool() -> sqlx::PgPool {
         let url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| "postgresql://postgres:postgres@127.0.0.1:55322/postgres".into());
-        PgPoolOptions::new().max_connections(2).connect(&url).await.expect("connect 55322")
+        PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .expect("connect 55322")
     }
 
     fn sorted(f: &ScopeFilter) -> Option<Vec<Uuid>> {
@@ -901,8 +1048,13 @@ mod scope_authz {
         let subject = Uuid::new_v4(); // the member's identity (user node ref_id)
         let outsider = Uuid::new_v4(); // an identity with no node
 
-        sqlx::query("insert into core.tenants (id,name,slug,modified_by) values ($1,'sc','sc-'||$1,'test')")
-            .bind(t).execute(&pool).await.unwrap();
+        sqlx::query(
+            "insert into core.tenants (id,name,slug,modified_by) values ($1,'sc','sc-'||$1,'test')",
+        )
+        .bind(t)
+        .execute(&pool)
+        .await
+        .unwrap();
         // §D Phase 5: the org tree is core.org_units; the member's identity maps to their PERSONAL
         // (level-3) unit via core.unit_members (replaces budget_nodes.ref_id). unit_levels seeded for
         // the level FK; a profiles row for the unit_members.profile_id FK.
@@ -920,41 +1072,85 @@ mod scope_authz {
                 .execute(&pool).await.unwrap();
         }
         sqlx::query("insert into core.profiles (id) values ($1) on conflict do nothing")
-            .bind(subject).execute(&pool).await.unwrap();
-        sqlx::query("insert into core.unit_members (tenant_id, unit_id, profile_id) values ($1,$2,$3)")
-            .bind(t).bind(user).bind(subject).execute(&pool).await.unwrap();
+            .bind(subject)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "insert into core.unit_members (tenant_id, unit_id, profile_id) values ($1,$2,$3)",
+        )
+        .bind(t)
+        .bind(user)
+        .bind(subject)
+        .execute(&pool)
+        .await
+        .unwrap();
 
         // subtree_ids: org → all three; team → {team,user}; user → {user}.
-        let mut all3 = vec![org, team, user]; all3.sort();
-        let mut tu = vec![team, user]; tu.sort();
-        let mut got = subtree_ids(&pool, t, org).await.unwrap(); got.sort();
+        let mut all3 = vec![org, team, user];
+        all3.sort();
+        let mut tu = vec![team, user];
+        tu.sort();
+        let mut got = subtree_ids(&pool, t, org).await.unwrap();
+        got.sort();
         assert_eq!(got, all3, "org subtree = org+team+user");
-        let mut got = subtree_ids(&pool, t, team).await.unwrap(); got.sort();
+        let mut got = subtree_ids(&pool, t, team).await.unwrap();
+        got.sort();
         assert_eq!(got, tu, "team subtree = team+user");
-        assert_eq!(subtree_ids(&pool, t, user).await.unwrap(), vec![user], "user subtree = self");
+        assert_eq!(
+            subtree_ids(&pool, t, user).await.unwrap(),
+            vec![user],
+            "user subtree = self"
+        );
 
         // member (no audit.read), no scope → confined to own subtree = {user}.
-        let f = scope_filter_for(&pool, t, subject, false, None).await.unwrap();
-        assert_eq!(sorted(&f), Some(vec![user]), "member confined to own leaf subtree");
+        let f = scope_filter_for(&pool, t, subject, false, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            sorted(&f),
+            Some(vec![user]),
+            "member confined to own leaf subtree"
+        );
 
         // member requesting a WIDER node (their team) without audit.read → denied.
         let d = scope_filter_for(&pool, t, subject, false, Some(team)).await;
-        assert!(matches!(d, Err(ScopeErr::Denied)), "wider scope without audit.read is denied");
+        assert!(
+            matches!(d, Err(ScopeErr::Denied)),
+            "wider scope without audit.read is denied"
+        );
 
         // member requesting their OWN node → allowed.
-        let f = scope_filter_for(&pool, t, subject, false, Some(user)).await.unwrap();
+        let f = scope_filter_for(&pool, t, subject, false, Some(user))
+            .await
+            .unwrap();
         assert_eq!(sorted(&f), Some(vec![user]), "own node is allowed");
 
         // audit.read holder: unrestricted when unscoped; any subtree when scoped.
-        let f = scope_filter_for(&pool, t, subject, true, None).await.unwrap();
+        let f = scope_filter_for(&pool, t, subject, true, None)
+            .await
+            .unwrap();
         assert_eq!(f, ScopeFilter::All, "audit.read → tenant-wide");
-        let f = scope_filter_for(&pool, t, subject, true, Some(team)).await.unwrap();
-        assert_eq!(sorted(&f), Some(tu.clone()), "audit.read may scope to any subtree");
+        let f = scope_filter_for(&pool, t, subject, true, Some(team))
+            .await
+            .unwrap();
+        assert_eq!(
+            sorted(&f),
+            Some(tu.clone()),
+            "audit.read may scope to any subtree"
+        );
 
         // an identity with NO node and no audit.read → denied (no org-root fallback → no leak).
         let d = scope_filter_for(&pool, t, outsider, false, None).await;
-        assert!(matches!(d, Err(ScopeErr::Denied)), "no personal node + no audit.read → denied");
+        assert!(
+            matches!(d, Err(ScopeErr::Denied)),
+            "no personal node + no audit.read → denied"
+        );
 
-        sqlx::query("delete from core.tenants where id=$1").bind(t).execute(&pool).await.unwrap();
+        sqlx::query("delete from core.tenants where id=$1")
+            .bind(t)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }

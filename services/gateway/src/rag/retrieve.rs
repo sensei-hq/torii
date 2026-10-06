@@ -90,24 +90,31 @@ pub struct NoopReranker;
 
 #[async_trait]
 impl RerankProvider for NoopReranker {
-    async fn rerank(&self, _q: &str, _c: &[ScoredChunk], _k: usize) -> Result<Vec<ScoredChunk>, RagError> {
-        Err(RagError::Unsupported("cross-encoder rerank is deferred (GH-8)"))
+    async fn rerank(
+        &self,
+        _q: &str,
+        _c: &[ScoredChunk],
+        _k: usize,
+    ) -> Result<Vec<ScoredChunk>, RagError> {
+        Err(RagError::Unsupported(
+            "cross-encoder rerank is deferred (GH-8)",
+        ))
     }
 }
 
 /// One `hybrid_search` result row (dense/bm25 columns are nullable — a chunk may hit only one leg).
 type HybridRow = (
-    Uuid,          // chunk_id
-    Uuid,          // document_id
-    String,        // content
+    Uuid,           // chunk_id
+    Uuid,           // document_id
+    String,         // content
     Option<String>, // section_path
-    Option<i32>,   // page_ref
-    String,        // element_type
-    Option<f64>,   // dense_sim
-    Option<i32>,   // dense_rank
-    Option<f64>,   // bm25_score
-    Option<i32>,   // bm25_rank
-    f64,           // rrf_score
+    Option<i32>,    // page_ref
+    String,         // element_type
+    Option<f64>,    // dense_sim
+    Option<i32>,    // dense_rank
+    Option<f64>,    // bm25_score
+    Option<i32>,    // bm25_rank
+    f64,            // rrf_score
 );
 
 pub struct HybridRetriever {
@@ -174,16 +181,41 @@ impl RetrievalEngine for HybridRetriever {
                 text: r.2,
                 section_path: r.3,
                 page_ref: r.4,
-                scores: Scores { dense: r.6, bm25: r.8, fused: r.10, rerank: None },
+                scores: Scores {
+                    dense: r.6,
+                    bm25: r.8,
+                    fused: r.10,
+                    rerank: None,
+                },
                 dropped: false, // nothing dropped in v1 (rerank deferred)
             })
             .collect();
 
         let stages = vec![
-            StageStat { name: "embed".into(), k_in: 1, k_out: 1, ms: embed_ms },
-            StageStat { name: "dense".into(), k_in: cfg.k_dense, k_out: dense_hits, ms: sql_ms },
-            StageStat { name: "bm25".into(), k_in: cfg.k_bm25, k_out: bm25_hits, ms: sql_ms },
-            StageStat { name: "fuse".into(), k_in: dense_hits + bm25_hits, k_out: chunks.len() as i32, ms: sql_ms },
+            StageStat {
+                name: "embed".into(),
+                k_in: 1,
+                k_out: 1,
+                ms: embed_ms,
+            },
+            StageStat {
+                name: "dense".into(),
+                k_in: cfg.k_dense,
+                k_out: dense_hits,
+                ms: sql_ms,
+            },
+            StageStat {
+                name: "bm25".into(),
+                k_in: cfg.k_bm25,
+                k_out: bm25_hits,
+                ms: sql_ms,
+            },
+            StageStat {
+                name: "fuse".into(),
+                k_in: dense_hits + bm25_hits,
+                k_out: chunks.len() as i32,
+                ms: sql_ms,
+            },
         ];
 
         // Best-effort quality signal (never fails the request).
@@ -226,7 +258,11 @@ mod integration {
     async fn pool() -> PgPool {
         let url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| "postgresql://postgres:postgres@127.0.0.1:55322/postgres".into());
-        PgPoolOptions::new().max_connections(2).connect(&url).await.expect("connect 55322")
+        PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .expect("connect 55322")
     }
 
     fn chunk(seq: i32, text: &str) -> Chunk {
@@ -267,11 +303,23 @@ mod integration {
             .commit_chunks(tenant, doc, vid, &[chunk(0, texts[0])], &embs, &[0])
             .await
             .unwrap();
-        store.finalize(tenant, doc, vid, 1, "stub-1024").await.unwrap();
+        store
+            .finalize(tenant, doc, vid, 1, "stub-1024")
+            .await
+            .unwrap();
 
         let retriever = HybridRetriever::new(pool.clone(), Arc::new(StubEmbedder));
-        let q = RetrieveQuery { text: "quick brown fox".into(), profile_id: owner, top_k: None, doc_ids: None, inspect: true };
-        let res = retriever.retrieve(tenant, None, &q, &RetrievalConfig::default()).await.unwrap();
+        let q = RetrieveQuery {
+            text: "quick brown fox".into(),
+            profile_id: owner,
+            top_k: None,
+            doc_ids: None,
+            inspect: true,
+        };
+        let res = retriever
+            .retrieve(tenant, None, &q, &RetrievalConfig::default())
+            .await
+            .unwrap();
 
         assert!(!res.chunks.is_empty(), "hybrid retrieve returned no chunks");
         let c = &res.chunks[0];
@@ -294,22 +342,63 @@ mod integration {
         let (v1, _, _) = store.current_version(tenant, doc).await.unwrap();
 
         let old = ["obsolete widget migration guide alpha"];
-        store.commit_chunks(tenant, doc, v1, &[chunk(0, old[0])], &embed(&old).await, &[0]).await.unwrap();
-        store.finalize(tenant, doc, v1, 1, "stub-1024").await.unwrap();
+        store
+            .commit_chunks(
+                tenant,
+                doc,
+                v1,
+                &[chunk(0, old[0])],
+                &embed(&old).await,
+                &[0],
+            )
+            .await
+            .unwrap();
+        store
+            .finalize(tenant, doc, v1, 1, "stub-1024")
+            .await
+            .unwrap();
 
         // second version (new version_id) supersedes the first on commit
         let v2 = Uuid::new_v4();
         sqlx::query("insert into document_versions (tenant_id, id, document_id, version_no, storage_path, content_type, created_by) values ($1,$2,$3,2,'p','text/markdown','t')")
             .bind(tenant).bind(v2).bind(doc).execute(&pool).await.unwrap();
         let new = ["fresh widget migration guide beta"];
-        store.commit_chunks(tenant, doc, v2, &[chunk(0, new[0])], &embed(&new).await, &[0]).await.unwrap();
-        store.finalize(tenant, doc, v2, 1, "stub-1024").await.unwrap();
+        store
+            .commit_chunks(
+                tenant,
+                doc,
+                v2,
+                &[chunk(0, new[0])],
+                &embed(&new).await,
+                &[0],
+            )
+            .await
+            .unwrap();
+        store
+            .finalize(tenant, doc, v2, 1, "stub-1024")
+            .await
+            .unwrap();
 
         let retriever = HybridRetriever::new(pool.clone(), Arc::new(StubEmbedder));
-        let q = RetrieveQuery { text: "widget migration guide".into(), profile_id: owner, top_k: None, doc_ids: None, inspect: false };
-        let res = retriever.retrieve(tenant, None, &q, &RetrievalConfig::default()).await.unwrap();
-        assert!(res.chunks.iter().all(|c| c.text.contains("beta")), "retrieval returned a superseded (alpha) chunk");
-        assert!(res.chunks.iter().any(|c| c.text.contains("beta")), "new version chunk missing");
+        let q = RetrieveQuery {
+            text: "widget migration guide".into(),
+            profile_id: owner,
+            top_k: None,
+            doc_ids: None,
+            inspect: false,
+        };
+        let res = retriever
+            .retrieve(tenant, None, &q, &RetrievalConfig::default())
+            .await
+            .unwrap();
+        assert!(
+            res.chunks.iter().all(|c| c.text.contains("beta")),
+            "retrieval returned a superseded (alpha) chunk"
+        );
+        assert!(
+            res.chunks.iter().any(|c| c.text.contains("beta")),
+            "new version chunk missing"
+        );
 
         store.delete_document(tenant, doc).await.unwrap();
     }
@@ -328,6 +417,10 @@ mod integration {
         }
     }
     async fn register(store: &DocStore, tenant: Uuid, owner: Uuid) -> Uuid {
-        store.register_document(tenant, &tenant_meta(tenant, owner)).await.unwrap().0
+        store
+            .register_document(tenant, &tenant_meta(tenant, owner))
+            .await
+            .unwrap()
+            .0
     }
 }

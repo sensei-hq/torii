@@ -26,10 +26,12 @@ pub mod invoker;
 pub mod resolver;
 pub mod types;
 
-pub use agentic::{run_tool_loop, LoopResult, ModelTurn, ToolLoopConfig, ToolResultMessage, TurnOutput};
-pub use client::{DiscoveredTool, McpClient, RawToolOutput};
+pub use agentic::{
+    run_tool_loop, LoopResult, ModelTurn, ToolLoopConfig, ToolResultMessage, TurnOutput,
+};
 #[cfg(feature = "net")]
 pub use client::HttpClient;
+pub use client::{DiscoveredTool, McpClient, RawToolOutput};
 #[cfg(feature = "db")]
 pub use discovery::discover_and_cache;
 pub use egress::{is_blocked_ip, EgressFilter, EgressPolicy, PinnedTarget, Resolver, StdResolver};

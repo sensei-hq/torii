@@ -260,3 +260,35 @@ async fn a_run_submitted_on_postgres_pauses_is_signalled_and_a_worker_completes_
         "another tenant must not find the run"
     );
 }
+
+/// On Postgres the gateway config IS torii's catalog: `config push --gateway-config <file>` is
+/// refused outright — even when the file defines the chain the registry needs — so a push can
+/// never be checked against a source the API never sees, and nothing is written.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn config_push_refuses_a_gateway_config_file_on_postgres_and_writes_nothing() {
+    let Some(url) = db_url() else { return };
+    let t = Tenant::new(&url).await;
+    let dir = tempfile::tempdir().unwrap();
+    let gw = dir.path().join("gw.json");
+    std::fs::write(
+        &gw,
+        r#"{"routers":{"ollama":{"url":"http://127.0.0.1:11434"}},
+            "chains":{"file-only-chain":{"id":"file-only-chain","capability":"text_chat","models":[],"fallback_triggers":[]}}}"#,
+    )
+    .unwrap();
+    let out = t
+        .torii()
+        .args(["config", "push", "--yes", "--gateway-config"])
+        .arg(&gw)
+        .arg(registry(dir.path(), "file-only-chain"))
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success(), "a file must be refused on postgres");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--gateway-config is not accepted"), "{err}");
+    assert_eq!(t.generation().await, Some(0), "nothing was pushed");
+}

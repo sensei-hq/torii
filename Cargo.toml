@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/desktop/src-tauri", "crates/core", "crates/orchestrator-store", "crates/tools", "services/gateway"]
+members = ["apps/desktop/src-tauri", "crates/cli", "crates/core", "crates/orchestrator-store", "crates/tools", "services/gateway"]
 # "services/gateway" added in the Phase 2 plan
 resolver = "2"
 
@@ -16,6 +16,11 @@ sensei-vault           = { path = "../gateway/crates/vault" }  # V5: shared BYOK
 # TM-7: the orchestrator's persistence traits + the store conformance suite (gateway TM-2/TM-3).
 sensei-orchestrator-core    = { path = "../gateway/crates/orchestrator-core" }
 sensei-orchestrator-testkit = { path = "../gateway/crates/orchestrator-testkit" }
+# TM-8c: the operator CLI (crates/cli) uses the executor and the kernel types directly; they must
+# resolve to the SAME sibling checkout as sensei-gateway, or two copies of the kernel types meet.
+sensei-orchestrator       = { path = "../gateway/crates/orchestrator" }
+sensei-orchestrator-store = { path = "../gateway/crates/orchestrator-store" }
+sensei-kernel             = { path = "../gateway/crates/kernel" }
 
 [profile.release]
 opt-level = 3

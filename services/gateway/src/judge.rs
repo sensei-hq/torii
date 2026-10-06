@@ -88,6 +88,7 @@ pub async fn execute_judge(state: &SharedState, question: &str, answer: &str) ->
     // needs enough output budget to finish its chain-of-thought and emit the final score,
     // else `content` comes back empty (ollama puts the CoT in `reasoning`).
     let ireq = InferenceRequest {
+        routing: None, // no per-request provider routing preferences
         capability: Capability::TextChat,
         model: None,
         router: None,

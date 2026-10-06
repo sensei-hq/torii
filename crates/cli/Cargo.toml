@@ -16,13 +16,13 @@ name = "torii"
 path = "src/main.rs"
 
 [dependencies]
-orchestrator-core = { package = "sensei-orchestrator-core", git = "https://github.com/sensei-hq/gateway", branch = "develop" }
-orchestrator = { package = "sensei-orchestrator", git = "https://github.com/sensei-hq/gateway", branch = "develop" }
+orchestrator-core = { package = "sensei-orchestrator-core", git = "https://github.com/sensei-hq/gateway", tag = "v0.9.0" }
+orchestrator = { package = "sensei-orchestrator", git = "https://github.com/sensei-hq/gateway", tag = "v0.9.0" }
 # The in-memory stores (TORII_BACKEND=memory) and the registry-directory reader. Postgres lives
 # in torii-core (torii's tenant-scoped schema), not in the gateway crate.
-orchestrator-store = { package = "sensei-orchestrator-store", git = "https://github.com/sensei-hq/gateway", branch = "develop" }
-gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", branch = "develop" }
-kernel = { package = "sensei-kernel", git = "https://github.com/sensei-hq/gateway", branch = "develop" }
+orchestrator-store = { package = "sensei-orchestrator-store", git = "https://github.com/sensei-hq/gateway", tag = "v0.9.0" }
+gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", tag = "v0.9.0" }
+kernel = { package = "sensei-kernel", git = "https://github.com/sensei-hq/gateway", tag = "v0.9.0" }
 # torii's shared data layer: the catalog GatewayConfig loader the API uses, tenant resolution
 # and the tenant-scoped stores (TM-8c). The CLI reads torii's database through it only.
 torii-core = { path = "../core" }
@@ -42,4 +42,4 @@ tokio = { version = "1", features = ["full", "test-util"] }
 tempfile = "3"
 # The cross-process e2e needs the same gateway/clock doubles the executor's own tests
 # use (a gated gateway to force a durable pause, a recording one to count re-spend).
-orchestrator = { package = "sensei-orchestrator", git = "https://github.com/sensei-hq/gateway", branch = "develop", features = ["test-support"] }
+orchestrator = { package = "sensei-orchestrator", git = "https://github.com/sensei-hq/gateway", tag = "v0.9.0", features = ["test-support"] }

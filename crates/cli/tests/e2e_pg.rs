@@ -22,7 +22,7 @@
 use chrono::{DateTime, Duration, Utc};
 use kernel::types::cost::TokenUsage;
 use orchestrator::test_support::{
-    CallLog, FakeClock, gated_gateway, metered_gateway, recording_gateway,
+    CallLog, FakeClock, gated_gateway, metered_gateway, price_single_chain, recording_gateway,
 };
 use orchestrator::{Executor, Scheduler};
 use orchestrator_core::ConfigStore;
@@ -1278,6 +1278,148 @@ async fn a_budget_exhausted_run_is_raised_by_an_operator_and_completes_in_a_fres
         (spent_after, budget_after),
         (u64::from(PER_CALL) * 2, Some(RAISED)),
         "both processes' spend is in ONE durable ledger, folded by effect id"
+    );
+}
+
+/// AG-12: [`fresh_metered_worker`] over a PRICED chain — a money-capped run refuses an
+/// unpriced model before dispatch, so a worker that resumes one must price its chain.
+async fn fresh_priced_worker(
+    db: &Db,
+    at: DateTime<Utc>,
+    per_call_tokens: u32,
+    usd_per_1k: f64,
+) -> (Scheduler, CallLog) {
+    let journal = Arc::new(PgJournal::new(db.pool().await, db.tenant));
+    let (gw, calls) = metered_gateway(Some(usage(per_call_tokens))).await;
+    price_single_chain(&gw, usd_per_1k, usd_per_1k).await;
+    let clock = FakeClock::new(at);
+    let exec = Executor::new(Arc::new(gw), journal.clone(), "v1")
+        .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
+        .with_clock(clock.clone());
+    let store = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    (Scheduler::new(store, exec, journal, clock), calls)
+}
+
+/// AG-12, the money twin of the token-budget loop above, across a process boundary:
+/// `run submit --budget-usd` caps a run, the first call overspends it and the second is
+/// refused, `run status` shows the dollars folded from the DURABLE journal, `run wake
+/// --budget-usd` moves the cap, and a fresh priced worker finishes the run with the money
+/// ledger accumulated across both processes and no re-spend.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+)]
+#[tokio::test]
+async fn a_money_capped_run_is_raised_by_an_operator_and_completes_in_a_fresh_process() {
+    let Some(db) = Db::new().await else { return };
+
+    // $1 per 1k tokens on both sides, 1500 tokens a call ⇒ every call costs $1.50.
+    const PER_CALL: u32 = 1_500;
+    const USD_PER_1K: f64 = 1.0;
+    const CALL_MICRO_USD: u64 = 1_500_000;
+
+    let run = RunId(uuid::Uuid::new_v4());
+    let marker = run.0.to_string();
+    let (first, second) = (format!("{marker}#n1"), format!("{marker}#n2"));
+    let graph = two_node_graph(&marker);
+    let at = DateTime::<Utc>::from_timestamp(5_100_000, 0).unwrap();
+
+    // ---- Process A: submit under a $1 cap one call overspends ------------------------
+    let cap = torii::cmd::run::parse_budget_usd("1").expect("a dollar");
+    let (sched_a, calls_a) = fresh_priced_worker(&db, at, PER_CALL, USD_PER_1K).await;
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        graph.clone(),
+        orchestrator_core::RunBudget {
+            tokens: None,
+            money: Some(orchestrator_core::MoneyBudget {
+                total_micro_usd: cap,
+            }),
+        },
+        || {},
+    )
+    .await
+    .expect("a money-paused run is not an error");
+    assert_eq!(submitted.code, torii::errors::EXIT_OK, "{}", submitted.text);
+    assert!(
+        submitted.text.starts_with("paused:") && submitted.text.contains("n2"),
+        "the money cap pauses the run on the node it refused: {}",
+        submitted.text
+    );
+    assert_eq!(
+        (calls_for(&calls_a, &first), calls_for(&calls_a, &second)),
+        (1, 0)
+    );
+
+    // ---- The operator, light tier: dollars from the durable journal ------------------
+    let store_b = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_b = Arc::new(PgJournal::new(db.pool().await, db.tenant));
+    let shown = torii::cmd::run::status(
+        store_b.as_ref(),
+        &torii::cmd::run::NoWakeAttemptCounts,
+        journal_b.as_ref(),
+        run,
+        false,
+    )
+    .await
+    .expect("status");
+    assert!(
+        shown.text.contains("money spent: $1.50 / budget: $1.00"),
+        "{}",
+        shown.text
+    );
+
+    // ---- The operator moves the money cap and queues the run --------------------------
+    let paused = store_b
+        .status(run)
+        .await
+        .unwrap()
+        .expect("a schedule record");
+    assert_eq!(paused.status, RunStatus::Paused, "{paused:?}");
+    let queued_at = paused.updated_at + Duration::seconds(600);
+    let raised = torii::cmd::run::parse_budget_usd("10").expect("ten dollars");
+    let woken = torii::cmd::run::wake(
+        store_b.as_ref(),
+        journal_b.as_ref(),
+        run,
+        queued_at,
+        orchestrator_core::RunBudget {
+            tokens: None,
+            money: Some(orchestrator_core::MoneyBudget {
+                total_micro_usd: raised,
+            }),
+        },
+    )
+    .await
+    .expect("wake");
+    assert_eq!(woken.code, torii::errors::EXIT_OK, "{}", woken.text);
+    assert_eq!(
+        orchestrator::money_spend_of(&journal_b.load(run).await.unwrap()),
+        (CALL_MICRO_USD, Some(raised)),
+        "the raise is durable and is what the engine folds as the cap"
+    );
+
+    // ---- Process B: a fresh priced worker finishes it ---------------------------------
+    let (sched_b, calls_b) =
+        fresh_priced_worker(&db, queued_at + Duration::seconds(1), PER_CALL, USD_PER_1K).await;
+    let served = serve_until_settled(&sched_b, store_b.as_ref(), run).await;
+    assert_eq!(served.code, torii::errors::EXIT_OK, "{}", served.text);
+    assert_eq!(
+        store_b.status(run).await.unwrap().unwrap().status,
+        RunStatus::Completed,
+        "{}",
+        served.text
+    );
+    assert_eq!(
+        (calls_for(&calls_b, &first), calls_for(&calls_b, &second)),
+        (0, 1),
+        "n1 was paid for by process A and is replayed, never re-bought"
+    );
+    assert_eq!(
+        orchestrator::money_spend_of(&journal_b.load(run).await.unwrap()),
+        (2 * CALL_MICRO_USD, Some(raised)),
+        "both processes' spend is in ONE durable money ledger"
     );
 }
 

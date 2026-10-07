@@ -529,17 +529,24 @@ pub async fn wake(
         Ok(None) => Err(CliError::error(format!("run {} vanished mid-wake", run.0))),
         Err(e) => Err(CliError::from(e)),
     };
+    // `force_wake` has committed by now, so the run may well be queued: a re-read fault
+    // must neither claim "not queued" nor be a bare error (both read as "it did not go
+    // through"). Say what is durable and point at `run status` to see the outcome.
     let after = match reread {
         Ok(after) => after,
-        Err(e) if landed.is_empty() => return Err(e),
         Err(e) => {
-            let e = e.message;
-            return Ok(partial(
-                &landed,
-                "the status re-read",
-                &e,
-                " The wake was requested, but whether it applied could not be read back.",
-            ));
+            let e = render::safe_reason(&e.message);
+            let raised = if landed.is_empty() {
+                String::new()
+            } else {
+                format!("{} journaled durably and ", landed.join(" and "))
+            };
+            return Ok(Outcome::precondition(format!(
+                "wake sent: {} — {raised}the wake was requested, but the status re-read \
+                 failed: {e}. Whether it applied could not be read back; check \
+                 `torii run status {}` before waking again.",
+                run.0, run.0
+            )));
         }
     };
     // The primary signal is STATUS, not next_wake's mere presence: `claim_due` flips

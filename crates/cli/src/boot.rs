@@ -1254,6 +1254,37 @@ mod tests {
         }
     }
 
+    /// AG-5: unset, `TORII_MAP_CONCURRENCY` is an explicit 8; zero, garbage and a typo-sized
+    /// value are refused by the heavy tier only, naming the variable and echoing the value.
+    #[test]
+    fn the_map_concurrency_is_read_and_a_bad_one_is_refused_by_the_heavy_tier() {
+        let e = env_config_from(getter(&[(ENV_DATABASE_URL, "postgres://h/db")])).expect("ok");
+        assert_eq!(
+            require_drive_policy(&e).expect("default").map_concurrency,
+            8
+        );
+        let e = env_config_from(getter(&[
+            (ENV_DATABASE_URL, "postgres://h/db"),
+            (ENV_MAP_CONCURRENCY, " 16 "),
+        ]))
+        .expect("ok");
+        assert_eq!(require_drive_policy(&e).expect("read").map_concurrency, 16);
+        for bad in ["0", "-1", "four", "100000"] {
+            let e = env_config_from(getter(&[
+                (ENV_DATABASE_URL, "postgres://h/db"),
+                (ENV_MAP_CONCURRENCY, bad),
+            ]))
+            .expect("a bad drive policy must not fail the environment the light tier reads");
+            let err = require_drive_policy(&e).expect_err("the heavy tier must refuse");
+            assert_eq!(err.code, crate::errors::EXIT_ERROR);
+            assert!(
+                err.message.contains(ENV_MAP_CONCURRENCY) && err.message.contains(bad),
+                "{}",
+                err.message
+            );
+        }
+    }
+
     /// The heavy tier's refusal of a bad `TORII_WAKE_*` set: the environment itself PARSES
     /// (the light tier never reads the policy), and [`require_wake_retry`] is what refuses.
     fn wake_err(pairs: &[(&str, &str)]) -> CliError {

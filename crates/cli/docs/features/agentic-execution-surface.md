@@ -231,6 +231,10 @@ error string.
   plan?: PlannedGraph, budget: { spent, cap } | null, fence: string }
 ```
 
+The per-node outputs half of this screen is backed: `torii_core::results::run_results` returns
+`{ run, status, as_of, nodes: { node, state: completed|failed|skipped, stored: inline|cas{digest,
+size}, output, unresolved, error }[] }` (`torii run results --json` prints exactly that).
+
 ### 6.3 Plan review
 Inspect a plan the planner produced before or during execution — nodes, their agents, dependencies,
 and the feasibility verdict. This is where a human judges whether the machine understood the goal.
@@ -271,7 +275,7 @@ Honest gaps between these screens and the engine, so nobody designs against a fi
 | all of seiki | **The read path EXISTS; only the CLI exposure is missing.** `PostgresConfigSource::load()` returns a whole `RegistryConfig`, `load_versioned()` returns it with its generation, and **`torii` already calls `load_versioned()` inside `push`** to compute the diff. What does not exist is a `config pull`/`show` subcommand to hand that structured data to a UI. A first draft of this table called it a structural blocker — that was wrong, and the correction shrinks the work from a slice to a subcommand. |
 | 5.6 push review | The paused-run count is available, but per-run detail for the warning list needs `list_paused`, which exists — this one is close. |
 | 6.1 submit | `plannerPreview` has no backing. Nothing exposes "which planner would be selected for this goal" without running the expand. |
-| 6.2 timeline | The journal is durable and complete, but there is no read API shaped for a timeline view. |
+| 6.2 timeline | The journal is durable and complete, but there is no read API shaped for a timeline view. What a run PRODUCED is readable: `torii run results <id>` (AG-4, torii#33) returns each node's state and output — the executor's round checkpoint, with CAS refs resolved through the tenant's content store — from `torii_core::results::run_results`, the read the API will share. The ordered event timeline is still missing. |
 | 6.3 plan review | Plans are journaled; approving or rejecting one interactively is not a mechanism that exists. |
 | 6.4 interventions | Best-supported screen — `list-paused`, `signal`, `gate`, `agent`, `wake`, `cancel` all exist as commands. |
 | planner quality | No longer a code gap: the five discovery tools are composed per run (gateway v0.11.0). What remains is content — no shipped planner agent declares them, and no shipped `tools/*.json` defines their schemas (see the absent default content below). |

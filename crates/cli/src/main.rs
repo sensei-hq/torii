@@ -20,7 +20,8 @@ use torii::{boot, cmd};
                   a flag would leak the password into `ps`. The gateway config is torii's \
                   catalog. `run submit` and `worker serve` additionally need \
                   TORII_FENCE_VERSION; with TORII_BACKEND=memory (no database) they take \
-                  --gateway-config instead.\n\n\
+                  --gateway-config instead. `run submit` on Postgres also needs TORII_USER \
+                  (your core.profiles id): the run is charged to that user's budget.\n\n\
                   Exit codes: 0 ok, 1 error (including a submitted run that actually executed \
                   and failed), 2 not-found, precondition-not-met, or a result that is complete \
                   enough to print but not the unqualified success you asked for (`run \
@@ -91,6 +92,13 @@ enum RunAction {
         budget_tokens: Option<u64>,
         /// Cap this run's MONEY spend, in US dollars (e.g. 5 or 0.25; at most 6 decimal
         /// places — a cap is kept in whole micro-dollars, and finer is refused, not rounded).
+        ///
+        /// On Postgres every run is charged to TORII_USER, and its money limit is that user's
+        /// headroom under torii's caps — the tightest hard cap over their own unit, their
+        /// groups and every unit above them. This flag may only LOWER that limit: a value
+        /// above the headroom is refused and nothing is submitted. Omitted, the limit is the
+        /// headroom. What the run spends is recorded on those budget nodes. With
+        /// TORII_BACKEND=memory there are no caps and this flag alone is the cap.
         ///
         /// Ledgered from the cost the gateway prices each call at, so every model on a chain
         /// this run uses must declare pricing (an explicit zero for a free or local model):
@@ -329,6 +337,11 @@ enum RunAction {
         /// without --budget-usd this is REFUSED and nothing is written (spend is only
         /// counted while a cap is in force, so a cap added now would be weighed against
         /// spend it never saw).
+        ///
+        /// On Postgres a raise goes through the cap check the run was submitted under: what
+        /// the run may still spend (the new cap less its spend) must fit the headroom left on
+        /// the budget nodes it is charged to — the submitting TORII_USER's. Past it the raise
+        /// is refused and nothing is written; lowering is always allowed.
         //
         // Recorded as `MoneyBudgetRaised` BEFORE the wake is queued, like `BudgetRaised`.
         #[arg(long, value_parser = cmd::run::parse_budget_usd)]

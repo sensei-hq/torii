@@ -1989,6 +1989,27 @@ pub async fn prune(
     Ok(Outcome::ok(text))
 }
 
+/// How long the run state `run submit` drives into outlives the `run submit` process — which
+/// decides what a pause is worth to the caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoreLifetime {
+    /// Postgres: the run is durable. Whatever it paused on — a timed wake (a transient retry,
+    /// every candidate gated, a wake backoff) or a person (a signal, a gate, a human-backed
+    /// agent, a tool confirmation, a budget raise) — `worker serve` or an answering verb in
+    /// ANOTHER process resumes it, so the pause is a success: exit 0.
+    Durable,
+    /// The memory backend: every store dies with this process, and every resumption path — a
+    /// worker's wake, `run signal`/`gate`/`agent`/`tool`, `run wake` — is another process,
+    /// which sees an empty store. ANY pause is therefore one nothing can resume: it still
+    /// prints, but at exit 2 (a result printable, not the success asked for), so a CI step
+    /// gating on the exit code never passes a run that did not finish.
+    Process,
+}
+
+/// The words `run submit` adds to a pause under [`StoreLifetime::Process`].
+pub const STRANDED_PAUSE: &str = "nothing can resume it: the memory backend keeps every store \
+    in this process, so no worker, wake or answer from another process can ever see this run";
+
 /// Submit a fresh run and drive it inline. Blocks until the run pauses or ends —
 /// there is no `--detach` yet, because `enqueue` stamps the row `waking`, so a
 /// detached run would only be picked up once the lease expired and the crash-reclaim
@@ -2002,11 +2023,14 @@ pub async fn prune(
 /// precisely the "report the effect, not the Ok" discipline the rest of this module
 /// enforces. It must still precede the drive, so an operator who loses the terminal can
 /// find the run.
+///
+/// `lifetime` decides a pause's exit code — see [`StoreLifetime`].
 pub async fn submit(
     scheduler: &orchestrator::Scheduler,
     run: RunId,
     graph: orchestrator_core::Graph,
     budget: RunBudget,
+    lifetime: StoreLifetime,
     announce: impl FnOnce(),
 ) -> Result<Outcome, CliError> {
     // A run id that already has a schedule record cannot be submitted again. Left to
@@ -2038,10 +2062,11 @@ pub async fn submit(
     // `RunStarted` from here.
     let outcome = scheduler.submit_with_budget(run, graph, budget).await?;
     if let Some(p) = &outcome.paused {
-        return Ok(Outcome::ok(format!(
-            "paused: {} at node {} ({})",
-            run.0, p.node.0, p.reason
-        )));
+        let paused = format!("paused: {} at node {} ({})", run.0, p.node.0, p.reason);
+        return Ok(match lifetime {
+            StoreLifetime::Durable => Outcome::ok(paused),
+            StoreLifetime::Process => Outcome::precondition(format!("{paused}\n{STRANDED_PAUSE}")),
+        });
     }
     if let Some((node, msg)) = &outcome.failed {
         // A run that actually executed and failed is an EXECUTION error (exit 1),
@@ -3165,9 +3190,16 @@ pub(crate) mod tests {
         let exec = orchestrator::Executor::new(Arc::new(gw), journal.clone(), "v1");
         let sched = orchestrator::Scheduler::new(store, exec, journal.clone(), clock);
 
-        let out = submit(&sched, run, empty_graph(), money(2_500_000), || {})
-            .await
-            .expect("submits");
+        let out = submit(
+            &sched,
+            run,
+            empty_graph(),
+            money(2_500_000),
+            StoreLifetime::Durable,
+            || {},
+        )
+        .await
+        .expect("submits");
         assert_eq!(out.code, EXIT_OK, "{}", out.text);
         let events = journal.load(run).await.unwrap();
         assert!(
@@ -3541,9 +3573,14 @@ pub(crate) mod tests {
         let sched = scheduler_over(store.clone()).await;
 
         let mut announced = false;
-        let out = submit(&sched, run, empty_graph(), RunBudget::default(), || {
-            announced = true
-        })
+        let out = submit(
+            &sched,
+            run,
+            empty_graph(),
+            RunBudget::default(),
+            StoreLifetime::Durable,
+            || announced = true,
+        )
         .await
         .expect("a duplicate submit is not a transport fault");
 
@@ -3569,6 +3606,64 @@ pub(crate) mod tests {
         );
     }
 
+    /// AG-5: a pause exits 0 only where another process can resume it. On a durable store
+    /// (Postgres) a worker or an answering verb finishes the run, so `paused` is success; under
+    /// [`StoreLifetime::Process`] (memory) nothing can, so the same pause prints at exit 2,
+    /// saying so. A completed run is exit 0 under either.
+    #[tokio::test]
+    async fn a_pause_exits_0_only_where_another_process_can_resume_it() {
+        let gate = Graph {
+            nodes: vec![orchestrator_core::Node {
+                id: NodeId("gate".into()),
+                kind: orchestrator_core::NodeKind::AwaitSignal { timeout: None },
+                deps: vec![],
+            }],
+        };
+        for (lifetime, code) in [
+            (StoreLifetime::Durable, EXIT_OK),
+            (StoreLifetime::Process, EXIT_PRECONDITION),
+        ] {
+            let sched = scheduler_over(Arc::new(InMemorySchedulerStore::default())).await;
+            let run = RunId(uuid::Uuid::new_v4());
+            let out = submit(
+                &sched,
+                run,
+                gate.clone(),
+                RunBudget::default(),
+                lifetime,
+                || {},
+            )
+            .await
+            .expect("a pause is not an error");
+            assert_eq!(out.code, code, "{lifetime:?}: {}", out.text);
+            assert!(
+                out.text
+                    .starts_with(&format!("paused: {} at node gate", run.0)),
+                "{lifetime:?}: {}",
+                out.text
+            );
+            assert_eq!(
+                out.text.contains(STRANDED_PAUSE),
+                lifetime == StoreLifetime::Process,
+                "only a pause nothing can resume says so: {}",
+                out.text
+            );
+
+            let sched = scheduler_over(Arc::new(InMemorySchedulerStore::default())).await;
+            let out = submit(
+                &sched,
+                RunId(uuid::Uuid::new_v4()),
+                empty_graph(),
+                RunBudget::default(),
+                lifetime,
+                || {},
+            )
+            .await
+            .expect("submits");
+            assert_eq!(out.code, EXIT_OK, "{lifetime:?}: {}", out.text);
+        }
+    }
+
     /// The counterpart, so the fix cannot be satisfied by never announcing at all:
     /// a FIRST submit announces (and structurally does so before the drive — `announce()`
     /// is the statement immediately preceding `scheduler.submit`).
@@ -3579,9 +3674,14 @@ pub(crate) mod tests {
         let sched = scheduler_over(store.clone()).await;
 
         let mut announced = false;
-        let out = submit(&sched, run, empty_graph(), RunBudget::default(), || {
-            announced = true
-        })
+        let out = submit(
+            &sched,
+            run,
+            empty_graph(),
+            RunBudget::default(),
+            StoreLifetime::Durable,
+            || announced = true,
+        )
         .await
         .expect("a fresh submit runs");
 

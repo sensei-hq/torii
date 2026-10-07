@@ -22,6 +22,7 @@ toolkit does not yet do something, it says so rather than describing an intentio
 | **`TORII_TENANT`** | The tenant every command acts for — its id or its slug. Required on the Postgres backend: every run, journal and registry belongs to exactly one tenant, and another tenant's are invisible. |
 | **`TORII_FENCE_VERSION`** | Needed by `run submit` and `worker serve`. Set it **explicitly** (e.g. `v1`) and keep a fleet agreed on it — it is recorded in every run and checked on resume, so deriving it from a build version would strand every paused run on a routine deploy. |
 | **`TORII_POOL_SIZE`** | Optional. Defaults are fine to start. |
+| **`TORII_WAKE_MAX_ATTEMPTS`**, **`TORII_WAKE_BASE_BACKOFF`**, **`TORII_WAKE_MAX_BACKOFF`** | Optional (defaults `5`, `30s`, `60m`). How a wake that keeps failing is retried: a retryable drive error (a journal or store backend fault) or a worker lost mid-drive re-schedules the run after a backoff that doubles from the base up to the ceiling; the attempt past the cap is never driven — the run is filed `failed`, naming the count and the last error. A successful drive resets the count. Backoffs take `--interval`'s units (`500ms`, `30s`, `15m`); `0` attempts and a base above the ceiling are refused. Read by both commands that drive (`worker serve` and `run submit`), so keep a fleet agreed on them. |
 | **`TORII_BACKEND`** | Optional: `postgres` (the default — everything above applies) or `memory`. `memory` keeps every store in the process — no database, no `DATABASE_URL` — for development and CI. Nothing survives the process, so a run it submits can only be observed or woken by that same process. |
 | **`TORII_REGISTRY_DIR`** | With `TORII_BACKEND=memory`: the registry directory (the `agents/ skills/ tools/` layout `config push` reads) loaded at boot, since there is no database to push to. |
 | **A gateway config** | On Postgres: **torii's catalog** — routers, models and chains, read by the same `torii_core::load_gateway_config` the API routes with. Nothing to pass; a `--gateway-config` there is refused. With `TORII_BACKEND=memory` only: `--gateway-config <file>` (JSON), required by `run submit` and `worker serve`. |
@@ -113,7 +114,7 @@ A worker serves **one tenant** (`TORII_TENANT`): its sweeps claim only that tena
 ## Observing and intervening
 
 ```sh
-torii run status <id>            # one run's schedule record
+torii run status <id>            # one run's schedule record (+ consecutive wake attempts while retrying)
 torii run list-paused            # everything awaiting a wake, and nodes awaiting a signal
 torii run signal <...>           # deliver a decision to an AwaitSignal node
 torii run gate <...>             # decide a HumanGate or a Loop's human gate

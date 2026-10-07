@@ -29,3 +29,7 @@ orchestrator-core = { package = "sensei-orchestrator-core", git = "https://githu
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 chrono = "0.4"
+uuid = { version = "1", features = ["v4"] }
+# AG-4 (#33): the gateway's in-memory stores, so `results` is tested DB-free against the same
+# traits torii's Postgres stores implement.
+orchestrator-store = { package = "sensei-orchestrator-store", git = "https://github.com/sensei-hq/gateway", tag = "v0.11.0" }

@@ -50,6 +50,17 @@ fn slugify(name: &str) -> String {
     }
 }
 
+/// Red-phase stubs (AG-7): the real implementations follow in the next commit.
+#[cfg(test)]
+fn is_uuid_shaped(_slug: &str) -> bool {
+    false
+}
+
+#[cfg(test)]
+fn suffixed_slug(base: &str, suffix: &str) -> String {
+    format!("{base}-{suffix}")
+}
+
 #[cfg(test)]
 mod slug_tests {
     use super::slugify;
@@ -59,6 +70,55 @@ mod slug_tests {
         assert_eq!(slugify("  Big   Corp  "), "big-corp");
         assert_eq!(slugify("!!!"), "org");
         assert_eq!(slugify(""), "org");
+    }
+
+    /// AG-7 (#36): a slug must never read as a tenant id. `TORII_TENANT` and
+    /// `torii_core::resolve_tenant` accept an id OR a slug, so an org NAMED after another
+    /// tenant's id (the platform tenant's all-zeros id included) would otherwise shadow it.
+    /// "UUID-shaped" is the `core.tenants.slug` CHECK's rule: 32 hex digits once hyphens are
+    /// stripped — a superset of what both `uuid::Uuid::parse_str` and Postgres' `uuid` accept.
+    #[test]
+    fn a_uuid_shaped_name_never_slugifies_to_a_uuid() {
+        let platform = "00000000-0000-0000-0000-000000000000";
+        for name in [
+            platform,
+            "00000000000000000000000000000000",
+            "{00000000-0000-0000-0000-000000000000}",
+            "A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11",
+            "a0ee-bc99-9c0b-4ef8-bb6d-6bb9-bd38-0a11",
+        ] {
+            let slug = slugify(name);
+            assert!(
+                !super::is_uuid_shaped(&slug),
+                "{name:?} slugified to the UUID-shaped {slug:?}"
+            );
+            assert!(
+                uuid::Uuid::parse_str(&slug).is_err(),
+                "{name:?} → {slug:?} parses as a tenant id"
+            );
+        }
+        // The id stays legible in the slug — only disambiguated, never discarded.
+        assert_eq!(slugify(platform), format!("org-{platform}"));
+        // A near-miss is left alone: 31 hex digits is not an id.
+        assert_eq!(
+            slugify("0000000-0000-0000-0000-000000000000"),
+            "0000000-0000-0000-0000-000000000000"
+        );
+    }
+
+    /// The collision-retry slug is guarded too: a hex base plus a hex suffix can add up to
+    /// 32 hex digits even when neither half is UUID-shaped on its own.
+    #[test]
+    fn a_suffixed_slug_is_never_uuid_shaped() {
+        let base = slugify("aaaaaaaaaaaaaaaaaaaaaaaaaa"); // 26 hex digits — not an id
+        assert_eq!(base, "aaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let slug = super::suffixed_slug(&base, "bbbbbb"); // + 6 = 32
+        assert!(!super::is_uuid_shaped(&slug), "{slug:?}");
+        assert_eq!(slug, "org-aaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbb");
+        assert_eq!(
+            super::suffixed_slug("acme-inc", "1a2b3c"),
+            "acme-inc-1a2b3c"
+        );
     }
 }
 

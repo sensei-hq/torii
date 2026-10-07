@@ -719,7 +719,7 @@ mod gate {
     use super::{plane_split_sql, spend_sql};
     use crate::analytics::SpendGroup;
     use serde_json::Value;
-    use sqlx::{postgres::PgPoolOptions, Row};
+    use sqlx::postgres::PgPoolOptions;
     use uuid::Uuid;
 
     async fn pool() -> sqlx::PgPool {

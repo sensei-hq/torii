@@ -370,6 +370,17 @@ pub async fn list_documents(
     }
 }
 
+/// One `public.document_assets` row as listed by [`get_assets`].
+type AssetListRow = (
+    Uuid,           // id
+    String,         // kind
+    Option<String>, // storage_path
+    Option<String>, // label
+    Option<i32>,    // sequence
+    Option<i32>,    // page_ref
+    Option<String>, // caption
+);
+
 /// `GET /v1/documents/{id}/assets` — capability `doc.read`, then the read predicate on the PARENT
 /// doc (404 if excluded — no existence leak). Only THEN are `document_assets` listed, each with a
 /// freshly-minted short-lived signed download URL. A URL that fails to mint is returned as `null`
@@ -404,15 +415,7 @@ pub async fn get_assets(
         return (StatusCode::NOT_FOUND, "document not found").into_response();
     }
 
-    let assets: Vec<(
-        Uuid,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<i32>,
-        Option<i32>,
-        Option<String>,
-    )> = match sqlx::query_as(
+    let assets: Vec<AssetListRow> = match sqlx::query_as(
         "select id, kind::text, storage_path, label, sequence, page_ref, caption \
                from public.document_assets \
               where tenant_id = $1 and document_id = $2 \

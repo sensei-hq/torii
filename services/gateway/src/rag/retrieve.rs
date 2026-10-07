@@ -151,7 +151,7 @@ impl RetrievalEngine for HybridRetriever {
     ) -> Result<RetrieveResult, RagError> {
         let t0 = Instant::now();
         // Embed the query (validate_dims enforced inside the embedder).
-        let embedded = self.embedder.embed(&[q.text.clone()]).await?;
+        let embedded = self.embedder.embed(std::slice::from_ref(&q.text)).await?;
         let qvec = embedded
             .into_iter()
             .next()

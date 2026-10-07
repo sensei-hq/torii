@@ -5,6 +5,7 @@
 //! module either. Concentrating the wiring in one place is what keeps the commands
 //! unit-testable against in-memory doubles.
 
+use crate::cmd::run::{NoWakeAttemptCounts, WakeAttemptCounts};
 use crate::errors::{CliError, redact_url};
 use orchestrator::agent::tools::{
     FsReadTool, FsWriteReconciler, FsWriteTool, ReconcileRegistry, ShellTool, ToolRegistry,
@@ -506,6 +507,8 @@ pub struct LightDeps {
     /// The backend's own gateway config: torii's catalog on Postgres; `None` on the memory
     /// backend, which has no catalog and takes `--gateway-config` instead.
     pub gateway_config: Option<Arc<dyn GatewayConfigSource>>,
+    /// AG-3: the scheduler's per-run wake-attempt counter, for `run status`.
+    pub wake_attempts: Arc<dyn WakeAttemptCounts>,
 }
 
 /// Every store one backend provides — the light tier's three plus the heavy tier's CAS and
@@ -538,6 +541,7 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                     journal: Arc::new(stores.journal),
                     config_source: Arc::new(stores.config),
                     gateway_config: Some(Arc::new(CatalogGatewayConfigSource::new(pool))),
+                    wake_attempts: Arc::new(NoWakeAttemptCounts),
                 },
                 content: Arc::new(stores.content),
                 context: Arc::new(stores.context),
@@ -561,6 +565,7 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                     journal: Arc::new(InMemoryJournal::default()),
                     config_source: Arc::new(config),
                     gateway_config: None,
+                    wake_attempts: Arc::new(NoWakeAttemptCounts),
                 },
                 context: Arc::new(InMemoryContextStore::new(content.clone())),
                 content,
@@ -1397,6 +1402,34 @@ mod tests {
             deps.scheduler.executor().has_planner_selector(),
             "heavy() built an executor with NO planner selector",
         );
+    }
+
+    /// AG-3: `run status` on the Postgres backend reads the tenant's real wake-attempt
+    /// counter — the light tier must wire the store's reader, not the memory backend's no-op.
+    #[cfg_attr(
+        not(have_database_url),
+        ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+    )]
+    #[tokio::test]
+    async fn light_wires_the_tenants_wake_attempt_counter() {
+        let Some(url) = crate::test_guard::db_url() else {
+            return;
+        };
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let env = tenant_env(&url, t.id, "torii-attempts-probe-fence");
+        let run = orchestrator_core::RunId(uuid::Uuid::new_v4());
+        let d = light(&env).await.expect("light boots");
+        d.scheduler_store
+            .enqueue(
+                run,
+                &orchestrator_core::Graph { nodes: vec![] },
+                chrono::Utc::now(),
+            )
+            .await
+            .expect("enqueue");
+        let n = d.wake_attempts.wake_attempts(run).await.expect("read");
+        drop(t);
+        assert_eq!(n, Some(1), "submit's inline drive is attempt 1");
     }
 
     /// `heavy()` shares ONE pool across every store AND the catalog read: a regression to a

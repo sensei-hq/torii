@@ -436,7 +436,14 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 // connecting first would make a bad uuid take ~30s to reject.
                 let run = parse_run_id(&run_id)?;
                 let d = boot::light(&env).await?;
-                cmd::run::status(d.scheduler_store.as_ref(), d.journal.as_ref(), run, json).await
+                cmd::run::status(
+                    d.scheduler_store.as_ref(),
+                    d.wake_attempts.as_ref(),
+                    d.journal.as_ref(),
+                    run,
+                    json,
+                )
+                .await
             }
             RunAction::ListPaused { json } => {
                 let d = boot::light(&env).await?;

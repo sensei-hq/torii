@@ -12,12 +12,33 @@ use orchestrator_core::{
 };
 use std::collections::HashMap;
 
+/// AG-3: a run's consecutive wake attempts since its last successful drive — the counter the
+/// scheduler store keeps and the `SchedulerStore` trait does not expose. `None` ⇒ unknown run,
+/// or a backend that cannot report it.
+#[async_trait::async_trait]
+pub trait WakeAttemptCounts: Send + Sync {
+    async fn wake_attempts(&self, run: RunId) -> Result<Option<u32>, OrchestratorError>;
+}
+
+/// The memory backend: its store lives in one process, so a later `torii run status` (a NEW
+/// process) never sees the run at all — there is no count to report.
+pub struct NoWakeAttemptCounts;
+
+#[async_trait::async_trait]
+impl WakeAttemptCounts for NoWakeAttemptCounts {
+    async fn wake_attempts(&self, _run: RunId) -> Result<Option<u32>, OrchestratorError> {
+        Ok(None)
+    }
+}
+
 pub async fn status(
     store: &dyn SchedulerStore,
+    attempts: &dyn WakeAttemptCounts,
     journal: &dyn ExecutionJournal,
     run: RunId,
     json: bool,
 ) -> Result<Outcome, CliError> {
+    let _ = attempts;
     match store.status(run).await? {
         // WHOLE-SLICE FIX 5: `--json` promises machine-parseable STDOUT, and the not-found
         // path was emitting prose there — so `torii run status X --json | jq` failed on
@@ -1698,9 +1719,15 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn status_of_an_unknown_run_is_a_precondition_failure_not_an_error() {
         let s = InMemorySchedulerStore::default();
-        let out = status(&s, &empty_journal(), RunId(uuid::Uuid::new_v4()), false)
-            .await
-            .expect("no hard error");
+        let out = status(
+            &s,
+            &NoWakeAttemptCounts,
+            &empty_journal(),
+            RunId(uuid::Uuid::new_v4()),
+            false,
+        )
+        .await
+        .expect("no hard error");
         assert_eq!(out.code, EXIT_PRECONDITION);
         assert!(out.text.contains("no such run"), "{}", out.text);
     }
@@ -1711,9 +1738,15 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn status_of_an_unknown_run_is_still_valid_json_under_json() {
         let s = InMemorySchedulerStore::default();
-        let out = status(&s, &empty_journal(), RunId(uuid::Uuid::new_v4()), true)
-            .await
-            .expect("no hard error");
+        let out = status(
+            &s,
+            &NoWakeAttemptCounts,
+            &empty_journal(),
+            RunId(uuid::Uuid::new_v4()),
+            true,
+        )
+        .await
+        .expect("no hard error");
         assert_eq!(
             out.code, EXIT_PRECONDITION,
             "the exit code still says not-found: {}",
@@ -1960,7 +1993,9 @@ pub(crate) mod tests {
         let s = paused_store(run, Some(now())).await;
         let journal = journal_with_budget_and_spend(run, 50_000).await;
 
-        let out = status(&s, &journal, run, false).await.expect("status");
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, false)
+            .await
+            .expect("status");
         assert_eq!(out.code, EXIT_OK);
         assert!(
             out.text.contains("200") && out.text.contains("50000"),
@@ -1976,7 +2011,9 @@ pub(crate) mod tests {
         let s = paused_store(run, Some(now())).await;
         let journal = journal_with_budget_and_spend(run, 50_000).await;
 
-        let out = status(&s, &journal, run, true).await.expect("status");
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, true)
+            .await
+            .expect("status");
         assert_eq!(out.code, EXIT_OK);
         let v: serde_json::Value = serde_json::from_str(&out.text).expect("valid json");
         assert_eq!(v[0]["spent"], serde_json::json!(200));
@@ -2016,7 +2053,9 @@ pub(crate) mod tests {
         let s = paused_store(run, Some(now())).await;
         let journal = journal_with_a_budgeted_turn(run).await;
 
-        let out = status(&s, &journal, run, false).await.expect("status");
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, false)
+            .await
+            .expect("status");
         assert_eq!(out.code, EXIT_OK);
         assert!(
             out.text.contains('B'),
@@ -2037,7 +2076,9 @@ pub(crate) mod tests {
         let s = paused_store(run, Some(now())).await;
         let journal = journal_with_a_budgeted_turn(run).await;
 
-        let out = status(&s, &journal, run, true).await.expect("status");
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, true)
+            .await
+            .expect("status");
         assert_eq!(out.code, EXIT_OK);
         let v: serde_json::Value = serde_json::from_str(&out.text).expect("valid json");
         let turns = &v[0]["context_budgeted"];
@@ -2067,7 +2108,9 @@ pub(crate) mod tests {
         // `RunStarted.budget` is explicitly `None` (Task 1's additivity case).
         let journal = empty_journal();
 
-        let out = status(&s, &journal, run, false).await.expect("status");
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, false)
+            .await
+            .expect("status");
         let row = s.status(run).await.unwrap().unwrap();
         assert_eq!(
             out.text,
@@ -2083,7 +2126,9 @@ pub(crate) mod tests {
         let s = paused_store(run, Some(now())).await;
         let journal = empty_journal();
 
-        let out = status(&s, &journal, run, true).await.expect("status");
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, true)
+            .await
+            .expect("status");
         let row = s.status(run).await.unwrap().unwrap();
         assert_eq!(
             out.text,
@@ -5992,8 +6037,12 @@ pub(crate) mod tests {
                 (b.code, &b.text),
                 "list-paused (json={json}) must ignore DecisionHookFired"
             );
-            let a = status(&s, &plain, run, json).await.expect("status");
-            let b = status(&s, &hooked, run, json).await.expect("status");
+            let a = status(&s, &NoWakeAttemptCounts, &plain, run, json)
+                .await
+                .expect("status");
+            let b = status(&s, &NoWakeAttemptCounts, &hooked, run, json)
+                .await
+                .expect("status");
             assert_eq!(
                 (a.code, &a.text),
                 (b.code, &b.text),
@@ -6045,6 +6094,94 @@ pub(crate) mod tests {
         s
     }
 
+    /// A fixed answer for `WakeAttemptCounts` — the in-memory store keeps the counter but
+    /// does not expose it, and the Postgres reader is pinned in orchestrator-store's tests.
+    struct FixedWakeAttempts(Option<u32>);
+
+    #[async_trait::async_trait]
+    impl WakeAttemptCounts for FixedWakeAttempts {
+        async fn wake_attempts(&self, _run: RunId) -> Result<Option<u32>, OrchestratorError> {
+            Ok(self.0)
+        }
+    }
+
+    /// A run whose last wake failed and is backing off: `paused` at its retry deadline, the
+    /// reason the scheduler's own "wake attempt n of cap failed" text.
+    async fn backing_off_store(run: RunId) -> InMemorySchedulerStore {
+        let s = InMemorySchedulerStore::default();
+        s.enqueue(run, &empty_graph(), now()).await.unwrap();
+        s.record_wake_failed(
+            run,
+            now() + chrono::Duration::seconds(60),
+            "wake attempt 1 of 5 failed (retrying at …): store: connection reset",
+        )
+        .await
+        .unwrap();
+        s
+    }
+
+    /// AG-3: an operator looking at a run that keeps failing to wake must see how many
+    /// consecutive attempts it has burned — the cap is counted in these, and the reason
+    /// names only the latest one.
+    #[tokio::test]
+    async fn status_shows_the_wake_attempt_count_of_a_run_backing_off() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = backing_off_store(run).await;
+        let out = status(
+            &s,
+            &FixedWakeAttempts(Some(3)),
+            &empty_journal(),
+            run,
+            false,
+        )
+        .await
+        .expect("status");
+        assert_eq!(out.code, EXIT_OK);
+        assert!(
+            out.text.contains("wake attempts: 3"),
+            "status must show the consecutive wake attempts: {}",
+            out.text
+        );
+    }
+
+    /// The same count under `--json`, as its own numeric key.
+    #[tokio::test]
+    async fn status_json_carries_the_wake_attempt_count() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = backing_off_store(run).await;
+        let out = status(&s, &FixedWakeAttempts(Some(3)), &empty_journal(), run, true)
+            .await
+            .expect("status");
+        let v: serde_json::Value = serde_json::from_str(&out.text)
+            .unwrap_or_else(|e| panic!("--json emitted non-JSON {:?}: {e}", out.text));
+        assert_eq!(v[0]["wake_attempts"], serde_json::json!(3), "{v}");
+    }
+
+    /// No count line where there is nothing to report: a run paused after a SUCCESSFUL drive
+    /// (count reset to 0) and a terminal run (its count is history, and a run that gave up
+    /// names its count in the reason) keep the pre-AG-3 output byte-identical.
+    #[tokio::test]
+    async fn status_shows_no_wake_attempts_for_a_healthy_pause_or_a_terminal_run() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let healthy = InMemorySchedulerStore::default();
+        healthy.enqueue(run, &empty_graph(), now()).await.unwrap();
+        healthy.record_paused(run, None, "gated").await.unwrap();
+        let terminal = failed_store(run, "node draft/0 failed: model refused").await;
+        for (s, count) in [(&healthy, Some(0)), (&terminal, Some(4))] {
+            for json in [false, true] {
+                let with = status(s, &FixedWakeAttempts(count), &empty_journal(), run, json)
+                    .await
+                    .unwrap()
+                    .text;
+                let without = status(s, &NoWakeAttemptCounts, &empty_journal(), run, json)
+                    .await
+                    .unwrap()
+                    .text;
+                assert_eq!(with, without, "count {count:?}, json {json}");
+            }
+        }
+    }
+
     /// AG-12 × AG-3: a paid model call whose spend never reached the journal is the one
     /// failure a plain re-drive makes WORSE — the call has no memo, so it is dispatched and
     /// paid for again, outside every cap. `status` must show why the run failed AND tell the
@@ -6054,7 +6191,7 @@ pub(crate) mod tests {
         let run = RunId(uuid::Uuid::new_v4());
         let s = failed_store(run, &spend_unrecorded_reason()).await;
 
-        let out = status(&s, &empty_journal(), run, false)
+        let out = status(&s, &NoWakeAttemptCounts, &empty_journal(), run, false)
             .await
             .expect("status");
         assert_eq!(out.code, EXIT_OK);
@@ -6083,7 +6220,7 @@ pub(crate) mod tests {
         let run = RunId(uuid::Uuid::new_v4());
         let s = failed_store(run, &spend_unrecorded_reason()).await;
 
-        let out = status(&s, &empty_journal(), run, true)
+        let out = status(&s, &NoWakeAttemptCounts, &empty_journal(), run, true)
             .await
             .expect("status");
         let v: serde_json::Value = serde_json::from_str(&out.text)
@@ -6109,8 +6246,14 @@ pub(crate) mod tests {
     async fn status_of_an_ordinary_failure_gives_no_spend_advice() {
         let run = RunId(uuid::Uuid::new_v4());
         let s = failed_store(run, "node draft/0 failed: model refused").await;
-        let text = status(&s, &empty_journal(), run, false).await.unwrap().text;
-        let json = status(&s, &empty_journal(), run, true).await.unwrap().text;
+        let text = status(&s, &NoWakeAttemptCounts, &empty_journal(), run, false)
+            .await
+            .unwrap()
+            .text;
+        let json = status(&s, &NoWakeAttemptCounts, &empty_journal(), run, true)
+            .await
+            .unwrap()
+            .text;
         assert!(!text.contains("reconcile"), "{text}");
         assert!(!json.contains("spend_unrecorded"), "{json}");
     }

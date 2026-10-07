@@ -1854,10 +1854,8 @@ pub fn parse_budget_usd(s: &str) -> Result<u64, String> {
 /// AG-12: render integer micro-dollars as a dollar figure — exact (all six places when they
 /// are needed, so a sub-cent spend never reads as `$0.00`), and at least cents otherwise.
 pub fn fmt_usd(micro: u64) -> String {
-    let per = orchestrator_core::MICRO_USD_PER_USD;
-    let frac = format!("{:06}", micro % per);
-    let frac = frac.trim_end_matches('0');
-    format!("${}.{frac:0<2}", micro / per)
+    // ONE dollar format: torii-core's, which the budget-charge refusals (AG-13) print too.
+    torii_core::run_budget::usd(micro)
 }
 
 /// Parse a retention window: `30d`, `12h`, `90m`, `45s`.

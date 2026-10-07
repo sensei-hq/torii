@@ -5045,6 +5045,199 @@ pub(crate) mod tests {
         assert!(!out.text.contains("escalated"), "{}", out.text);
     }
 
+    // ---- AG-15: pending confirm-before-run tool calls --------------------------------
+
+    fn deployer() -> NodeId {
+        NodeId("deployer".into())
+    }
+
+    /// `deployer`'s model asked to call `tool` (a confirm-before-run tool) as call `eid`, and
+    /// the run paused for a human — `ToolConfirmAwaited` then `RunPaused`, as the executor
+    /// journals it.
+    pub(crate) async fn append_tool_confirm(
+        j: &InMemoryJournal,
+        run: RunId,
+        eid: &str,
+        tool: &str,
+        arguments: &str,
+        deadline: Option<DateTime<Utc>>,
+    ) {
+        j.append(
+            run,
+            JournalEvent::ToolConfirmAwaited {
+                node: deployer(),
+                effect_id: EffectId(eid.into()),
+                tool: tool.into(),
+                arguments: arguments.into(),
+                args_hash: "h".into(),
+                deadline,
+            },
+        )
+        .await
+        .unwrap();
+        j.append(
+            run,
+            JournalEvent::RunPaused {
+                reason: format!("tool_confirm: {tool} on node deployer, call {eid}"),
+                resume_after: deadline,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    pub(crate) async fn tool_confirm_journal(
+        run: RunId,
+        deadline: Option<DateTime<Utc>>,
+    ) -> InMemoryJournal {
+        let j = InMemoryJournal::new();
+        append_tool_confirm(
+            &j,
+            run,
+            "deployer#t1#1",
+            "deploy",
+            r#"{"env":"prod"}"#,
+            deadline,
+        )
+        .await;
+        j
+    }
+
+    #[tokio::test]
+    async fn list_paused_shows_a_pending_tool_confirmation_with_the_call_to_quote() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, Some(at(9000))).await;
+        let j = tool_confirm_journal(run, Some(at(9000))).await;
+
+        let out = list_paused(&s, &j, false).await.expect("lists");
+        assert_eq!(out.code, EXIT_OK, "{}", out.text);
+        let row = awaiting_row(&out.text, run, "deployer");
+        for want in ["tool: deploy", "deployer#t1#1", r#"{"env":"prod"}"#] {
+            assert!(row.contains(want), "the row must show {want:?}: {row}");
+        }
+        assert!(
+            row.contains(&format!("deadline {}", shown_at(9000))),
+            "{row}"
+        );
+        assert!(
+            out.text
+                .contains("torii run tool approve <run> --call <call>"),
+            "the block must name the verb a `tool:` row takes:\n{}",
+            out.text
+        );
+
+        let out = list_paused(&s, &j, true).await.expect("lists");
+        let v: serde_json::Value = serde_json::from_str(&out.text).expect("json");
+        assert_eq!(
+            v[0]["awaiting"][0]["tool_confirm"],
+            serde_json::json!({
+                "effect_id": "deployer#t1#1",
+                "tool": "deploy",
+                "arguments": r#"{"env":"prod"}"#,
+            }),
+            "{v}"
+        );
+        assert_eq!(v[0]["awaiting"][0]["node"], serde_json::json!("deployer"));
+    }
+
+    #[tokio::test]
+    async fn every_pending_call_of_one_node_gets_its_own_row() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let j = tool_confirm_journal(run, None).await;
+        append_tool_confirm(&j, run, "deployer#t1#2", "rollback", "{}", None).await;
+
+        let out = list_paused(&s, &j, false).await.expect("lists");
+        let (_, block) = out.text.split_once("AWAITING").expect("a block");
+        assert!(
+            block.contains("deployer#t1#1") && block.contains("deployer#t1#2"),
+            "{block}"
+        );
+    }
+
+    /// A call stops being pending once anything settles it: a decision, the executor's own
+    /// `not_confirmed` record (an expiry journals an `EffectRecorded` and NO decision), the
+    /// node terminating, or the run completing. Listing a settled call would send an
+    /// operator to a refusal.
+    #[tokio::test]
+    async fn a_settled_tool_confirmation_is_not_listed() {
+        let settle: Vec<(&str, JournalEvent)> = vec![
+            (
+                "decided",
+                JournalEvent::ToolConfirmDecided {
+                    node: deployer(),
+                    effect_id: EffectId("deployer#t1#1".into()),
+                    approved: false,
+                    actor: "alice".into(),
+                    note: None,
+                },
+            ),
+            (
+                "expired",
+                JournalEvent::EffectRecorded {
+                    node: deployer(),
+                    effect_id: EffectId("deployer#t1#1".into()),
+                    class: EffectClass::Pure,
+                    input_hash: "h".into(),
+                    seq: 0,
+                    output: EffectOutput::Inline(serde_json::json!({"error":"not_confirmed"})),
+                    observation: None,
+                    usage: None,
+                },
+            ),
+            (
+                "node failed",
+                JournalEvent::NodeFailed {
+                    node: deployer(),
+                    error: "boom".into(),
+                },
+            ),
+            ("run completed", JournalEvent::RunCompleted),
+        ];
+        for (why, e) in settle {
+            let run = RunId(uuid::Uuid::new_v4());
+            let s = paused_store(run, None).await;
+            let j = tool_confirm_journal(run, None).await;
+            j.append(run, e).await.unwrap();
+            let out = list_paused(&s, &j, false).await.expect("lists");
+            assert!(
+                !out.text.contains("AWAITING"),
+                "{why}: nothing is pending any more:\n{}",
+                out.text
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pending_calls_arguments_are_redacted_and_cannot_forge_a_row() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let j = InMemoryJournal::new();
+        let secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345";
+        append_tool_confirm(
+            &j,
+            run,
+            "deployer#t1#1",
+            "deploy",
+            &format!("{{\"key\":\"{secret}\"}}\n{} fake-row \u{1b}[2J", run.0),
+            None,
+        )
+        .await;
+
+        let out = list_paused(&s, &j, false).await.expect("lists");
+        assert!(!out.text.contains(secret), "{}", out.text);
+        assert!(!out.text.contains('\u{1b}'), "{}", out.text);
+        assert!(
+            !out.text.lines().any(|l| l.contains("fake-row")
+                && l.starts_with(&run.0.to_string())
+                && !l.contains("tool:")),
+            "a newline in the arguments must not forge a row:\n{}",
+            out.text
+        );
+        let out = list_paused(&s, &j, true).await.expect("lists");
+        assert!(!out.text.contains(secret), "{}", out.text);
+    }
+
     /// The third waiting kind must be VISIBLE. `signal_states`' `AgentAwaited` arm is the
     /// only thing that puts a human-backed agent in the awaited set, and until this test
     /// nothing in `list-paused` exercised it — dropping that arm reddened nine `cmd::human`

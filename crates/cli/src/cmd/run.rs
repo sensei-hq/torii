@@ -1872,6 +1872,7 @@ pub(crate) mod tests {
                 JournalEvent::RunStarted {
                     version: "v1".into(),
                     budget: Some(TokenBudget { total_tokens: cap }),
+                    money_budget: None,
                 },
             )
             .await
@@ -1891,6 +1892,7 @@ pub(crate) mod tests {
                         input_tokens: 100,
                         output_tokens: 50,
                         total_tokens: 150,
+                        cost_micro_usd: None,
                     }),
                 },
             )
@@ -1911,6 +1913,7 @@ pub(crate) mod tests {
                         input_tokens: 20,
                         output_tokens: 30,
                         total_tokens: 50,
+                        cost_micro_usd: None,
                     }),
                 },
             )
@@ -5226,6 +5229,7 @@ pub(crate) mod tests {
                 JournalEvent::RunStarted {
                     version: "v1".into(),
                     budget: None,
+                    money_budget: None,
                 },
             )
             .await

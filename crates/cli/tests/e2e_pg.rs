@@ -316,6 +316,10 @@ fn reviewer(timeout: Option<Duration>) -> orchestrator_core::AgentDefinition {
         skills: vec![],
         system_prompt: REVIEWER_PROMPT.into(),
         backed_by: orchestrator_core::AgentBacking::Human { timeout },
+        tool_limits: Default::default(),
+        confirm_tools: vec![],
+        confirm_timeout: None,
+        escalate_to: None,
     }
 }
 

@@ -83,6 +83,7 @@ async fn every_store_in_the_bundle_belongs_to_its_tenant() {
             JournalEvent::RunStarted {
                 version: "v1".into(),
                 budget: None,
+                money_budget: None,
             },
         )
         .await

@@ -62,6 +62,10 @@ pub async fn status(
                 .await
                 .map_err(OrchestratorError::Journal)?;
             let (spent, budget) = orchestrator::spend_of(&events);
+            // AG-12: the money twin, through the engine's own fold for the same reason. Its
+            // cap is `None` on a run that never had one — and then the spend is 0 by
+            // construction (cost is ledgered only under a cap), so nothing is shown.
+            let (spent_micro_usd, money_budget) = orchestrator::money_spend_of(&events);
             let budgeted = budgeted_turns(&events);
             let spend_advice = spend_unrecorded_advice(&r);
             let wake_attempts = reportable_wake_attempts(&r, attempts.wake_attempts(run).await?);
@@ -76,6 +80,7 @@ pub async fn status(
                 // taking that detour when there is something to splice in is what
                 // keeps the unbudgeted, undegraded case byte-identical.
                 if budget.is_none()
+                    && money_budget.is_none()
                     && budgeted.is_empty()
                     && spend_advice.is_none()
                     && wake_attempts.is_none()
@@ -90,6 +95,10 @@ pub async fn status(
                 if let Some(cap) = budget {
                     rows[0]["spent"] = serde_json::json!(spent);
                     rows[0]["budget"] = serde_json::json!(cap);
+                }
+                if let Some(cap) = money_budget {
+                    rows[0]["spent_micro_usd"] = serde_json::json!(spent_micro_usd);
+                    rows[0]["money_budget_micro_usd"] = serde_json::json!(cap);
                 }
                 if !budgeted.is_empty() {
                     rows[0]["context_budgeted"] = serde_json::to_value(&budgeted)
@@ -111,6 +120,13 @@ pub async fn status(
                 // the table stays byte-identical to the pre-SP-DATA-5 output.
                 if let Some(cap) = budget {
                     text.push_str(&format!("spent: {spent} / budget: {cap} tokens\n"));
+                }
+                if let Some(cap) = money_budget {
+                    text.push_str(&format!(
+                        "money spent: {} / budget: {}\n",
+                        fmt_usd(spent_micro_usd),
+                        fmt_usd(cap)
+                    ));
                 }
                 if !budgeted.is_empty() {
                     let deps: u32 = budgeted.iter().map(|t| t.dropped_deps).sum();
@@ -380,12 +396,43 @@ pub async fn wake(
     // one moment later, under the very cap they just tried to raise. Appending
     // first closes that window: any worker that can observe the wake can only ever
     // fold a journal that already includes the raise.
+    // AG-12: a money raise MOVES an existing money cap and never introduces one — the
+    // engine's fold ignores `MoneyBudgetRaised` on a run whose `RunStarted.money_budget` is
+    // `None` (cost is ledgered only while a cap is in force, so a cap introduced mid-run would
+    // be weighed against spend it never counted). Journaling it anyway and reporting `queued`
+    // would tell the operator a limit is in force that nothing enforces, so it is refused
+    // here, BEFORE anything is written — the token raise beside it included, so the command
+    // either does what was asked or nothing at all.
+    if budget.money.is_some() {
+        let events = journal
+            .load(run)
+            .await
+            .map_err(OrchestratorError::Journal)?;
+        if orchestrator::money_spend_of(&events).1.is_none() {
+            return Ok(Outcome::precondition(format!(
+                "not queued: {} was submitted without a money cap, and --budget-usd can only                  move an existing money cap, never introduce one (spend is counted only while                  a cap is in force, so a cap added now would be weighed against spend it never                  saw). Nothing was written. Submit a new run with --budget-usd to cap its                  spend, or wake this one without it.",
+                run.0
+            )));
+        }
+    }
     if let Some(b) = budget.tokens {
         journal
             .append(
                 run,
                 JournalEvent::BudgetRaised {
                     new_total_tokens: b.total_tokens,
+                },
+            )
+            .await
+            .map_err(OrchestratorError::Journal)?;
+    }
+    // The money twin of the raise above, under the same append-BEFORE-`force_wake` rule.
+    if let Some(m) = budget.money {
+        journal
+            .append(
+                run,
+                JournalEvent::MoneyBudgetRaised {
+                    new_total_micro_usd: m.total_micro_usd,
                 },
             )
             .await
@@ -1722,9 +1769,10 @@ pub async fn submit(
         )));
     }
     announce();
-    // SP-DATA-5 Task 5: `submit_budgeted` with `None` is exactly `submit` — the
-    // operator-specified cap (if any) rides on `RunStarted` from here.
-    let outcome = scheduler.submit_budgeted(run, graph, budget.tokens).await?;
+    // SP-DATA-5 / AG-12: `submit_with_budget` with `RunBudget::default()` is exactly
+    // `submit` — the operator-specified caps (token, money, both or neither) ride on
+    // `RunStarted` from here.
+    let outcome = scheduler.submit_with_budget(run, graph, budget).await?;
     if let Some(p) = &outcome.paused {
         return Ok(Outcome::ok(format!(
             "paused: {} at node {} ({})",

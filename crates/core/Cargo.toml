@@ -29,3 +29,7 @@ orchestrator-core = { package = "sensei-orchestrator-core", git = "https://githu
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 chrono = "0.4"
+tempfile = "3"
+# AG-6: a pulled registry directory is checked by loading it back with the reader `config push`
+# itself uses. Renamed: its lib is `orchestrator_store`, like `tenant-stores`.
+gateway-store = { package = "sensei-orchestrator-store", git = "https://github.com/sensei-hq/gateway", tag = "v0.11.0" }

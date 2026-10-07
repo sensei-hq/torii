@@ -137,7 +137,8 @@ worker logs exactly that.
 **A transient provider failure pauses, not fails** (AG-5). torii boots every driver with
 transient retry ON at 3 attempts (`TORII_TRANSIENT_ATTEMPTS`; the gateway's own default is off): a
 provider 500 pauses the run on a short backoff and a worker re-attempts it. A run view should
-show that pause as "retrying (attempt n of N)" rather than as a stall.
+show that pause as "retrying (attempt n of N)" rather than as a stall — `run_results` marks the
+node `retrying` for exactly that.
 
 **Effect class decides replay semantics.** `Pure` is memoized and never re-executed; `Mutation`
 gets two-phase commit and an idempotency key. Choosing it wrongly is a correctness bug, not a
@@ -251,8 +252,11 @@ error string.
 ```
 
 The per-node outputs half of this screen is backed: `torii_core::results::run_results` returns
-`{ run, status, as_of, nodes: { node, state: completed|failed|skipped, stored: inline|cas{digest,
-size}, output, unresolved, error }[] }` (`torii run results --json` prints exactly that).
+`{ run, status, as_of, nodes: { node, state: completed|failed|retrying|skipped, stored:
+inline|cas{digest, size}, output, unresolved, error }[] }` (`torii run results --json` prints
+exactly that). A node's `error` is its LAST failure — under transient retry the earlier ones are
+"retrying" notices — so a failed run's node names the same error `run status` does; a node whose
+last attempt failed transiently and whose run is paused for the retry is `retrying`, not `failed`.
 
 ### 6.3 Plan review
 Inspect a plan the planner produced before or during execution — nodes, their agents, dependencies,

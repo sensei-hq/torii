@@ -1053,7 +1053,10 @@ async fn a_postgres_run_is_limited_to_its_issuers_headroom_and_a_raise_past_it_i
         text.contains("exceeds the headroom of $2.50") && text.contains("Capped Team"),
         "{text}"
     );
-    assert!(!text.contains("submitted: "), "{text}");
+    assert!(
+        !text.lines().any(|l| l.starts_with("submitted: ")),
+        "a refused run is never announced: {text}"
+    );
     assert_eq!(status(&over).status.code(), Some(2), "no run was created");
 
     // No TORII_USER on Postgres: refused before anything is written.

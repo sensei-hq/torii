@@ -240,12 +240,13 @@ fn config_show_and_pull_on_the_memory_backend_round_trip() {
     assert!(pulled.join("agents/researcher.md").is_file());
 
     // A second pull into the now non-empty directory is refused, and says how to proceed.
+    // Exit 2 prints its result on stdout, like `config push`'s refusal.
     let out = pull(false);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(2), "{stdout}");
     assert!(
-        stderr.contains("not empty") && stderr.contains("--force"),
-        "{stderr}"
+        stdout.contains("not empty") && stdout.contains("--force"),
+        "{stdout}"
     );
     let out = pull(true);
     assert!(

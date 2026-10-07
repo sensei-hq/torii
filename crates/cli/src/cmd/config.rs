@@ -129,6 +129,54 @@ pub async fn version(src: &dyn ConfigStore, json: bool) -> Result<Outcome, CliEr
     }))
 }
 
+/// `config show` (AG-6): the live registry as JSON — `{"generation": N, "registry": {…}}` —
+/// from ONE `load_versioned` snapshot, so the generation is the one that registry is at.
+/// The read and its canonical order live in `torii_core::registry_dir`, shared with the API.
+pub async fn show(src: &dyn ConfigSource) -> Result<Outcome, CliError> {
+    let snap = torii_core::registry_dir::snapshot(src).await?;
+    Ok(Outcome::ok(
+        serde_json::to_string_pretty(&snap).map_err(|e| CliError::error(e.to_string()))?,
+    ))
+}
+
+/// `config pull <dir>` (AG-6): write the live registry as the directory `config push` reads,
+/// so a pull followed by a push of it is a no-op. A non-empty `dir` is refused (exit 2,
+/// nothing written) unless `force`; a value the directory format cannot carry is refused
+/// (exit 1, nothing written) rather than pulled as something the next push would change.
+pub async fn pull(src: &dyn ConfigSource, dir: &Path, force: bool) -> Result<Outcome, CliError> {
+    use torii_core::registry_dir::{self, PullError};
+    let snap = registry_dir::snapshot(src).await?;
+    let shown = sanitized_source(dir);
+    let report = match registry_dir::pull(&snap.registry, dir, force) {
+        Ok(r) => r,
+        Err(PullError::NotEmpty(_)) => {
+            return Ok(Outcome::precondition(format!(
+                "refused: {shown} is not empty; nothing written. Pass --force to replace the \
+                 files a push reads there (agents/*.md, skills/*.md, tools/*.json, \
+                 chains.json, grants.json) — anything else in it is left alone."
+            )));
+        }
+        Err(e) => return Err(CliError::error(format!("refusing to pull: {e}"))),
+    };
+    let count =
+        |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let mut text = format!(
+        "pulled config v{} into {shown}: {}, {}, {}, {}",
+        snap.generation,
+        count(report.agents, "agent", "agents"),
+        count(report.skills, "skill", "skills"),
+        count(report.tools, "tool", "tools"),
+        count(report.chain_bindings, "chain binding", "chain bindings"),
+    );
+    if report.removed > 0 {
+        text.push_str(&format!(
+            " (replaced {} registry file(s) already there)",
+            report.removed
+        ));
+    }
+    Ok(Outcome::ok(text))
+}
+
 /// The shared tail of both writable `plan_push` outcomes (`Apply` and a confirmed
 /// `NeedsConfirmation`): `store_and_bump_if` the generation is still `current_v`, and
 /// report the outcome.

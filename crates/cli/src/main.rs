@@ -350,6 +350,18 @@ enum ConfigAction {
         #[arg(long)]
         json: bool,
     },
+    /// Print the live registry as JSON, with the generation it is at
+    Show,
+    /// Write the live registry as the directory `config push` reads (a pull then a push of it
+    /// changes nothing)
+    Pull {
+        dir: PathBuf,
+        /// Pull into a non-empty directory: replaces the files a push reads there
+        /// (agents/*.md, skills/*.md, tools/*.json, chains.json, grants.json) and leaves
+        /// anything else alone
+        #[arg(long)]
+        force: bool,
+    },
     /// Replace the durable config from a directory and advance the generation
     Push {
         dir: PathBuf,
@@ -733,6 +745,10 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
             match action {
                 ConfigAction::Version { json } => {
                     cmd::config::version(d.config_source.as_ref(), json).await
+                }
+                ConfigAction::Show => cmd::config::show(d.config_source.as_ref()).await,
+                ConfigAction::Pull { dir, force } => {
+                    cmd::config::pull(d.config_source.as_ref(), &dir, force).await
                 }
                 ConfigAction::Push {
                     dir,

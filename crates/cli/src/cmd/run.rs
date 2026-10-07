@@ -11,6 +11,7 @@ use orchestrator_core::{
     SchedulerStore, Scope, Seq,
 };
 use std::collections::HashMap;
+use torii_core::run_budget::ChargeError;
 
 /// AG-3: a run's consecutive wake attempts since its last successful drive — the counter the
 /// scheduler store keeps and the `SchedulerStore` trait does not expose. `None` ⇒ unknown run,
@@ -154,10 +155,16 @@ pub async fn status(
                     text.push_str(&format!("spent: {spent} / budget: {cap} tokens\n"));
                 }
                 if let Some(cap) = money_budget {
-                    text.push_str(&format!(
-                        "money spent: {} / budget: {}\n",
-                        fmt_usd(spent_micro_usd),
+                    // AG-13: an issuer with no hard cap gets the unbounded sentinel — a limit that
+                    // keeps the spend ledgered, not one to read as dollars.
+                    let cap = if cap == torii_core::run_budget::UNBOUNDED_MICRO_USD {
+                        "none (no hard cap over the issuer)".to_string()
+                    } else {
                         fmt_usd(cap)
+                    };
+                    text.push_str(&format!(
+                        "money spent: {} / budget: {cap}\n",
+                        fmt_usd(spent_micro_usd)
                     ));
                 }
                 if !budgeted.is_empty() {
@@ -2008,6 +2015,17 @@ pub enum StoreLifetime {
 pub const STRANDED_PAUSE: &str = "nothing can resume it: the memory backend keeps every store \
     in this process, so no worker, wake or answer from another process can ever see this run";
 
+/// What `run submit` says of a run id that already has a schedule record.
+fn already_submitted(run: RunId, existing: &orchestrator_core::ScheduledRun) -> Outcome {
+    Outcome::precondition(format!(
+        "already submitted: {} is {} — a run id can only be submitted once. Use \
+         `torii run status {}` to inspect it.",
+        run.0,
+        existing.status.as_str(),
+        run.0
+    ))
+}
+
 /// Submit a fresh run and drive it inline. Blocks until the run pauses or ends —
 /// there is no `--detach` yet, because `enqueue` stamps the row `waking`, so a
 /// detached run would only be picked up once the lease expired and the crash-reclaim
@@ -2046,13 +2064,7 @@ pub async fn submit(
     // `rows_affected == 0`), so that race degrades to the old loud error rather than
     // double-enqueueing — which is why the check belongs here and not in place of it.
     if let Some(existing) = scheduler.status(run).await? {
-        return Ok(Outcome::precondition(format!(
-            "already submitted: {} is {} — a run id can only be submitted once. Use \
-             `torii run status {}` to inspect it.",
-            run.0,
-            existing.status.as_str(),
-            run.0
-        )));
+        return Ok(already_submitted(run, &existing));
     }
     announce();
     // SP-DATA-5 / AG-12: `submit_with_budget` with `RunBudget::default()` is exactly
@@ -2107,8 +2119,60 @@ pub async fn submit_charged(
     lifetime: StoreLifetime,
     announce: impl FnOnce(),
 ) -> Result<Outcome, CliError> {
-    let _ = charging;
-    submit(scheduler, run, graph, budget, lifetime, announce).await
+    let Some(c) = charging else {
+        return submit(scheduler, run, graph, budget, lifetime, announce).await;
+    };
+    let user = c.user.ok_or_else(|| {
+        CliError::error(format!(
+            "{} is not set.\n\
+             On Postgres every run is charged to the budget of the user who submits it: its money \
+             limit is that user's headroom under torii's caps (their own unit, their groups and \
+             every unit above them), and what it spends is recorded there. Set {} to your user \
+             id (a core.profiles id in this tenant).",
+            crate::boot::ENV_USER,
+            crate::boot::ENV_USER
+        ))
+    })?;
+    // `submit`'s own duplicate pre-check, BEFORE anything is charged: a taken run id is reported
+    // as taken, not as a charge refusal.
+    if let Some(existing) = scheduler.status(run).await? {
+        return Ok(already_submitted(run, &existing));
+    }
+    let issuer = c
+        .charges
+        .resolve_issuer(user)
+        .await
+        .map_err(|e| CliError::error(format!("{}: {e}", crate::boot::ENV_USER)))?;
+    let requested = budget.money.map(|m| m.total_micro_usd);
+    let money = match c.charges.admit(run, issuer, requested).await {
+        Ok(m) => m,
+        Err(
+            e @ (ChargeError::OverHeadroom { .. }
+            | ChargeError::NoBudgetNode
+            | ChargeError::AlreadyScheduled(_)),
+        ) => {
+            return Ok(Outcome::precondition(format!(
+                "not submitted: {e}. Nothing was written."
+            )));
+        }
+        Err(e) => return Err(CliError::error(e.to_string())),
+    };
+    let budget = RunBudget {
+        money: Some(money),
+        ..budget
+    };
+    let out = submit(scheduler, run, graph, budget, lifetime, announce).await;
+    // Whatever the drive ended in — paused, failed or completed — what it spent is recorded on
+    // the issuer's nodes now. A failure here loses nothing: the journal holds the spend and the
+    // next `worker serve` tick records it (`RunCharges::settle_pending`).
+    if let Err(e) = c.charges.settle(c.journal, run).await {
+        tracing::warn!(
+            run = %run.0,
+            "the run's spend is not recorded on its budget nodes yet ({e}); the next worker tick \
+             records it"
+        );
+    }
+    out
 }
 
 /// [`wake`], with a money raise checked against the caps the run is charged to.
@@ -2120,7 +2184,35 @@ pub async fn wake_charged(
     now: DateTime<Utc>,
     budget: RunBudget,
 ) -> Result<Outcome, CliError> {
-    let _ = charging;
+    if let (Some(c), Some(m)) = (charging, budget.money) {
+        // Only a paused run with a money cap reaches the check: anything else `wake` refuses
+        // itself, in its own words, before writing anything.
+        let paused = store
+            .status(run)
+            .await?
+            .is_some_and(|r| r.status == RunStatus::Paused);
+        let capped = paused
+            && orchestrator::money_spend_of(
+                &journal
+                    .load(run)
+                    .await
+                    .map_err(OrchestratorError::Journal)?,
+            )
+            .1
+            .is_some();
+        if capped {
+            match c.charges.check_raise(journal, run, m.total_micro_usd).await {
+                Ok(()) => {}
+                Err(e @ (ChargeError::OverHeadroom { .. } | ChargeError::NotCharged(_))) => {
+                    return Ok(Outcome::precondition(format!(
+                        "not queued: {} — {e}. Nothing was written.",
+                        run.0
+                    )));
+                }
+                Err(e) => return Err(CliError::error(e.to_string())),
+            }
+        }
+    }
     wake(store, journal, run, now, budget).await
 }
 

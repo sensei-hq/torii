@@ -13,10 +13,13 @@ pub async fn connect(database_url: &str, max: u32) -> Result<PgPool, sqlx::Error
 
 /// Resolve an operator-supplied tenant — a UUID or a `core.tenants.slug` — to its id.
 ///
-/// Matched against BOTH columns, always: slugs are free text, so a slug can look exactly like
-/// another tenant's id (an org can be named after one). An input matching one tenant by id and
-/// a DIFFERENT tenant by slug is refused as ambiguous, naming both — never silently resolved to
-/// either. A typo'd id that matches nothing is refused too, rather than opening an empty scope.
+/// Matched against BOTH columns, always. A slug can never look like an id — the
+/// `core.tenants.slug` CHECK `tenants_slug_not_uuid` refuses one, and org create derives an
+/// `org-`-prefixed slug from a UUID-shaped name (AG-7) — so an id resolves only to its own
+/// tenant. Should a row ever slip past that (a database without the CHECK), an input matching
+/// one tenant by id and a DIFFERENT tenant by slug is still refused as ambiguous, naming both —
+/// never silently resolved to either. A typo'd id that matches nothing is refused too, rather
+/// than opening an empty scope.
 pub async fn resolve_tenant(pool: &PgPool, tenant: &str) -> anyhow::Result<Uuid> {
     let tenant = tenant.trim();
     let as_id = Uuid::parse_str(tenant).ok();

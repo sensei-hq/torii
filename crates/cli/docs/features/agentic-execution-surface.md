@@ -134,6 +134,11 @@ preference, so it must be presented as consequential.
 the model will call and fail on — a burned turn. The UI should show which declared tools are
 actually backed.
 
+**A tenant is named by its id or its slug, and the two cannot collide.** Every command acts for
+one tenant (`TORII_TENANT`), given either way. A slug is never UUID-shaped — the database refuses
+one (`tenants_slug_not_uuid`), and an org named after an id gets an `org-`-prefixed slug — so an
+id always means its own tenant. A tenant picker can accept either without disambiguating.
+
 **A human-backed agent resolves no chain.** `backed_by: Human` changes the semantics: a person
 answers, there is no model call, and the chain rules do not apply. The form must change shape.
 

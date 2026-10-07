@@ -124,15 +124,33 @@ A worker serves **one tenant** (`TORII_TENANT`): its sweeps claim only that tena
 ## Observing and intervening
 
 ```sh
-torii run status <id>            # one run's schedule record (+ consecutive wake attempts while retrying)
-torii run list-paused            # everything awaiting a wake, and nodes awaiting a signal
+torii run status <id>            # one run's schedule record (+ token/money spend, wake attempts,
+                                 #   pending tool confirmations and escalations)
+torii run list-paused            # everything awaiting a wake, and what each run waits on
 torii run signal <...>           # deliver a decision to an AwaitSignal node
 torii run gate <...>             # decide a HumanGate or a Loop's human gate
 torii run agent <...>            # answer a human-backed Agent — a role a person fills
+torii run tool approve|reject <id> --call <effect_id>
+                                 # decide one confirm-before-run tool call
 torii run wake <id>              # queue a paused run for the next worker tick
 torii run cancel <id>            # cancel a non-terminal run so it is never woken
 torii run prune --older-than <>  # delete terminal run records
 ```
+
+**Budgets.** `run submit --budget-tokens N` caps a run's tokens and `--budget-usd D` its money
+(whole micro-dollars: at most 6 decimal places, refused rather than rounded); either, both or
+neither. A run that stops at a cap pauses, `run status` shows the spend against it, and `run wake
+--budget-tokens`/`--budget-usd` moves the cap before re-queueing. A money raise only moves a cap the
+run was SUBMITTED with — on a run without one it is refused and nothing is written. Under a money
+cap every model on the chains the run uses must declare pricing (an explicit zero for a free or
+local model); an unpriced one is refused.
+
+**Confirmations and escalations.** A `tool:` row in `list-paused` (and a `tool confirmation
+pending:` line in `status`) is one call of a `confirm_tools` tool waiting for a person; answer it
+with `run tool approve|reject <id> --call <effect_id>`. A call past its deadline, already decided,
+or already settled is refused before anything is written. An escalated question shows its current
+holder (`agent (escalated to <agent>):`) and that hop's deadline, and is answered with `run agent
+answer` as before. `--as` on every verb is attribution, not authentication.
 
 Exit codes: `0` ok · `1` error, including a run that executed and failed · `2` not-found,
 precondition-not-met, or a result printable but not the unqualified success you asked for. Exit 1

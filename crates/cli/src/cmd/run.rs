@@ -1482,13 +1482,71 @@ pub fn parse_budget_tokens(s: &str) -> Result<u64, String> {
 
 /// AG-12: parse `--budget-usd` (whole or fractional US dollars) into integer micro-dollars,
 /// the unit `MoneyBudget` is denominated in.
-pub fn parse_budget_usd(_s: &str) -> Result<u64, String> {
-    Err(String::new())
+///
+/// **Decimal, never `f64`.** The engine keeps money as integers so that "spent >= cap" cannot
+/// depend on summation order; parsing the cap through a float would reintroduce binary
+/// rounding at the one place a human typed an exact figure (`0.29 * 1e6` is
+/// `289999.99999999994` in `f64`). So the digits are split at the point and scaled as
+/// integers.
+///
+/// Accepted: `D`, `D.`, `D.F` and `.F`, with at most six fractional digits — a micro-dollar is
+/// the engine's resolution, and a finer figure is REFUSED rather than rounded, because either
+/// rounding direction silently moves a limit the operator stated. No sign, no exponent, no
+/// currency symbol, no separators: each is a spelling whose meaning a parser would have to
+/// guess. Zero is refused like a sub-floor `--budget-tokens`: a run capped at $0 is refused
+/// every priced call, so it would pause having done nothing (`run cancel` halts a run).
+pub fn parse_budget_usd(s: &str) -> Result<u64, String> {
+    let t = s.trim();
+    let bad = |why: &str| format!("invalid --budget-usd {t:?}: {why}");
+    let (whole, frac) = t.split_once('.').unwrap_or((t, ""));
+    let digits = |p: &str| p.bytes().all(|b| b.is_ascii_digit());
+    if (whole.is_empty() && frac.is_empty()) || !digits(whole) || !digits(frac) {
+        return Err(bad(
+            "expected a plain dollar amount such as 5, 0.25 or 12.50 — no sign, exponent, \
+             currency symbol or separators",
+        ));
+    }
+    const PLACES: usize = 6;
+    if frac.len() > PLACES {
+        return Err(bad(&format!(
+            "a money cap is kept in whole micro-dollars ($0.000001), so it takes at most \
+             {PLACES} decimal places — it is refused rather than rounded, because rounding \
+             either way would move the limit you stated"
+        )));
+    }
+    let overflow = || bad("too large to represent in micro-dollars");
+    let whole: u64 = if whole.is_empty() {
+        0
+    } else {
+        whole.parse().map_err(|_| overflow())?
+    };
+    let frac: u64 = if frac.is_empty() {
+        0
+    } else {
+        format!("{frac:0<PLACES$}")
+            .parse()
+            .map_err(|_| overflow())?
+    };
+    let micro = whole
+        .checked_mul(orchestrator_core::MICRO_USD_PER_USD)
+        .and_then(|w| w.checked_add(frac))
+        .ok_or_else(overflow)?;
+    if micro == 0 {
+        return Err(bad(
+            "a $0 cap refuses every priced model call, so the run would pause before doing \
+             any work. To halt a run, use `torii run cancel`",
+        ));
+    }
+    Ok(micro)
 }
 
-/// AG-12: render integer micro-dollars as a dollar figure.
-pub fn fmt_usd(_micro: u64) -> String {
-    String::new()
+/// AG-12: render integer micro-dollars as a dollar figure — exact (all six places when they
+/// are needed, so a sub-cent spend never reads as `$0.00`), and at least cents otherwise.
+pub fn fmt_usd(micro: u64) -> String {
+    let per = orchestrator_core::MICRO_USD_PER_USD;
+    let frac = format!("{:06}", micro % per);
+    let frac = frac.trim_end_matches('0');
+    format!("${}.{frac:0<2}", micro / per)
 }
 
 /// Parse a retention window: `30d`, `12h`, `90m`, `45s`.

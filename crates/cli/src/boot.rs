@@ -1179,6 +1179,41 @@ mod tests {
         );
     }
 
+    /// AG-5: unset, `TORII_WAKE_LEASE` is an explicit 60s; set, it takes `--interval` units; a
+    /// bad one PARSES as an environment (the light tier never reads it) and is refused by the
+    /// heavy tier, naming the variable and echoing the value.
+    #[test]
+    fn the_wake_lease_is_read_and_a_bad_one_is_refused_by_the_heavy_tier() {
+        let e = env_config_from(getter(&[(ENV_DATABASE_URL, "postgres://h/db")])).expect("ok");
+        assert_eq!(
+            require_drive_policy(&e).expect("default").wake_lease,
+            chrono::Duration::seconds(60)
+        );
+        let e = env_config_from(getter(&[
+            (ENV_DATABASE_URL, "postgres://h/db"),
+            (ENV_WAKE_LEASE, " 10m "),
+        ]))
+        .expect("ok");
+        assert_eq!(
+            require_drive_policy(&e).expect("read").wake_lease,
+            chrono::Duration::minutes(10)
+        );
+        for bad in ["0s", "10", "soon"] {
+            let e = env_config_from(getter(&[
+                (ENV_DATABASE_URL, "postgres://h/db"),
+                (ENV_WAKE_LEASE, bad),
+            ]))
+            .expect("a bad drive policy must not fail the environment the light tier reads");
+            let err = require_drive_policy(&e).expect_err("the heavy tier must refuse");
+            assert_eq!(err.code, crate::errors::EXIT_ERROR);
+            assert!(
+                err.message.contains(ENV_WAKE_LEASE) && err.message.contains(bad),
+                "{}",
+                err.message
+            );
+        }
+    }
+
     /// The heavy tier's refusal of a bad `TORII_WAKE_*` set: the environment itself PARSES
     /// (the light tier never reads the policy), and [`require_wake_retry`] is what refuses.
     fn wake_err(pairs: &[(&str, &str)]) -> CliError {

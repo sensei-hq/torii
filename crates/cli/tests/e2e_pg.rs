@@ -757,9 +757,15 @@ async fn the_operator_loop_drives_a_paused_run_to_completion_across_processes() 
         listed.text
     );
 
-    let shown = torii::cmd::run::status(store_b.as_ref(), journal_b.as_ref(), run, true)
-        .await
-        .expect("status");
+    let shown = torii::cmd::run::status(
+        store_b.as_ref(),
+        &torii::cmd::run::NoWakeAttemptCounts,
+        journal_b.as_ref(),
+        run,
+        true,
+    )
+    .await
+    .expect("status");
     assert_eq!(shown.code, torii::errors::EXIT_OK, "{}", shown.text);
     assert!(
         shown.text.contains(&marker) && shown.text.contains("\"paused\""),
@@ -1163,9 +1169,15 @@ async fn a_budget_exhausted_run_is_raised_by_an_operator_and_completes_in_a_fres
     // model credentials, and shares nothing in-process with A.
     let store_b = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
     let journal_b = Arc::new(PgJournal::new(db.pool().await, db.tenant));
-    let shown = torii::cmd::run::status(store_b.as_ref(), journal_b.as_ref(), run, false)
-        .await
-        .expect("status");
+    let shown = torii::cmd::run::status(
+        store_b.as_ref(),
+        &torii::cmd::run::NoWakeAttemptCounts,
+        journal_b.as_ref(),
+        run,
+        false,
+    )
+    .await
+    .expect("status");
     assert_eq!(shown.code, torii::errors::EXIT_OK, "{}", shown.text);
     assert!(
         shown

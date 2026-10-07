@@ -565,8 +565,11 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 let run = parse_run_id(&run_id)?;
                 let d = boot::light(&env).await?;
                 let now = chrono::Utc::now();
-                let budget = budget_tokens
-                    .map(|total_tokens| orchestrator_core::TokenBudget { total_tokens });
+                let budget = orchestrator_core::RunBudget {
+                    tokens: budget_tokens
+                        .map(|total_tokens| orchestrator_core::TokenBudget { total_tokens }),
+                    money: None,
+                };
                 cmd::run::wake(
                     d.scheduler_store.as_ref(),
                     d.journal.as_ref(),
@@ -617,8 +620,11 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 })?;
                 let d =
                     boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
-                let budget = budget_tokens
-                    .map(|total_tokens| orchestrator_core::TokenBudget { total_tokens });
+                let budget = orchestrator_core::RunBudget {
+                    tokens: budget_tokens
+                        .map(|total_tokens| orchestrator_core::TokenBudget { total_tokens }),
+                    money: None,
+                };
                 // Print the id BEFORE driving: an operator who loses the terminal
                 // must still be able to find the run. `submit` calls this AFTER its
                 // duplicate pre-check, so a rejected submit no longer announces an

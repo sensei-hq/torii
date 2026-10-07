@@ -961,3 +961,55 @@ fn config_push_help_says_gateway_config_is_memory_only() {
     assert!(help.contains("TORII_BACKEND=memory"), "{help}");
     assert!(!help.contains("Optional: without it"), "{help}");
 }
+
+/// AG-12: `--budget-usd` is wired on BOTH `run submit` and `run wake`, through the shared
+/// exact parser — a bad amount is a clap error naming the flag, before any connection, and a
+/// good one gets past clap to the environment check.
+#[test]
+fn both_run_submit_and_run_wake_take_budget_usd_through_the_exact_parser() {
+    let run = "00000000-0000-0000-0000-000000000001";
+    for args in [
+        vec!["run", "submit", "--graph", "/nonexistent.json"],
+        vec!["run", "wake", run],
+    ] {
+        let mut bad = args.clone();
+        bad.extend(["--budget-usd", "0.0000001"]);
+        let out = torii().args(&bad).output().expect("runs");
+        assert_eq!(out.status.code(), Some(2), "clap usage error for {bad:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("--budget-usd") && err.contains("micro-dollar"),
+            "`{}` must refuse over-precision with the parser's own reason: {err}",
+            bad.join(" ")
+        );
+
+        let mut good = args.clone();
+        good.extend(["--budget-usd", "0.29"]);
+        let out = torii().args(&good).output().expect("runs");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("DATABASE_URL"),
+            "`{}` must parse and reach the environment check: {err}",
+            good.join(" ")
+        );
+
+        let mut help = args[..2].to_vec();
+        help.push("--help");
+        let out = torii().args(&help).output().expect("runs");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            text.contains("--budget-usd"),
+            "`{}` must document the flag:\n{text}",
+            help.join(" ")
+        );
+    }
+    let out = torii()
+        .args(["run", "wake", "--help"])
+        .output()
+        .expect("runs");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("never introduce"),
+        "`run wake --help` must say a raise cannot introduce a money cap:\n{text}"
+    );
+}

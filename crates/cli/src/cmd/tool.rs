@@ -383,7 +383,8 @@ pub async fn decide(
 mod tests {
     use super::*;
     use crate::cmd::run::tests::{
-        FailingForceWakeStore, append_tool_confirm, now, paused_store, tool_confirm_journal,
+        FailingForceWakeStore, FailsTheReread, append_tool_confirm, assert_reports_wake_sent, now,
+        paused_store, tool_confirm_journal,
     };
     use crate::errors::{EXIT_OK, EXIT_PRECONDITION};
     use orchestrator_core::{
@@ -704,6 +705,22 @@ mod tests {
             out.text
         );
         assert_eq!(decided_rows(&j, run).await.len(), 1);
+    }
+
+    /// #55: `decide`'s STATUS re-read faults after `force_wake` committed — the wake was
+    /// sent, so "not queued" (and "run `torii run wake`") would be false.
+    #[tokio::test]
+    async fn a_status_reread_fault_after_the_wake_reports_wake_sent() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let (inner, j) = pending(run).await;
+        let s = FailsTheReread(inner, Default::default());
+
+        let out = decide(&s, &j, run, CALL, None, true, "alice", None, now())
+            .await
+            .expect("a post-wake fault is reported, not `?`-ed");
+
+        assert_eq!(decided_rows(&j, run).await.len(), 1);
+        assert_reports_wake_sent(&out, run, &s.0).await;
     }
 
     #[tokio::test]

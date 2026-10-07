@@ -54,7 +54,8 @@ convenient for a first boot:
 
 ```
 <dir>/agents/*.md     # frontmatter: name, area, kind, chain | chains, tools, skills,
-                      #              backed_by, timeout, default_planner
+                      #              backed_by, timeout, default_planner, tool_limits,
+                      #              confirm_tools, confirm_timeout, escalate_to
                       # body = the agent's system_prompt
 <dir>/skills/*.md     # frontmatter: name, description, activate_on: [kw, ...]
                       # body = the skill text composed into the prompt
@@ -74,6 +75,15 @@ no SLA to wait on. `default_planner: true` designates **the** `area: planning` a
 agent may carry it, a second is refused at load, and it is refused outside `area: planning`, where
 it would designate nothing. Both keys are read literally: `default_planner: yes` is a loud parse
 error, never a silent "unmarked".
+
+Tool policy and escalation (gateway AG-15): `tool_limits: [shell=3]` caps how many times one
+invocation of the agent may call a tool (further calls are refused to the model as
+`call_limit_reached`); `confirm_tools: [deploy]` makes every call of a listed tool wait for a person
+(`torii run tool approve|reject`), up to `confirm_timeout: 2h` if given, after which the model is
+told `not_confirmed`; `escalate_to: legal-lead` hands a human-backed agent's unanswered question to
+another human-backed agent when its `timeout` expires. Every one names only tools the agent lists,
+and `config push` refuses a malformed or impossible policy (a ceiling of 0, a confirmation on an
+unlisted tool, an escalation from a model-backed agent or round a cycle) at load.
 
 Per-tool `grants` are **not** agent frontmatter. They live in the registry root as
 `<dir>/grants.json` (`{"<agent>": {"<tool>": <permissions>}}`), beside the optional

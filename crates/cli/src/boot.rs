@@ -1639,17 +1639,18 @@ mod tests {
         )
     }
 
+    /// `run submit`'s inline drive. Its `Outcome` is not returned: a run that drove to `failed`
+    /// is an `Err` there, and every caller asserts on the run's recorded status instead.
     async fn submit_graph(d: &HeavyDeps, graph: orchestrator_core::Graph) -> RunId {
         let run = RunId(uuid::Uuid::new_v4());
-        crate::cmd::run::submit(
+        let _ = crate::cmd::run::submit(
             &d.scheduler,
             run,
             graph,
             orchestrator_core::RunBudget::default(),
             || {},
         )
-        .await
-        .expect("submit");
+        .await;
         run
     }
 
@@ -1676,6 +1677,58 @@ mod tests {
             provider.max_in_flight(),
             2,
             "TORII_MAP_CONCURRENCY=2 must cap the fan-out at the provider"
+        );
+    }
+
+    /// One model call on chain `c`.
+    fn model_call() -> orchestrator_core::Graph {
+        graph_of(
+            "ask",
+            orchestrator_core::NodeKind::ModelCall {
+                chain: "c".into(),
+                payload: serde_json::json!({"prompt": "hello"}),
+            },
+        )
+    }
+
+    /// AG-5: transient-failure retry is ON by default in torii (3 attempts) — one provider 500
+    /// pauses the run on a backoff instead of failing it — and `TORII_TRANSIENT_ATTEMPTS=1`
+    /// turns it off, so the same 500 is terminal.
+    #[tokio::test]
+    async fn heavy_retries_a_transient_provider_failure_by_default() {
+        let provider = FakeProvider::start(500, std::time::Duration::ZERO).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (env, gw) = memory_env(dir.path(), &provider.gateway_json(), &[]);
+        let d = boot(&env, &gw).await;
+        let run = submit_graph(&d, model_call()).await;
+        let st = d.scheduler.status(run).await.unwrap().expect("row");
+        assert_eq!(provider.calls(), 1, "precondition: the provider was called");
+        assert_eq!(
+            st.status,
+            orchestrator_core::RunStatus::Paused,
+            "by default one transient 500 must pause for a retry, not fail the run: {:?}",
+            st.reason
+        );
+        assert!(
+            st.reason
+                .as_deref()
+                .is_some_and(|r| r.contains("attempt 1 of 3")),
+            "{:?}",
+            st.reason
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let (env, gw) = memory_env(
+            dir.path(),
+            &provider.gateway_json(),
+            &[("TORII_TRANSIENT_ATTEMPTS", "1")],
+        );
+        let d = boot(&env, &gw).await;
+        let run = submit_graph(&d, model_call()).await;
+        assert_eq!(
+            d.scheduler.status(run).await.unwrap().expect("row").status,
+            orchestrator_core::RunStatus::Failed,
+            "TORII_TRANSIENT_ATTEMPTS=1 turns retry off"
         );
     }
 

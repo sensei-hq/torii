@@ -596,10 +596,16 @@ pub async fn answer(
     if let Err(e) = store.force_wake(run, now).await {
         return Ok(unread("the wake", &e));
     }
+    // A re-read fault comes AFTER `force_wake` committed: the wake was sent, so `unread`'s
+    // "not queued" would be false (#55) — `wake_sent_unread` says so and points at `run status`.
+    let durable = format!("{shown}'s answer is journaled durably (seq {appended})");
+    let reread = |what: &str, e: &dyn std::fmt::Display| {
+        crate::cmd::wake_sent_unread(&durable, run, what, e)
+    };
     let after = match store.status(run).await {
         Ok(Some(s)) => s,
-        Ok(None) => return Ok(unread("the status re-read", &"the run vanished mid-answer")),
-        Err(e) => return Ok(unread("the status re-read", &e)),
+        Ok(None) => return Ok(reread("the status re-read", &"the run vanished mid-answer")),
+        Err(e) => return Ok(reread("the status re-read", &e)),
     };
 
     // The JOURNAL is re-read too, not just the scheduler row — and that is the whole point.
@@ -611,7 +617,7 @@ pub async fn answer(
     // refuses every non-paused run.
     let after_events = match journal.load(run).await {
         Ok(evs) => evs,
-        Err(e) => return Ok(unread("the journal re-read", &e)),
+        Err(e) => return Ok(reread("the journal re-read", &e)),
     };
     let SignalStateAt { state, at } = signal_state_at(&after_events, &node);
     if let Some(at) = at {

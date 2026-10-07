@@ -5,7 +5,9 @@
 //! "object storage"). [`SupabaseStorage`] talks the Storage REST API as `service_role`;
 //! [`InMemoryStore`] backs hermetic tests.
 
+#[cfg(test)]
 use std::collections::HashMap;
+#[cfg(test)]
 use std::sync::Mutex;
 
 use async_trait::async_trait;
@@ -205,12 +207,15 @@ impl ObjectStore for SupabaseStorage {
 }
 
 /// Hermetic in-memory store for tests. `signed_*` return a synthetic `mem://{path}?ttl=…` URL so the
-/// scope/TTL contract is testable without a network.
+/// scope/TTL contract is testable without a network. Test-only (`cfg(test)`): prod wires
+/// [`SupabaseStorage`].
+#[cfg(test)]
 #[derive(Default)]
 pub struct InMemoryStore {
     map: Mutex<HashMap<String, Vec<u8>>>,
 }
 
+#[cfg(test)]
 #[async_trait]
 impl ObjectStore for InMemoryStore {
     async fn put(&self, path: &str, bytes: &[u8], _content_type: &str) -> Result<(), RagError> {

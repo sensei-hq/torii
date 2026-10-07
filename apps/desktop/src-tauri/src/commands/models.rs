@@ -365,7 +365,7 @@ pub async fn pull_model(app: AppHandle, id: String) -> Result<(), String> {
         let app = app.clone();
         let id = id.clone();
         move |done: u64, total: Option<u64>| {
-            let pct = total.map(|t| if t > 0 { done * 100 / t } else { 0 });
+            let pct = total.map(|t| (done * 100).checked_div(t).unwrap_or(0));
             let _ = app.emit(
                 "model-pull-progress",
                 serde_json::json!({ "id": id, "done": done, "total": total, "pct": pct }),

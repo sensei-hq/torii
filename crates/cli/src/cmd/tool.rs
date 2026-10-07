@@ -718,6 +718,38 @@ mod tests {
         }
     }
 
+    /// Every other waiting verb aimed at a node whose only wait is a pending tool call refuses
+    /// it NAMING this verb and the call — the cross-refusal rule the other kinds keep, so a
+    /// wrong guess costs a retype and never a durable row nothing reads.
+    #[tokio::test]
+    async fn the_other_waiting_verbs_point_a_pending_tool_call_at_run_tool() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let (s, j) = pending(run).await;
+        let before = j.load(run).await.unwrap().len();
+        let want = format!("torii run tool approve {} --call {CALL}", run.0);
+
+        let outs = [
+            crate::cmd::run::signal(&s, &j, run, deployer(), serde_json::json!("ok"), now())
+                .await
+                .unwrap(),
+            crate::cmd::gate::decide(&s, &j, run, deployer(), "approve", "a", None, now())
+                .await
+                .unwrap(),
+            crate::cmd::human::answer(&s, &j, run, deployer(), "ok", "a", now())
+                .await
+                .unwrap(),
+        ];
+        for out in outs {
+            assert_eq!(out.code, EXIT_PRECONDITION, "{}", out.text);
+            assert!(
+                out.text.contains(&want),
+                "must name the verb that works: {}",
+                out.text
+            );
+        }
+        assert_eq!(j.load(run).await.unwrap().len(), before, "nothing written");
+    }
+
     /// Two pending calls on one node: deciding one leaves the other pending.
     #[tokio::test]
     async fn deciding_one_call_leaves_the_nodes_other_call_pending() {

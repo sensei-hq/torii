@@ -385,3 +385,203 @@ async fn ag15_agent_policy_keys_round_trip_through_the_postgres_registry() {
         "the stored policy must compare equal to what was authored: {again}"
     );
 }
+
+/// AG-4 (#33) done-when, at the BINARY on Postgres, per tenant: `torii run results` returns a
+/// completed run's node outputs — one small enough to sit inline in the executor's checkpoint,
+/// and one over the CAS threshold that is stored as a ref into the tenant's CAS and has to be
+/// resolved — and another tenant asking for the same run gets the not-found every unknown run
+/// gets, with nothing of the run in it.
+///
+/// No model: `gate` waits for a signal and `review` is a human-backed role, so the two outputs
+/// are a signal payload and a human answer. The answer is sized so the node's output
+/// (`{text, actor}`) serializes past the executor's 4096-byte CAS threshold while the text
+/// itself stays under the 4096-byte answer cap.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn run_results_returns_a_completed_runs_outputs_incl_a_cas_ref_and_another_tenant_gets_not_found()
+ {
+    let Some(url) = db_url() else { return };
+    let t = Tenant::new(&url).await;
+    let dir = tempfile::tempdir().unwrap();
+    let reg = dir.path().join("registry-results");
+    std::fs::create_dir_all(reg.join("agents")).unwrap();
+    std::fs::write(
+        reg.join("agents/reviewer.md"),
+        "---\nname: reviewer\narea: review\nkind: lead\ntools: []\nskills: []\n\
+         backed_by: human\n---\nYou review.\n",
+    )
+    .unwrap();
+    ok(&t
+        .torii()
+        .args(["config", "push", "--yes"])
+        .arg(&reg)
+        .output()
+        .expect("spawn"));
+
+    let graph = dir.path().join("graph.json");
+    let g = Graph {
+        nodes: vec![
+            Node {
+                id: NodeId("gate".into()),
+                kind: NodeKind::AwaitSignal { timeout: None },
+                deps: vec![],
+            },
+            Node {
+                id: NodeId("review".into()),
+                kind: NodeKind::Agent {
+                    agent: orchestrator_core::AgentRef("reviewer".into()),
+                    input: serde_json::json!("review clause 7"),
+                    phase: None,
+                },
+                deps: vec![],
+            },
+        ],
+    };
+    std::fs::write(&graph, serde_json::to_string(&g).unwrap()).unwrap();
+    let submitted = ok(&t
+        .torii()
+        .env("TORII_FENCE_VERSION", "v1")
+        .args(["run", "submit", "--graph"])
+        .arg(&graph)
+        .output()
+        .expect("spawn"));
+    let run = submitted
+        .lines()
+        .find_map(|l| l.strip_prefix("submitted: "))
+        .expect("the run id is announced")
+        .trim()
+        .to_string();
+
+    ok(&t
+        .torii()
+        .args(["run", "signal", &run, "--node", "gate", "--payload"])
+        .arg(r#"{"decision":"approved"}"#)
+        .output()
+        .expect("spawn"));
+    let answer: String = "clause seven reads fine. "
+        .repeat(200)
+        .chars()
+        .take(4090)
+        .collect();
+    let answer_file = dir.path().join("answer.txt");
+    std::fs::write(&answer_file, &answer).unwrap();
+    ok(&t
+        .torii()
+        .args([
+            "run", "agent", "answer", &run, "--node", "review", "--as", "alice",
+        ])
+        .arg("--text-file")
+        .arg(&answer_file)
+        .output()
+        .expect("spawn"));
+    ok(&t
+        .torii()
+        .env("TORII_FENCE_VERSION", "v1")
+        .args(["worker", "serve", "--once"])
+        .output()
+        .expect("spawn"));
+
+    // The text table: both nodes, the CAS-stored one marked as such.
+    let table = ok(&t
+        .torii()
+        .args(["run", "results", &run])
+        .output()
+        .expect("spawn"));
+    assert!(table.contains("completed"), "{table}");
+    assert!(
+        table
+            .lines()
+            .any(|l| l.starts_with("gate") && l.contains("approved")),
+        "{table}"
+    );
+    assert!(
+        table
+            .lines()
+            .any(|l| l.starts_with("review") && l.contains("cas ")),
+        "{table}"
+    );
+
+    // --json: the whole result, the CAS ref resolved to the answer.
+    let json: serde_json::Value = serde_json::from_str(&ok(&t
+        .torii()
+        .args(["run", "results", &run, "--json"])
+        .output()
+        .expect("spawn")))
+    .expect("--json is JSON");
+    assert_eq!(json["run"], serde_json::json!(run));
+    assert_eq!(json["status"], "completed");
+    let nodes = json["nodes"].as_array().expect("nodes");
+    let node = |id: &str| {
+        nodes
+            .iter()
+            .find(|n| n["node"] == id)
+            .unwrap_or_else(|| panic!("no {id}: {json}"))
+            .clone()
+    };
+    assert_eq!(node("gate")["stored"]["kind"], "inline", "{json}");
+    assert_eq!(node("gate")["output"]["decision"], "approved", "{json}");
+    let review = node("review");
+    assert_eq!(review["stored"]["kind"], "cas", "{json}");
+    assert_eq!(review["output"]["text"], serde_json::json!(answer));
+    assert_eq!(review["output"]["actor"], "alice");
+    // The ref really is a blob in THIS tenant's CAS.
+    let digest = review["stored"]["digest"]
+        .as_str()
+        .expect("digest")
+        .to_string();
+    let pool = torii_core::connect(&url, 1).await.expect("connect");
+    let (n,): (i64,) =
+        sqlx::query_as("select count(*) from runs.cas_blobs where tenant_id = $1 and digest = $2")
+            .bind(t.id)
+            .bind(&digest)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(n, 1, "the review output lives in the tenant's CAS");
+
+    // --node: one node.
+    let one: serde_json::Value = serde_json::from_str(&ok(&t
+        .torii()
+        .args(["run", "results", &run, "--node", "review", "--json"])
+        .output()
+        .expect("spawn")))
+    .expect("--node --json is JSON");
+    assert_eq!(one["node"], "review");
+    assert_eq!(one["output"]["text"], serde_json::json!(answer));
+    let text = ok(&t
+        .torii()
+        .args(["run", "results", &run, "--node", "review"])
+        .output()
+        .expect("spawn"));
+    assert!(
+        text.contains(&answer),
+        "--node prints the whole output: {text}"
+    );
+
+    // Another tenant: the same not-found as a run that never existed — nothing of the run.
+    let other = Tenant::new(&url).await;
+    let never = uuid::Uuid::new_v4().to_string();
+    for json in [false, true] {
+        let ask = |id: &str| {
+            let mut c = other.torii();
+            c.args(["run", "results", id]);
+            if json {
+                c.arg("--json");
+            }
+            c.output().expect("spawn")
+        };
+        let (theirs, missing) = (ask(&run), ask(&never));
+        assert_eq!(theirs.status.code(), Some(2), "{theirs:?}");
+        assert_eq!(missing.status.code(), Some(2), "{missing:?}");
+        let theirs_out = String::from_utf8_lossy(&theirs.stdout).replace(&run, "<id>");
+        let missing_out = String::from_utf8_lossy(&missing.stdout).replace(&never, "<id>");
+        assert_eq!(
+            theirs_out, missing_out,
+            "another tenant's run must read exactly like no run at all"
+        );
+        assert!(!theirs_out.contains("approved") && !theirs_out.contains("clause"));
+    }
+}

@@ -298,6 +298,13 @@ it needs a screen.
 { runs: { runId, spent, cap, status }[], onRaiseCap }
 ```
 
+A money cap needs a price for every model the run can reach. `torii_core::pricing::
+unpriced_chains(graph, registry, gateway_config)` returns each reachable chain that cannot be
+priced, who uses it and why (its unpriced models, no defined model, or an unknown chain). The
+CLI's `run submit --budget-usd` refuses on it before submitting (torii#55); the API's submit
+should call the same function, so the submit screen can say which model needs a price before
+the user commits a cap.
+
 ---
 
 ## 7. What the code cannot back yet

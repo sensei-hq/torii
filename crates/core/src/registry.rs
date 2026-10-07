@@ -25,10 +25,29 @@ impl RegistryReloader {
         &self.handle
     }
 
-    /// Reload if the source's durable generation has moved since the handle's.
+    /// Reload if the source's durable generation has moved since the handle's: `Ok(Some)` with
+    /// the registry and generation now live, `Ok(None)` when nothing moved. Costs one version
+    /// read when nothing did.
+    ///
+    /// A config that fails to load or assemble is an `Err` and the last good registry stays
+    /// live (`RegistryHandle::reload` validates before it swaps), so the caller can report it
+    /// and carry on; the next refresh tries again.
+    ///
+    /// A run already in flight is unaffected: the executor pins `(registry, generation)` from
+    /// the handle once, at the start of each drive, and a swap never reaches that copy. An
+    /// unversioned source (filesystem, memory) has no durable generation to follow and is never
+    /// reloaded.
     pub async fn refresh(&self) -> Result<Option<(Arc<Registry>, u64)>, OrchestratorError> {
-        let _ = &self.source;
-        Ok(None)
+        let Some(durable) = self.source.version().await? else {
+            return Ok(None);
+        };
+        if durable == self.handle.generation() {
+            return Ok(None);
+        }
+        // `reload` reads config and generation as ONE pair, so a push landing between the
+        // version read above and this load is picked up whole, never torn.
+        self.handle.reload(self.source.as_ref()).await?;
+        Ok(Some(self.handle.snapshot()))
     }
 }
 

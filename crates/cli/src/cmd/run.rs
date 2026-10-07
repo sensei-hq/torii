@@ -2962,6 +2962,147 @@ pub(crate) mod tests {
         );
     }
 
+    /// Delegates to a real store, but every `status()` after the FIRST fails: `wake`'s
+    /// pre-check reads fine, `force_wake` commits, and the post-wake re-read faults.
+    struct FailsTheReread(InMemorySchedulerStore, std::sync::atomic::AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl SchedulerStore for FailsTheReread {
+        async fn enqueue(
+            &self,
+            run: RunId,
+            graph: &Graph,
+            now: DateTime<Utc>,
+        ) -> Result<(), OrchestratorError> {
+            self.0.enqueue(run, graph, now).await
+        }
+        async fn record_paused(
+            &self,
+            run: RunId,
+            next_wake: Option<DateTime<Utc>>,
+            reason: &str,
+        ) -> Result<(), OrchestratorError> {
+            self.0.record_paused(run, next_wake, reason).await
+        }
+        async fn record_terminal(
+            &self,
+            run: RunId,
+            status: RunStatus,
+            reason: Option<&str>,
+        ) -> Result<(), OrchestratorError> {
+            self.0.record_terminal(run, status, reason).await
+        }
+        async fn claim_due(
+            &self,
+            now: DateTime<Utc>,
+            lease: chrono::Duration,
+            limit: usize,
+        ) -> Result<Vec<(RunId, Graph)>, OrchestratorError> {
+            self.0.claim_due(now, lease, limit).await
+        }
+        async fn status(
+            &self,
+            run: RunId,
+        ) -> Result<Option<orchestrator_core::ScheduledRun>, OrchestratorError> {
+            if self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
+                return Err(OrchestratorError::Store(format!(
+                    "connection reset (password={})",
+                    hostile_password()
+                )));
+            }
+            self.0.status(run).await
+        }
+        async fn list_paused(
+            &self,
+        ) -> Result<Vec<orchestrator_core::ScheduledRun>, OrchestratorError> {
+            self.0.list_paused().await
+        }
+        async fn cancel(&self, run: RunId) -> Result<(), OrchestratorError> {
+            self.0.cancel(run).await
+        }
+        async fn count_terminal_before(
+            &self,
+            before: DateTime<Utc>,
+        ) -> Result<u64, OrchestratorError> {
+            self.0.count_terminal_before(before).await
+        }
+        async fn prune_terminal(&self, before: DateTime<Utc>) -> Result<u64, OrchestratorError> {
+            self.0.prune_terminal(before).await
+        }
+        async fn force_wake(
+            &self,
+            run: RunId,
+            now: DateTime<Utc>,
+        ) -> Result<(), OrchestratorError> {
+            self.0.force_wake(run, now).await
+        }
+    }
+
+    /// The re-read faults AFTER `force_wake` committed: the run IS queued, so the report
+    /// must not say "not queued" (nor tell the operator to wake again) — it says the wake
+    /// was sent and that its effect could not be read back, plus any raise that landed.
+    #[tokio::test]
+    async fn a_failed_reread_after_the_wake_never_claims_the_run_is_not_queued() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = FailsTheReread(paused_store(run, None).await, Default::default());
+        let journal = journal_with_money(run, Some(1_000_000), 0).await;
+
+        let out = wake(
+            &s,
+            &journal,
+            run,
+            now(),
+            RunBudget {
+                tokens: Some(TokenBudget {
+                    total_tokens: 5_000,
+                }),
+                money: None,
+            },
+        )
+        .await
+        .expect("a fault after a durable write is reported, not `?`-ed");
+
+        let t = &out.text;
+        assert!(!t.contains("not queued"), "the wake committed: {t}");
+        assert!(
+            t.contains("token cap") && t.contains("journaled durably"),
+            "{t}"
+        );
+        assert!(
+            t.contains("could not be read back") && t.contains("torii run status"),
+            "{t}"
+        );
+        assert!(
+            !t.contains(&hostile_password()),
+            "the fault is rendered safe: {t}"
+        );
+        assert_eq!(
+            s.0.status(run).await.unwrap().unwrap().next_wake,
+            Some(now()),
+            "it is queued"
+        );
+    }
+
+    /// Same fault with no raise: `force_wake` is itself a durable write, so a bare `Err`
+    /// ("it did not go through") would be just as wrong.
+    #[tokio::test]
+    async fn a_failed_reread_after_a_plain_wake_is_reported_not_errored() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = FailsTheReread(paused_store(run, None).await, Default::default());
+        let journal = journal_with_money(run, None, 0).await;
+
+        let out = wake(&s, &journal, run, now(), RunBudget::default())
+            .await
+            .expect("the wake committed, so the re-read fault is reported, not `?`-ed");
+
+        let t = &out.text;
+        assert!(!t.contains("not queued"), "{t}");
+        assert!(
+            t.contains("could not be read back") && t.contains("torii run status"),
+            "{t}"
+        );
+    }
+
     /// A raise MOVES a money cap and never introduces one: the engine's fold ignores a
     /// `MoneyBudgetRaised` on a run that started without a money cap. Journaling it anyway
     /// and reporting `queued` would tell the operator a cap is in force that nothing enforces.

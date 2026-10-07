@@ -186,8 +186,10 @@ torii run cancel <id>            # cancel a non-terminal run so it is never woke
 torii run prune --older-than <>  # delete terminal run records
 ```
 
-**Results.** `run results <id>` prints one row per node — `completed`, `failed` (with its
-error) or `skipped` — where its output is stored, and the output itself, capped to one line;
+**Results.** `run results <id>` prints one row per node — `completed`, `failed` (with the error
+it stopped on, the one `run status` names), `retrying` (its last attempt failed transiently and
+the run is paused for the retry; with that notice) or `skipped` — where its output is stored, and
+the output itself, capped to one line;
 `--node <id>` prints one node's output whole, `--json` the lot. The outputs are the executor's own
 round checkpoint — the outputs the drive itself produced — so a human-answered node (a signal, a
 gate, a human-backed agent) has its output too. One over the executor's 4096-byte threshold lives in

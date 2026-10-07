@@ -17,9 +17,14 @@
 //! AUTHENTICATION, exactly as on `run gate`: it records who claimed to decide.
 
 use crate::cmd::Outcome;
+use crate::cmd::run::{Measured, SignalState, ToolConfirmState, check_payload_size};
 use crate::errors::CliError;
+use crate::render;
 use chrono::{DateTime, Utc};
-use orchestrator_core::{ExecutionJournal, NodeId, RunId, SchedulerStore};
+use orchestrator_core::{
+    EffectId, ExecutionJournal, JournalEvent, NodeId, OrchestratorError, RunId, RunStatus,
+    SchedulerStore,
+};
 
 /// The two verbs of `run tool`. They differ only in the decision they record, so they are
 /// normalised by [`tool_decision_of`] into one [`ToolDecision`] and `dispatch` has exactly one
@@ -83,6 +88,7 @@ pub struct ToolDecision {
 
 /// Normalise a verb into the one shape [`decide`] takes.
 pub fn tool_decision_of(action: ToolAction) -> ToolDecision {
+    let approved = matches!(action, ToolAction::Approve { .. });
     let (ToolAction::Approve {
         run_id,
         call,
@@ -101,26 +107,251 @@ pub fn tool_decision_of(action: ToolAction) -> ToolDecision {
         run_id,
         call,
         node,
-        approved: false,
+        approved,
         actor: r#as,
         note,
     }
 }
 
-/// Deliver a human's decision on one confirm-before-run tool call.
+/// Scrub one operator-supplied string with the shared redactor before it is journaled —
+/// fail-CLOSED on a non-string result, as `run gate` and `run agent answer` are.
+fn redact(text: &str) -> String {
+    render::redact_payload(&serde_json::json!(text))
+        .as_str()
+        .unwrap_or("[REDACTED]")
+        .to_string()
+}
+
+/// Deliver a human's decision on one confirm-before-run tool call (AG-15).
+///
+/// **Validation is JOURNAL-ONLY and advisory**, like every waiting verb: the call's
+/// `ToolConfirmAwaited` is the whole evidence a human was asked, and the executor re-checks
+/// at fold time. It refuses, before anything is written, every state in which a decision
+/// would not be read: no such ask, a `--node` that is not the call's, a call already decided
+/// (the engine folds decisions LAST-wins, but a second one is a silent correction the operator
+/// never sees land — this verb names the first instead), a call the executor already settled
+/// (an expiry journals `not_confirmed` and NO decision), a terminated node, a passed deadline
+/// (the executor refuses the call BEFORE it reads any decision, so a late approval could only
+/// be reported here, never honoured) and a run that is not paused.
+///
+/// **Order: append, THEN `force_wake`**, and every fault after the append is REPORTED as a
+/// durable-but-unqueued decision rather than `?`-ed — a bare store error reads as "it did not
+/// go through" for a write that succeeded.
 #[allow(clippy::too_many_arguments)]
 pub async fn decide(
-    _store: &dyn SchedulerStore,
-    _journal: &dyn ExecutionJournal,
-    _run: RunId,
-    _call: &str,
-    _node: Option<NodeId>,
-    _approved: bool,
-    _actor: &str,
-    _note: Option<&str>,
-    _now: DateTime<Utc>,
+    store: &dyn SchedulerStore,
+    journal: &dyn ExecutionJournal,
+    run: RunId,
+    call: &str,
+    node: Option<NodeId>,
+    approved: bool,
+    actor: &str,
+    note: Option<&str>,
+    now: DateTime<Utc>,
 ) -> Result<Outcome, CliError> {
-    Ok(Outcome::precondition(String::new()))
+    // ---- Pure, before any I/O --------------------------------------------------------
+    let call = call.trim();
+    if call.is_empty() {
+        return Ok(Outcome::precondition(
+            "not delivered: --call is empty. `torii run list-paused` shows each pending call's \
+             id on its `tool:` row."
+                .to_string(),
+        ));
+    }
+    let shown = render::cap_chars(&render::one_line(call), 80);
+    // Redacted BEFORE the size check: `[REDACTED]` is longer than the shortest span it
+    // replaces, so the bytes bounded must be the bytes written.
+    let note = note.map(str::trim).filter(|n| !n.is_empty()).map(redact);
+    if let Some(n) = &note {
+        check_payload_size(
+            &serde_json::json!(n),
+            Measured::AfterRedaction,
+            "the decision note (--note)",
+        )
+        .map_err(CliError::error)?;
+    }
+    // Collapsed on the way IN (an escape smuggled through `--as` would be re-rendered by every
+    // reader of the journal) and redacted like the note beside it on the same row.
+    let one_lined = render::one_line(&crate::cmd::gate::actor_or_user(actor));
+    let actor = redact(&one_lined);
+    check_payload_size(
+        &serde_json::json!(actor),
+        Measured::AfterRedaction,
+        "the decision's actor (--as)",
+    )
+    .map_err(CliError::error)?;
+
+    let Some(before) = store.status(run).await? else {
+        return Ok(Outcome::precondition(format!("no such run: {}", run.0)));
+    };
+    let events = journal
+        .load(run)
+        .await
+        .map_err(OrchestratorError::Journal)?;
+
+    let Some(ask) = crate::cmd::run::tool_confirm_asks(&events)
+        .into_iter()
+        .find(|a| a.effect_id.0 == call)
+    else {
+        return Ok(Outcome::precondition(format!(
+            "not delivered: run {} has no tool call {shown} waiting for confirmation. \
+             `torii run list-paused` shows each pending call's id on its `tool:` row.",
+            run.0
+        )));
+    };
+    let owner = render::cap_chars(&render::one_line(&ask.node.0), 80);
+    if let Some(n) = &node
+        && n != &ask.node
+    {
+        return Ok(Outcome::precondition(format!(
+            "not delivered: call {shown} belongs to node {owner}, not {}. Drop --node, or \
+             name {owner}.",
+            render::cap_chars(&render::one_line(&n.0), 80)
+        )));
+    }
+    match &ask.state {
+        ToolConfirmState::Pending => {}
+        ToolConfirmState::Decided {
+            approved: was,
+            actor: by,
+        } => {
+            return Ok(Outcome::precondition(format!(
+                "not delivered: call {shown} was already {} by {} — its decision is on the \
+                 journal and the next drive reads it. A second decision would be a silent \
+                 correction; nothing was written.",
+                if *was { "approved" } else { "rejected" },
+                render::cap_chars(&render::one_line(by), 80)
+            )));
+        }
+        ToolConfirmState::Recorded => {
+            return Ok(Outcome::precondition(format!(
+                "not delivered: call {shown} is already settled — the run recorded its outcome \
+                 (an expired confirmation is refused to the model as `not_confirmed`), so \
+                 nothing will ever read a decision for it."
+            )));
+        }
+        ToolConfirmState::NodeTerminal(state) => {
+            return Ok(Outcome::precondition(format!(
+                "not delivered: call {shown}'s node {owner} {} — nothing will ever read a \
+                 decision for it.",
+                match state {
+                    SignalState::Completed => "already completed".to_string(),
+                    other => format!("is {}", other.as_str()),
+                }
+            )));
+        }
+    }
+    if let Some(d) = ask.deadline
+        && now >= d
+    {
+        return Ok(Outcome::precondition(format!(
+            "not delivered: call {shown}'s confirmation deadline passed at {d} — the run \
+             refuses an expired call before it reads any decision, so an approval now could \
+             never run the tool. Nothing was written."
+        )));
+    }
+    if before.status != RunStatus::Paused {
+        return Ok(Outcome::precondition(
+            if before.status == RunStatus::Waking {
+                format!(
+                    "not delivered: call {shown} is awaiting confirmation, but the run is waking — \
+                 a worker holds the lease and is folding this journal right now. Retry once \
+                 `torii run status {}` shows it paused.",
+                    run.0
+                )
+            } else {
+                format!(
+                    "not delivered: call {shown} is awaiting confirmation, but the run is {} — a \
+                 {} run is never paused again, so nothing will ever read a decision delivered \
+                 to it.",
+                    before.status.as_str(),
+                    before.status.as_str()
+                )
+            },
+        ));
+    }
+
+    let verdict = if approved { "approved" } else { "rejected" };
+    let appended = journal
+        .append(
+            run,
+            JournalEvent::ToolConfirmDecided {
+                node: ask.node.clone(),
+                effect_id: EffectId(call.to_string()),
+                approved,
+                actor: actor.clone(),
+                note,
+            },
+        )
+        .await
+        .map_err(OrchestratorError::Journal)?;
+
+    // Past here the decision is DURABLE: report, never `?`.
+    let unread = |what: &str, e: &dyn std::fmt::Display| {
+        let e = render::safe_reason(&e.to_string());
+        Outcome::precondition(format!(
+            "not queued: call {shown} is {verdict} and journaled durably (seq {appended}), but \
+             {what} failed: {e}. Nothing has read it yet and the run is not queued to resume — \
+             run `torii run wake {}` to drive it.",
+            run.0
+        ))
+    };
+    if let Err(e) = store.force_wake(run, now).await {
+        return Ok(unread("the wake", &e));
+    }
+    let after = match store.status(run).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return Ok(unread("the status re-read", &"the run vanished")),
+        Err(e) => return Ok(unread("the status re-read", &e)),
+    };
+    let rewritten = if actor != one_lined {
+        format!(" (--as contained secret-shaped text and was recorded as {actor})")
+    } else {
+        String::new()
+    };
+    // The effect achieved, read back: STATUS plus the pinned timestamp, exactly as `wake`
+    // checks its own (a stale `next_wake` or an unrelated re-pause can each fake one alone).
+    let queued = after.status == RunStatus::Paused
+        && after.next_wake.is_some_and(|t| {
+            let drift = if t >= now { t - now } else { now - t };
+            drift <= chrono::Duration::microseconds(2)
+        });
+    if queued {
+        return Ok(Outcome::ok(format!(
+            "{verdict}: call {shown} on node {owner} (the run will resume on the next worker \
+             tick){rewritten}"
+        )));
+    }
+    // Not queued: a worker may already have claimed the run and folded the decision. The
+    // journal ORDER says which — an outcome recorded for this call AFTER our row was read
+    // with the decision on the journal.
+    let after_events = match journal.load(run).await {
+        Ok(evs) => evs,
+        Err(e) => return Ok(unread("the journal re-read", &e)),
+    };
+    let settled_after = after_events.iter().any(|(seq, e)| {
+        *seq > appended
+            && matches!(e, JournalEvent::EffectRecorded { effect_id, .. } if effect_id.0 == call)
+    });
+    Ok(if settled_after {
+        Outcome::ok(format!(
+            "{verdict}: call {shown} on node {owner} (a drive already in flight settled the \
+             call after the decision landed){rewritten}"
+        ))
+    } else if after.status.is_terminal() {
+        Outcome::precondition(format!(
+            "not read: call {shown}'s decision is journaled durably, but the run is {} — \
+             nothing will ever read it.",
+            after.status.as_str()
+        ))
+    } else {
+        Outcome::precondition(format!(
+            "not queued: call {shown}'s decision is journaled durably, but the run is {} and \
+             the wake did not apply. Run `torii run wake {}` once it is paused again.",
+            after.status.as_str(),
+            run.0
+        ))
+    })
 }
 
 #[cfg(test)]

@@ -209,6 +209,10 @@ pub struct ReingestQuery {
     /// Optional stage to resume from (accepted for API stability; v1 always re-runs the full
     /// pipeline — a resumable partial re-run is a tracked follow-up).
     #[serde(default)]
+    #[expect(
+        dead_code,
+        reason = "C5 spec `reingest?from=<stage>` (docs/specs/C5-rag-document-intelligence.md); resumable partial re-run not built yet"
+    )]
     pub from: Option<String>,
 }
 

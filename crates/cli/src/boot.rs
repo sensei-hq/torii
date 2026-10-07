@@ -68,15 +68,19 @@ pub enum Backend {
     Memory { registry_dir: Option<PathBuf> },
 }
 
-/// The validated environment. `fence_version` is only required by the heavy tier;
-/// `pool_size` only by the Postgres backend.
+/// The validated environment. `fence_version` and `wake_retry` are only required by the heavy
+/// tier; `pool_size` only by the Postgres backend.
 #[derive(PartialEq)]
 pub struct EnvConfig {
     pub backend: Backend,
     pub fence_version: Option<String>,
     pub pool_size: u32,
     /// AG-3: how the heavy tier's `Scheduler` backs off a failing wake, and when it gives up.
-    pub wake_retry: WakeRetryPolicy,
+    /// Parsed here but CHECKED only by [`require_wake_retry`], exactly as `fence_version` is by
+    /// [`require_fence`]: only the commands that drive read it, so a bad value must not break
+    /// `run status`, `run list-paused` or `run cancel` — the verbs an operator reaches for while
+    /// fixing it.
+    pub wake_retry: Result<WakeRetryPolicy, String>,
 }
 
 /// Manual, NOT derived: `#[derive(Debug)]` would put the plaintext database
@@ -149,7 +153,7 @@ pub fn env_config_from(get: impl Fn(&str) -> Option<String>) -> Result<EnvConfig
         Some(raw) => parse_pool_size(&raw).map_err(CliError::error)?,
         None => DEFAULT_POOL_SIZE,
     };
-    let wake_retry = wake_retry_from(&non_empty).map_err(CliError::error)?;
+    let wake_retry = wake_retry_from(&non_empty);
     Ok(EnvConfig {
         backend,
         fence_version,
@@ -456,6 +460,12 @@ pub fn require_fence(env: &EnvConfig) -> Result<&str, CliError> {
     })
 }
 
+/// The heavy tier additionally requires a valid wake-retry policy (`TORII_WAKE_*`, the
+/// gateway's defaults when unset) — refused loudly, naming the variable and its value.
+pub fn require_wake_retry(env: &EnvConfig) -> Result<WakeRetryPolicy, CliError> {
+    env.wake_retry.clone().map_err(CliError::error)
+}
+
 /// Install a `tracing` subscriber reading `RUST_LOG` (default `info`). Writes to
 /// STDERR specifically — never stdout — so `--json` command output stays
 /// machine-parseable. `try_init` (not `init`) so a double call (e.g. a test, or
@@ -673,6 +683,7 @@ pub async fn heavy(
     workspace_root: Option<&Path>,
 ) -> Result<HeavyDeps, CliError> {
     let fence = require_fence(env)?.to_string();
+    let wake_retry = require_wake_retry(env)?;
     // ONE gateway-config source per backend (TM-8c), decided before any connection: the
     // catalog on Postgres (a file there would be a second source the API never sees), the
     // file on memory (there is no catalog).
@@ -827,7 +838,7 @@ pub async fn heavy(
         light.journal.clone(),
         clock.clone(),
     )
-    .with_wake_retry(env.wake_retry.clone());
+    .with_wake_retry(wake_retry);
     Ok(HeavyDeps {
         light,
         scheduler,
@@ -918,7 +929,7 @@ mod tests {
             },
             fence_version: Some("v1".into()),
             pool_size: DEFAULT_POOL_SIZE,
-            wake_retry: WakeRetryPolicy::default(),
+            wake_retry: Ok(WakeRetryPolicy::default()),
         };
         let err = match heavy(&env, Some(Path::new("/tmp/gateway.json")), None).await {
             Ok(_) => panic!("must refuse a file on the postgres backend"),
@@ -939,7 +950,7 @@ mod tests {
             backend: Backend::Memory { registry_dir: None },
             fence_version: Some("v1".into()),
             pool_size: DEFAULT_POOL_SIZE,
-            wake_retry: WakeRetryPolicy::default(),
+            wake_retry: Ok(WakeRetryPolicy::default()),
         };
         let err = match heavy(&env, None, None).await {
             Ok(_) => panic!("must require a file on the memory backend"),
@@ -1086,7 +1097,7 @@ mod tests {
     #[test]
     fn an_absent_wake_retry_is_the_gateway_default() {
         let e = env_config_from(getter(&[(ENV_DATABASE_URL, "postgres://h/db")])).expect("ok");
-        assert_eq!(e.wake_retry, WakeRetryPolicy::default());
+        assert_eq!(e.wake_retry, Ok(WakeRetryPolicy::default()));
     }
 
     #[test]
@@ -1100,13 +1111,21 @@ mod tests {
         .expect("ok");
         assert_eq!(
             e.wake_retry,
-            WakeRetryPolicy {
+            Ok(WakeRetryPolicy {
                 max_attempts: 3,
                 base_backoff: chrono::Duration::seconds(10),
                 max_backoff: chrono::Duration::minutes(15),
                 ..WakeRetryPolicy::default()
-            }
+            })
         );
+    }
+
+    /// The heavy tier's refusal of a bad `TORII_WAKE_*` set: the environment itself PARSES
+    /// (the light tier never reads the policy), and [`require_wake_retry`] is what refuses.
+    fn wake_err(pairs: &[(&str, &str)]) -> CliError {
+        let e = env_config_from(getter(pairs))
+            .expect("a bad wake policy must not fail the environment the light tier reads");
+        require_wake_retry(&e).expect_err("the heavy tier must refuse")
     }
 
     /// The gateway reads `max_attempts: 0` as 1; an operator who wrote 0 almost certainly
@@ -1114,11 +1133,10 @@ mod tests {
     #[test]
     fn a_zero_or_unparseable_max_attempts_is_rejected() {
         for bad in ["0", "abc", "-1"] {
-            let err = env_config_from(getter(&[
+            let err = wake_err(&[
                 (ENV_DATABASE_URL, "postgres://h/db"),
                 (ENV_WAKE_MAX_ATTEMPTS, bad),
-            ]))
-            .expect_err("must refuse");
+            ]);
             assert_eq!(err.code, crate::errors::EXIT_ERROR);
             assert!(
                 err.message.contains(ENV_WAKE_MAX_ATTEMPTS) && err.message.contains(bad),
@@ -1131,8 +1149,7 @@ mod tests {
     #[test]
     fn an_unparseable_backoff_is_rejected_naming_the_variable() {
         for var in [ENV_WAKE_BASE_BACKOFF, ENV_WAKE_MAX_BACKOFF] {
-            let err = env_config_from(getter(&[(ENV_DATABASE_URL, "postgres://h/db"), (var, "5")]))
-                .expect_err("must refuse");
+            let err = wake_err(&[(ENV_DATABASE_URL, "postgres://h/db"), (var, "5")]);
             assert_eq!(err.code, crate::errors::EXIT_ERROR);
             assert!(err.message.contains(var), "{}", err.message);
         }
@@ -1142,12 +1159,11 @@ mod tests {
     /// operator configured would never happen. Refused rather than silently flattened.
     #[test]
     fn a_base_backoff_past_the_max_backoff_is_rejected() {
-        let err = env_config_from(getter(&[
+        let err = wake_err(&[
             (ENV_DATABASE_URL, "postgres://h/db"),
             (ENV_WAKE_BASE_BACKOFF, "2m"),
             (ENV_WAKE_MAX_BACKOFF, "1m"),
-        ]))
-        .expect_err("must refuse");
+        ]);
         assert!(
             err.message.contains(ENV_WAKE_BASE_BACKOFF)
                 && err.message.contains(ENV_WAKE_MAX_BACKOFF),
@@ -1183,10 +1199,10 @@ mod tests {
             },
             fence_version: Some("v1".into()),
             pool_size: DEFAULT_POOL_SIZE,
-            wake_retry: WakeRetryPolicy {
+            wake_retry: Ok(WakeRetryPolicy {
                 max_attempts: 1,
                 ..WakeRetryPolicy::default()
-            },
+            }),
         };
         let d = match heavy(&env, Some(&gw), None).await {
             Ok(d) => d,
@@ -1225,6 +1241,26 @@ mod tests {
         );
     }
 
+    /// AG-18 review: the policy is checked where it is USED — `heavy()` refuses a bad one before
+    /// it opens a store, naming the variable.
+    #[tokio::test]
+    async fn heavy_refuses_a_bad_wake_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut env, gw) = memory_heavy_fixture(dir.path());
+        env.wake_retry =
+            wake_retry_from(&|k: &str| (k == ENV_WAKE_MAX_ATTEMPTS).then(|| "0".to_string()));
+        let err = match heavy(&env, Some(&gw), None).await {
+            Ok(_) => panic!("a bad wake policy must not boot a driver"),
+            Err(e) => e,
+        };
+        assert_eq!(err.code, crate::errors::EXIT_ERROR);
+        assert!(
+            err.message.contains(ENV_WAKE_MAX_ATTEMPTS),
+            "{}",
+            err.message
+        );
+    }
+
     /// A memory-backend `EnvConfig` and gateway-config file `heavy()` boots on with no
     /// database and no model: one agent bound to chain `c`, which the file defines.
     fn memory_heavy_fixture(dir: &Path) -> (EnvConfig, PathBuf) {
@@ -1248,7 +1284,7 @@ mod tests {
             },
             fence_version: Some("v1".into()),
             pool_size: DEFAULT_POOL_SIZE,
-            wake_retry: WakeRetryPolicy::default(),
+            wake_retry: Ok(WakeRetryPolicy::default()),
         };
         (env, gw)
     }
@@ -1703,7 +1739,7 @@ mod tests {
             },
             fence_version: Some(fence.to_string()),
             pool_size: DEFAULT_POOL_SIZE,
-            wake_retry: WakeRetryPolicy::default(),
+            wake_retry: Ok(WakeRetryPolicy::default()),
         }
     }
 

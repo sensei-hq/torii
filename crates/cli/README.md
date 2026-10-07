@@ -271,3 +271,9 @@ With `DATABASE_URL` pointing at a torii database (schema applied **and** seeded 
 bind the catalog's `chat` chain), every test runs: each creates a tenant of its own and removes it
 afterwards, so they run in parallel with no shared lock. `tests/postgres_backend.rs` drives the real
 binary end to end; `tests/e2e_pg.rs` the cross-process operator loop.
+
+CI runs both halves (`.github/workflows/coverage.yml`): `rust-tests` with no database, and
+`rust-tests-db` against a `supabase/postgres` service with the schema, seeds and RLS policies
+applied by `database/ci/bootstrap.sh` (pinned `dbd`), followed by the SQL suite
+`database/tests/run.sh`. To reproduce that job locally against a throwaway container, follow the
+recipe at the top of `database/ci/bootstrap.sh`.

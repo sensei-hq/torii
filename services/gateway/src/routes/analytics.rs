@@ -123,7 +123,7 @@ async fn resolve_scope(
     state: &SharedState,
     claims: &Claims,
     requested: Option<Uuid>,
-) -> Result<(Uuid, ScopeFilter), Response> {
+) -> Result<(Uuid, ScopeFilter), Box<Response>> {
     let tenant = claims
         .tenant_id
         .ok_or_else(|| (StatusCode::FORBIDDEN, "no active tenant").into_response())?;
@@ -148,8 +148,8 @@ async fn resolve_scope(
     .await
     {
         Ok(filter) => Ok((tenant, filter)),
-        Err(ScopeErr::Denied) => Err(capability_required("audit.read")),
-        Err(ScopeErr::Db(e)) => Err(read_err("scope", e)),
+        Err(ScopeErr::Denied) => Err(Box::new(capability_required("audit.read"))),
+        Err(ScopeErr::Db(e)) => Err(Box::new(read_err("scope", e))),
     }
 }
 
@@ -184,7 +184,7 @@ pub async fn get_overview(
 ) -> Response {
     let (tenant, scope) = match resolve_scope(&state, &claims, None).await {
         Ok(x) => x,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     // Served from the live usage rollup (fresh via the A2 triggers): today's stat row,
     // trailing-14d blended cost/call + prior-14d delta, and 14d savings.
@@ -251,7 +251,7 @@ pub async fn get_cost_trend(
 ) -> Response {
     let (tenant, scope) = match resolve_scope(&state, &claims, q.scope_node_id).await {
         Ok(x) => x,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let win = match Window::parse(q.window.as_deref()) {
         Ok(w) => w,
@@ -303,7 +303,7 @@ pub async fn get_model_mix(
 ) -> Response {
     let (tenant, scope) = match resolve_scope(&state, &claims, q.scope_node_id).await {
         Ok(x) => x,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let win = match Window::parse(q.window.as_deref()) {
         Ok(w) => w,
@@ -374,7 +374,7 @@ pub async fn get_plane_split(
 ) -> Response {
     let (tenant, scope) = match resolve_scope(&state, &claims, q.scope_node_id).await {
         Ok(x) => x,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let win = match Window::parse(q.window.as_deref()) {
         Ok(w) => w,
@@ -458,7 +458,7 @@ pub async fn get_spend(
 ) -> Response {
     let (tenant, scope) = match resolve_scope(&state, &claims, q.scope_node_id).await {
         Ok(x) => x,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let win = match Window::parse(q.window.as_deref()) {
         Ok(w) => w,
@@ -489,7 +489,7 @@ pub async fn get_quality(
 ) -> Response {
     let (tenant, scope) = match resolve_scope(&state, &claims, q.scope_node_id).await {
         Ok(x) => x,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let win = match Window::parse(q.window.as_deref()) {
         Ok(w) => w,
@@ -536,7 +536,7 @@ pub async fn get_export(
 ) -> Response {
     let (tenant, scope) = match resolve_scope(&state, &claims, None).await {
         Ok(x) => x,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let win = match Window::parse(q.window.as_deref()) {
         Ok(w) => w,
@@ -719,7 +719,7 @@ mod gate {
     use super::{plane_split_sql, spend_sql};
     use crate::analytics::SpendGroup;
     use serde_json::Value;
-    use sqlx::{postgres::PgPoolOptions, Row};
+    use sqlx::postgres::PgPoolOptions;
     use uuid::Uuid;
 
     async fn pool() -> sqlx::PgPool {

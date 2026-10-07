@@ -2,7 +2,7 @@
 //!
 //! [`EngineEmbedder`] is the prod path: config-driven embedding via the sensei engine's `TextEmbed`
 //! capability over a named chain (model id + chain are operator config — no-hardcoded-ops).
-//! [`StubEmbedder`] is the deterministic, hermetic test path (no model, no network). [`validate_dim`]
+//! `StubEmbedder` (test-only) is the deterministic, hermetic test path (no model, no network). [`validate_dim`]
 //! is THE enforcement layer: the crate reads the model's output shape at runtime and performs no
 //! dimension check, so a mis-configured (non-1024-dim) model is caught here — fail-closed — rather
 //! than corrupting the `vector(1024)` index.
@@ -15,17 +15,16 @@ use gateway::types::{
     capability::Capability,
     request::{InferenceRequest, Payload},
 };
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 
 use super::{RagError, EMBED_DIM};
 
-/// Produces embeddings for a batch of texts. `dim()` is the expected output dimensionality.
+/// Produces embeddings for a batch of texts. Output dimensionality is the fixed [`EMBED_DIM`]
+/// contract, enforced by [`validate_dims`] — not a per-embedder property.
 #[async_trait]
 pub trait Embedder: Send + Sync {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, RagError>;
-    fn dim(&self) -> usize {
-        EMBED_DIM
-    }
 }
 
 /// Validate a single embedding row's dimensionality (fail-closed).
@@ -50,9 +49,11 @@ pub fn validate_dims(rows: &[Vec<f32>]) -> Result<(), RagError> {
 /// Deterministic, hermetic embedder for unit/integration tests: SHA-256(text) seeds an xorshift PRNG
 /// that fills exactly [`EMBED_DIM`] f32 in [-1, 1], then L2-normalizes. Identical text → identical
 /// vector (so tests can seed two tenants with the SAME vector to prove cross-tenant isolation). No
-/// model, no network.
+/// model, no network. Test-only (`cfg(test)`): prod always embeds through [`EngineEmbedder`].
+#[cfg(test)]
 pub struct StubEmbedder;
 
+#[cfg(test)]
 #[async_trait]
 impl Embedder for StubEmbedder {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, RagError> {
@@ -60,6 +61,7 @@ impl Embedder for StubEmbedder {
     }
 }
 
+#[cfg(test)]
 fn stub_vector(text: &str) -> Vec<f32> {
     let digest = Sha256::digest(text.as_bytes());
     // seed the PRNG from the first 8 bytes of the digest (force odd/non-zero).
@@ -85,15 +87,14 @@ fn stub_vector(text: &str) -> Vec<f32> {
 }
 
 /// A stub that returns the WRONG dimensionality — exercises the [`validate_dim`] failure path.
+#[cfg(test)]
 pub struct WrongDimStubEmbedder(pub usize);
 
+#[cfg(test)]
 #[async_trait]
 impl Embedder for WrongDimStubEmbedder {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, RagError> {
         Ok(texts.iter().map(|_| vec![0.0f32; self.0]).collect())
-    }
-    fn dim(&self) -> usize {
-        self.0
     }
 }
 

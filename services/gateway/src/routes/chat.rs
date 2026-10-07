@@ -846,8 +846,8 @@ pub async fn post_chat_stream(
 /// The tools-enabled path: resolve the caller's default-deny `(role×space)` allow-list, then run
 /// the bounded agentic loop (offering ONLY allowed tools; every tool call enforced + redacted by
 /// the runtime). Budget is metered per model turn (reserve→commit each turn). Returns the answer
-/// + `governance.tools[]` provenance. On any resolver error we offer NO tools (fail-safe) rather
-/// than opening the surface.
+/// plus `governance.tools[]` provenance. On any resolver error we offer NO tools (fail-safe)
+/// rather than opening the surface.
 async fn post_chat_with_tools(
     claims: &Claims,
     state: &SharedState,

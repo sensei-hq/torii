@@ -23,6 +23,9 @@ toolkit does not yet do something, it says so rather than describing an intentio
 | **`TORII_FENCE_VERSION`** | Needed by `run submit` and `worker serve`. Set it **explicitly** (e.g. `v1`) and keep a fleet agreed on it — it is recorded in every run and checked on resume, so deriving it from a build version would strand every paused run on a routine deploy. |
 | **`TORII_POOL_SIZE`** | Optional. Defaults are fine to start. |
 | **`TORII_WAKE_MAX_ATTEMPTS`**, **`TORII_WAKE_BASE_BACKOFF`**, **`TORII_WAKE_MAX_BACKOFF`** | Optional (defaults `5`, `30s`, `60m`). How a wake that keeps failing is retried: a retryable drive error (a journal or store backend fault) or a worker lost mid-drive re-schedules the run after a backoff that doubles from the base up to the ceiling; the attempt past the cap is never driven — the run is filed `failed`, naming the count and the last error. A successful drive resets the count. Backoffs take `--interval`'s units (`500ms`, `30s`, `15m`); `0` attempts and a base above the ceiling are refused. Read only by the two commands that drive (`worker serve` and `run submit`), so keep a fleet agreed on them; a bad value fails those two, loudly, and no other command reads it (`run status`, `run list-paused`, `run cancel` and the answering verbs still work while you fix it). |
+| **`TORII_TRANSIENT_ATTEMPTS`** | Optional (default `3`). Total attempts a model call gets when the provider fails in a way the gateway reports as retryable (a provider 500, say) before the node fails. Between attempts the run **pauses** on a backoff (2s, doubling, capped at 60s) and a worker re-attempts it on that wake — so a `run submit` whose call hits one prints `paused`, and `worker serve` finishes it. `1` turns retry off (the gateway's own default); `0` is refused (there is no "unlimited"), as is anything past `20`. Auth and credit failures never reach this path: they pause for a person instead. Like `TORII_WAKE_*` — and the two below — read only by `run submit` and `worker serve`, where a bad value fails loudly, naming the variable. |
+| **`TORII_MAP_CONCURRENCY`** | Optional (default `8`). The ceiling on how many children of one `Map` node are in flight at once; each `Map` asks for its own `concurrency` and the lower of the two wins. Every in-flight child journals over the one `TORII_POOL_SIZE` pool, so a value far past it only queues children on connections. `0` and anything past `256` are refused. |
+| **`TORII_WAKE_LEASE`** | Optional (default `60s`). How old a `waking` claim must be before a worker treats the worker that took it as lost and reclaims the run (each reclaim is a counted wake attempt — see `TORII_WAKE_MAX_ATTEMPTS`). Exclusion does not depend on it: a run being driven is locked, so a short lease cannot double-drive. `--interval`'s units; `0` is refused. |
 | **`TORII_BACKEND`** | Optional: `postgres` (the default — everything above applies) or `memory`. `memory` keeps every store in the process — no database, no `DATABASE_URL` — for development and CI. Nothing survives the process, so a run it submits can only be observed or woken by that same process. |
 | **`TORII_REGISTRY_DIR`** | With `TORII_BACKEND=memory`: the registry directory (the `agents/ skills/ tools/` layout `config push` reads) loaded at boot, since there is no database to push to. |
 | **A gateway config** | On Postgres: **torii's catalog** — routers, models and chains, read by the same `torii_core::load_gateway_config` the API routes with. Nothing to pass; a `--gateway-config` there is refused. With `TORII_BACKEND=memory` only: `--gateway-config <file>` (JSON), required by `run submit` and `worker serve`. |
@@ -124,6 +127,14 @@ untouched — the generation is per tenant, and only a registry push moves it (a
 not). `torii run list-paused` before pushing.
 
 A worker serves **one tenant** (`TORII_TENANT`): its sweeps claim only that tenant's due runs.
+
+**A running worker follows `config push`.** Before every tick `worker serve` checks the tenant's
+durable config generation and, when a push has moved it, reloads the registry — no restart. The next
+drive runs on the pushed registry; a drive already in flight finishes on the generation it pinned.
+A registry that fails to load is logged and the last good one stays live. What a worker does **not**
+reload is the gateway config: torii's catalog (routers, models, chains) is read once, at boot, so a
+pushed registry that names a chain added to the catalog since is logged as an error naming the
+chain — restart the worker to pick the catalog up.
 
 ## Observing and intervening
 

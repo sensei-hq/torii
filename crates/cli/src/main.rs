@@ -684,7 +684,9 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                     money: budget_usd
                         .map(|total_micro_usd| orchestrator_core::MoneyBudget { total_micro_usd }),
                 };
-                cmd::run::wake(
+                // AG-13: a money raise is checked against the caps the run is charged to.
+                cmd::run::wake_charged(
+                    d.charging(None).as_ref(),
                     d.scheduler_store.as_ref(),
                     d.journal.as_ref(),
                     run,
@@ -734,7 +736,10 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                     CliError::error(format!("{} is not a valid graph: {e}", graph.display()))
                 })?;
                 let boot::HeavyDeps {
-                    scheduler, events, ..
+                    light,
+                    scheduler,
+                    events,
+                    ..
                 } = boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
                 let log = boot::log_run_events(events);
                 let budget = orchestrator_core::RunBudget {
@@ -749,7 +754,11 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 // effect that never happened.
                 // A pause exits 0 only where another process can resume it (AG-5): never on
                 // the memory backend, whose stores die with this process.
-                let out = cmd::run::submit(
+                // AG-13: on Postgres the run is charged to TORII_USER — its money limit is
+                // their headroom, and its spend is recorded on their budget nodes.
+                let user = boot::user_from_env();
+                let out = cmd::run::submit_charged(
+                    light.charging(user.as_deref()).as_ref(),
                     &scheduler,
                     run,
                     g,

@@ -73,8 +73,22 @@ pub struct Settling<'a> {
 #[async_trait::async_trait]
 impl Ticker for Settling<'_> {
     async fn tick(&self) -> Result<usize, OrchestratorError> {
-        let _ = self.charging;
-        self.inner.tick().await
+        let woken = self.inner.tick().await?;
+        // After EVERY tick, not only one that woke something: a run `run submit` drove whose
+        // spend that process could not record is picked up here. A failure is logged and the
+        // next tick retries — the spend is durable in the journal, and recording is idempotent.
+        if let Err(e) = self
+            .charging
+            .charges
+            .settle_pending(self.charging.journal)
+            .await
+        {
+            tracing::error!(
+                error = %e,
+                "recording runs' spend on their budget nodes failed; the next tick retries"
+            );
+        }
+        Ok(woken)
     }
 }
 

@@ -22,6 +22,7 @@ use orchestrator_store::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use torii_core::events::{DEFAULT_EVENT_BUFFER, RunEventSink, RunEvents};
 
 pub const ENV_DATABASE_URL: &str = "DATABASE_URL";
 pub const ENV_FENCE_VERSION: &str = "TORII_FENCE_VERSION";
@@ -662,6 +663,8 @@ pub struct HeavyDeps {
     pub scheduler: Scheduler,
     #[allow(dead_code)]
     pub clock: Arc<dyn Clock>,
+    /// AG-18: the run events the scheduler's drives report (torii-core's `RunEventSink`).
+    pub events: RunEvents,
 }
 
 pub async fn heavy(
@@ -818,10 +821,12 @@ pub async fn heavy(
         clock.clone(),
     )
     .with_wake_retry(env.wake_retry.clone());
+    let (_sink, events) = RunEventSink::bounded(DEFAULT_EVENT_BUFFER);
     Ok(HeavyDeps {
         light,
         scheduler,
         clock,
+        events,
     })
 }
 
@@ -1189,6 +1194,145 @@ mod tests {
                 )
             ),
             "a cap of 1 must reach the scheduler"
+        );
+    }
+
+    /// A memory-backend `EnvConfig` and gateway-config file `heavy()` boots on with no
+    /// database and no model: one agent bound to chain `c`, which the file defines.
+    fn memory_heavy_fixture(dir: &Path) -> (EnvConfig, PathBuf) {
+        let reg = dir.join("registry");
+        std::fs::create_dir_all(reg.join("agents")).unwrap();
+        std::fs::write(
+            reg.join("agents/researcher.md"),
+            "---\nname: researcher\narea: research\nkind: lead\nchain: c\ntools: []\nskills: []\n---\nYou research.\n",
+        )
+        .unwrap();
+        let gw = dir.join("gateway.json");
+        std::fs::write(
+            &gw,
+            r#"{"routers":{"ollama":{"url":"http://127.0.0.1:11434"}},
+                "chains":{"c":{"id":"c","capability":"text_chat","models":[],"fallback_triggers":[]}}}"#,
+        )
+        .unwrap();
+        let env = EnvConfig {
+            backend: Backend::Memory {
+                registry_dir: Some(reg),
+            },
+            fence_version: Some("v1".into()),
+            pool_size: DEFAULT_POOL_SIZE,
+            wake_retry: WakeRetryPolicy::default(),
+        };
+        (env, gw)
+    }
+
+    fn signal_graph() -> orchestrator_core::Graph {
+        orchestrator_core::Graph {
+            nodes: vec![orchestrator_core::Node {
+                id: orchestrator_core::NodeId("gate".into()),
+                kind: orchestrator_core::NodeKind::AwaitSignal { timeout: None },
+                deps: vec![],
+            }],
+        }
+    }
+
+    fn drained(events: &mut RunEvents) -> Vec<torii_core::events::RunEventKind> {
+        let mut out = Vec::new();
+        while let Ok(e) = events.try_recv() {
+            out.push(e.kind);
+        }
+        out
+    }
+
+    /// AG-18: `run submit`'s inline drive is `heavy()`'s scheduler, and it reports run events:
+    /// the run's ask reaches `HeavyDeps::events`.
+    #[tokio::test]
+    async fn heavy_reports_run_events_from_the_submit_drive() {
+        let dir = tempfile::tempdir().unwrap();
+        let (env, gw) = memory_heavy_fixture(dir.path());
+        let mut d = match heavy(&env, Some(&gw), None).await {
+            Ok(d) => d,
+            Err(e) => panic!("heavy boots on the memory backend: {}", e.message),
+        };
+        let run = RunId(uuid::Uuid::new_v4());
+        let out = crate::cmd::run::submit(
+            &d.scheduler,
+            run,
+            signal_graph(),
+            orchestrator_core::RunBudget::default(),
+            || {},
+        )
+        .await
+        .expect("submit");
+        assert!(out.text.contains("paused"), "{}", out.text);
+        assert_eq!(
+            drained(&mut d.events),
+            vec![torii_core::events::RunEventKind::SignalAwaited {
+                node: "gate".into(),
+                deadline: None,
+            }],
+            "the submit drive's ask must reach the event stream"
+        );
+    }
+
+    /// AG-18: `worker serve`'s drive is `heavy()`'s scheduler too, and the decision a worker
+    /// drive honours is reported BY that drive — an unhooked worker would leave the report to
+    /// some later hooked drive, late.
+    #[tokio::test]
+    async fn heavy_reports_the_decision_a_worker_drive_honours() {
+        let dir = tempfile::tempdir().unwrap();
+        let (env, gw) = memory_heavy_fixture(dir.path());
+        let mut d = match heavy(&env, Some(&gw), None).await {
+            Ok(d) => d,
+            Err(e) => panic!("heavy boots on the memory backend: {}", e.message),
+        };
+        let run = RunId(uuid::Uuid::new_v4());
+        crate::cmd::run::submit(
+            &d.scheduler,
+            run,
+            signal_graph(),
+            orchestrator_core::RunBudget::default(),
+            || {},
+        )
+        .await
+        .expect("submit");
+        drained(&mut d.events);
+
+        // The operator answers on the light tier, then the worker loop drives it once.
+        let out = crate::cmd::run::signal(
+            d.light.scheduler_store.as_ref(),
+            d.light.journal.as_ref(),
+            run,
+            orchestrator_core::NodeId("gate".into()),
+            serde_json::json!({"decision": "approved"}),
+            chrono::Utc::now(),
+        )
+        .await
+        .expect("signal");
+        assert_eq!(out.code, crate::errors::EXIT_OK, "{}", out.text);
+        let (_tx, shutdown) = tokio::sync::watch::channel(0u64);
+        let out = crate::cmd::worker::serve(
+            &d.scheduler,
+            crate::cmd::worker::ServeOpts {
+                interval: std::time::Duration::from_millis(10),
+                once: true,
+            },
+            shutdown,
+        )
+        .await
+        .expect("serve --once");
+        assert_eq!(out.code, crate::errors::EXIT_OK, "{}", out.text);
+        assert_eq!(
+            d.scheduler.status(run).await.unwrap().expect("row").status,
+            orchestrator_core::RunStatus::Completed,
+            "the worker drive completed the run"
+        );
+        assert_eq!(
+            drained(&mut d.events),
+            vec![torii_core::events::RunEventKind::SignalReceived {
+                node: "gate".into(),
+                payload: serde_json::json!({"decision": "approved"}),
+            }],
+            "the worker drive must report the decision it honoured"
         );
     }
 

@@ -207,13 +207,20 @@ async fn a_run_submitted_on_postgres_pauses_is_signalled_and_a_worker_completes_
     std::fs::write(&graph, serde_json::to_string(&g).unwrap()).unwrap();
 
     // Submit: drives to the durable pause. No --gateway-config: the catalog is the config.
-    let submitted = ok(&t
+    let submit = t
         .torii()
         .env("TORII_FENCE_VERSION", "v1")
         .args(["run", "submit", "--graph"])
         .arg(&graph)
         .output()
-        .expect("spawn"));
+        .expect("spawn");
+    let submitted = ok(&submit);
+    // AG-18: the submit drive's run events reach the operator's log.
+    let log = String::from_utf8_lossy(&submit.stderr);
+    assert!(
+        log.contains(r#""type":"signal_awaited""#) && log.contains(r#""node":"gate""#),
+        "run submit must log the drive's run events:\n{log}"
+    );
     let run = submitted
         .lines()
         .find_map(|l| l.strip_prefix("submitted: "))
@@ -234,12 +241,19 @@ async fn a_run_submitted_on_postgres_pauses_is_signalled_and_a_worker_completes_
         .expect("spawn"));
 
     // A worker — a third process — drives it home.
-    ok(&t
+    let worker = t
         .torii()
         .env("TORII_FENCE_VERSION", "v1")
         .args(["worker", "serve", "--once"])
         .output()
-        .expect("spawn"));
+        .expect("spawn");
+    ok(&worker);
+    // AG-18: and the worker drive reports the decision it honoured.
+    let log = String::from_utf8_lossy(&worker.stderr);
+    assert!(
+        log.contains(r#""type":"signal_received""#) && log.contains(r#""decision":"approved""#),
+        "worker serve must log the decision its drive honoured:\n{log}"
+    );
 
     let status = ok(&t
         .torii()

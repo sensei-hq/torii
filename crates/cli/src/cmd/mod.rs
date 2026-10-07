@@ -5,6 +5,7 @@ pub mod config;
 pub mod gate;
 pub mod human;
 pub mod run;
+pub mod tool;
 pub mod worker;
 
 /// What a command produced: the operator-facing text and the process exit code.

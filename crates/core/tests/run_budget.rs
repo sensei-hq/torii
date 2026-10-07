@@ -593,10 +593,26 @@ async fn a_raise_is_admitted_only_within_the_charged_nodes_headroom() {
         ),
         "{err}"
     );
-    // Lowering is always admitted.
-    c.check_raise(&j, run, DOLLAR / 2)
+    // Lowering is always admitted — even with no headroom left at all.
+    let low = RunId(Uuid::new_v4());
+    c.admit(low, u, Some(2 * DOLLAR)).await.unwrap();
+    priced_run(&j, low, 2 * DOLLAR, &[DOLLAR / 2]).await;
+    sqlx::query(
+        "update governance.nodes set spent_amount = cap_amount where tenant_id = $1 and id = $2",
+    )
+    .bind(o.tenant)
+    .bind(o.team_a)
+    .execute(&pool)
+    .await
+    .unwrap();
+    c.check_raise(&j, low, 3 * DOLLAR / 2)
         .await
-        .expect("a lower limit");
+        .expect("a lower limit needs no headroom");
+    let err = c.check_raise(&j, low, 2 * DOLLAR + 1).await;
+    assert!(
+        matches!(err, Err(ChargeError::OverHeadroom { .. })),
+        "{err:?}"
+    );
 
     let uncharged = RunId(Uuid::new_v4());
     priced_run(&j, uncharged, DOLLAR, &[]).await;

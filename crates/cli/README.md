@@ -20,6 +20,7 @@ toolkit does not yet do something, it says so rather than describing an intentio
 | **torii's database** | The orchestrator's registry (`registry.*`) and run state (`runs.*`) live there, per tenant, beside the catalog. Apply the schema with `dbd` from `database/` (see `database/README.md`), RLS policies included. |
 | **`DATABASE_URL`** | Environment only. There is deliberately no flag: a flag would leak the password into `ps`. |
 | **`TORII_TENANT`** | The tenant every command acts for — its id or its slug. A slug can never look like an id (the database refuses a UUID-shaped slug, and org create turns a UUID-shaped name into an `org-`-prefixed slug), so an id always names its own tenant. Required on the Postgres backend: every run, journal and registry belongs to exactly one tenant, and another tenant's are invisible. |
+| **`TORII_USER`** | Needed by `run submit` on Postgres: the user torii acts as — a `core.profiles` id with a membership (or an org unit) in `TORII_TENANT`. Every run is **charged to this user's budget**: its money limit is their headroom under torii's caps, and what it spends is recorded there (see Budgets below). Unset, `run submit` is refused (exit 1) before anything is written. Not read on `TORII_BACKEND=memory`, which has no caps. A minimal identity: `--as` on the answering verbs is still attribution, and who may do what is torii#47's. |
 | **`TORII_FENCE_VERSION`** | Needed by `run submit` and `worker serve`. Set it **explicitly** (e.g. `v1`) and keep a fleet agreed on it — it is recorded in every run and checked on resume, so deriving it from a build version would strand every paused run on a routine deploy. |
 | **`TORII_POOL_SIZE`** | Optional. Defaults are fine to start. |
 | **`TORII_WAKE_MAX_ATTEMPTS`**, **`TORII_WAKE_BASE_BACKOFF`**, **`TORII_WAKE_MAX_BACKOFF`** | Optional (defaults `5`, `30s`, `60m`). How a wake that keeps failing is retried: a retryable drive error (a journal or store backend fault) or a worker lost mid-drive re-schedules the run after a backoff that doubles from the base up to the ceiling; the attempt past the cap is never driven — the run is filed `failed`, naming the count and the last error. A successful drive resets the count. Backoffs take `--interval`'s units (`500ms`, `30s`, `15m`); `0` attempts and a base above the ceiling are refused. Read only by the two commands that drive (`worker serve` and `run submit`), so keep a fleet agreed on them; a bad value fails those two, loudly, and no other command reads it (`run status`, `run list-paused`, `run cancel` and the answering verbs still work while you fix it). |
@@ -103,7 +104,7 @@ is a tool the model can call and the runtime cannot serve.
 ## The flow
 
 ```sh
-export DATABASE_URL=… TORII_TENANT=acme TORII_FENCE_VERSION=v1
+export DATABASE_URL=… TORII_TENANT=acme TORII_FENCE_VERSION=v1 TORII_USER=<your profile id>
 
 # 1. push your registry — replace-all; it advances THIS tenant's config generation
 torii config push ./registry
@@ -206,6 +207,33 @@ neither. A run that stops at a cap pauses, `run status` shows the spend against 
 run was SUBMITTED with — on a run without one it is refused and nothing is written. Under a money
 cap every model on the chains the run uses must declare pricing (an explicit zero for a free or
 local model); an unpriced one is refused.
+
+**Runs are charged to torii's caps (AG-13, Postgres).** torii configures the caps — one budget
+node per org unit, `hard` or `soft` (Budgets & billing) — and the engine enforces a run's limit:
+
+- **The limit.** At `run submit` the run's money limit is `TORII_USER`'s **headroom**: the tightest
+  `hard` cap (`cap − spent − reserved`) over every unit the user is a member of (their personal
+  unit, their groups) and every unit above those. `soft` caps never limit. `--budget-usd` may
+  only lower it; above the headroom the submit is refused (exit 2, naming the headroom and the
+  unit) and nothing is written. With no `hard` cap anywhere the run still gets a money limit — one
+  it cannot reach, shown by `run status` as `none (no hard cap over the issuer)` — because the
+  engine ledgers a call's cost only under a money cap. A user covered by no budget node at all
+  (not even the tenant's root) is refused, as a question is.
+- **The spend.** What a run spends — the engine's own fold of its journal — is added to every
+  budget node it was charged to, so Budgets & billing shows one number for questions and runs.
+  `run submit` records it when its drive returns (paused, failed or completed), and `worker serve`
+  after every tick for every run whose schedule moved. Recording is idempotent: each run keeps a
+  watermark of what is already recorded (`runs.run_charges`), so a re-drive or a second worker
+  never counts a call twice.
+- **A raise.** `run wake --budget-usd` on Postgres is checked against the nodes the run is charged
+  to: the new cap less what the run has spent must fit their headroom, or the raise is refused
+  and nothing is written. Lowering is always allowed. A run submitted before AG-13 has no charge
+  and cannot be money-raised.
+- **Not reserved.** The limit is computed at submit; it does not reserve the headroom. Two runs
+  (or a run and questions) on the same node can together spend past a `hard` cap by at most the
+  limits still outstanding — each run is bounded, the node's total is not.
+- Every Postgres run now carries a money limit, so its model calls run one at a time, as any
+  budgeted run's do (a wide `Map` is slower than an unbudgeted one).
 
 **Confirmations and escalations.** A `tool:` row in `list-paused` (and a `tool confirmation
 pending:` line in `status`) is one call of a `confirm_tools` tool waiting for a person; answer it

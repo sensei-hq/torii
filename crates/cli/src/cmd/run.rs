@@ -1408,6 +1408,13 @@ pub async fn signal(
         )));
     }
 
+    // AG-15: a node whose only wait is a confirm-before-run CALL is answered by `run tool`.
+    if let Some(refusal) =
+        crate::cmd::tool::pending_call_refusal(&events, &node, run, "an AwaitSignal")
+    {
+        return Ok(Outcome::precondition(refusal));
+    }
+
     match signal_state(&events, &node) {
         SignalState::Awaiting { .. } => {}
         // Everything else is a no-op at the node, so say so instead of writing.

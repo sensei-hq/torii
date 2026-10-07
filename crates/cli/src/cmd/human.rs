@@ -493,6 +493,10 @@ pub async fn answer(
                  --node {shown} --payload '<json>'",
                 run.0
             )
+        } else if let Some(refusal) =
+            crate::cmd::tool::pending_call_refusal(&events, &node, run, "a human-backed Agent")
+        {
+            refusal
         } else {
             format!(
                 "not delivered: {shown} is not awaiting a human answer. \

@@ -261,3 +261,93 @@ fn config_show_and_pull_on_the_memory_backend_round_trip() {
         "the pulled directory boots as the same registry"
     );
 }
+
+/// A provider speaking the OpenAI wire that fails every call with a 500 — a fault the gateway
+/// classifies as retryable. Returns its base URL and its call count.
+async fn failing_provider() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let app = axum::Router::new().route(
+        "/v1/chat/completions",
+        axum::routing::post(move || {
+            let counted = counted.clone();
+            async move {
+                counted.fetch_add(1, SeqCst);
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::Json(serde_json::json!({"error": {"message": "upstream blip"}})),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (url, calls)
+}
+
+/// AG-5 on the memory backend: nothing outlives the process, so a run paused on a transient
+/// retry can never be woken — no later `worker serve` can see it. With `TORII_TRANSIENT_ATTEMPTS`
+/// unset, `run submit` must therefore fail a provider 500 (exit non-zero), not print `paused`
+/// and exit 0 on a model call that never succeeded.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_provider_500_fails_run_submit_on_the_memory_backend_by_default() {
+    let (url, calls) = failing_provider().await;
+    let dir = tempfile::tempdir().unwrap();
+    let (reg, gw, _) = fixtures(dir.path());
+    std::fs::write(
+        &gw,
+        serde_json::json!({
+            "routers": {"ollama": {"url": url}},
+            "models": {"m": {"id": "m", "provider": "ollama", "capabilities": ["text_chat"],
+                             "context_window": 8192, "max_output_tokens": 1024}},
+            "chains": {"c": {"id": "c", "capability": "text_chat",
+                             "models": [{"model": "m", "router": "ollama", "priority": 1}],
+                             "fallback_triggers": []}}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let graph = dir.path().join("ask.json");
+    let g = Graph {
+        nodes: vec![Node {
+            id: NodeId("ask".into()),
+            kind: NodeKind::ModelCall {
+                chain: "c".into(),
+                payload: serde_json::json!({"prompt": "hello"}),
+            },
+            deps: vec![],
+        }],
+    };
+    std::fs::write(&graph, serde_json::to_string(&g).unwrap()).unwrap();
+
+    let out = torii()
+        .env_remove("TORII_TRANSIENT_ATTEMPTS")
+        .env("TORII_BACKEND", "memory")
+        .env("TORII_REGISTRY_DIR", &reg)
+        .env("TORII_FENCE_VERSION", "v1")
+        .args(["run", "submit", "--graph"])
+        .arg(&graph)
+        .arg("--gateway-config")
+        .arg(&gw)
+        .output()
+        .expect("spawn torii");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        calls.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "precondition: the provider was called\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "a memory-backend run paused on a retry nothing can wake must not exit 0\n\
+         stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("failed: ") && stderr.contains("at node ask"),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+}

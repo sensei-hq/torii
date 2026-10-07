@@ -13,10 +13,13 @@
 //! is refused, naming the entity and the field: a pull that silently changed the registry
 //! would make the next push of it an unannounced edit.
 
+use std::collections::{BTreeMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use orchestrator_core::{
-    AgentDefinition, ConfigSource, OrchestratorError, RegistryConfig, SkillDef,
+    Activation, AgentBacking, AgentDefinition, ConfigSource, OrchestratorError, Permissions,
+    RegistryConfig, SkillDef, ToolSpec,
 };
 use serde::Serialize;
 
@@ -31,13 +34,23 @@ pub struct RegistrySnapshot {
     pub registry: RegistryConfig,
 }
 
-/// Read the live registry and its generation in ONE `load_versioned` call.
+/// Read the live registry and its generation in ONE `load_versioned` call — never a `load`
+/// beside a `version`, which a concurrent push can land between.
 pub async fn snapshot(src: &dyn ConfigSource) -> Result<RegistrySnapshot, OrchestratorError> {
-    let _ = src;
+    let (mut registry, generation) = src.load_versioned().await?;
+    canonicalize(&mut registry);
     Ok(RegistrySnapshot {
-        generation: 0,
-        registry: RegistryConfig::default(),
+        generation: generation.unwrap_or(0),
+        registry,
     })
+}
+
+fn canonicalize(cfg: &mut RegistryConfig) {
+    cfg.agents.sort_by(|a, b| a.name.cmp(&b.name));
+    cfg.skills.sort_by(|a, b| a.name.cmp(&b.name));
+    cfg.tools.sort_by(|a, b| a.name.cmp(&b.name));
+    cfg.chain_bindings
+        .sort_by(|a, b| (&a.area, &a.kind).cmp(&(&b.area, &b.kind)));
 }
 
 /// One file of a pulled registry directory, relative to its root.
@@ -54,16 +67,17 @@ pub struct PullReport {
     pub skills: usize,
     pub tools: usize,
     pub chain_bindings: usize,
-    /// Registry-layout files a `--force` pull removed before writing.
+    /// Registry-layout files a `force` pull removed before writing.
     pub removed: usize,
 }
 
-/// Why a pull refused or failed. Nothing is written on any refusal.
+/// Why a pull refused or failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PullError {
-    /// A value the directory format cannot carry: the next push would change it.
+    /// A value the directory format cannot carry: the next push would change it. Nothing
+    /// was written.
     Unrepresentable(String),
-    /// The target directory has entries and `force` was not given.
+    /// The target directory has entries and `force` was not given. Nothing was written.
     NotEmpty(PathBuf),
     /// A filesystem failure (the message names the path).
     Io(String),
@@ -73,40 +87,448 @@ impl std::fmt::Display for PullError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PullError::Unrepresentable(m) | PullError::Io(m) => f.write_str(m),
-            PullError::NotEmpty(p) => write!(f, "{} is not empty", p.display()),
+            PullError::NotEmpty(p) => write!(
+                f,
+                "{} is not empty; refusing to overwrite it. Forcing replaces only the files \
+                 a push reads (agents/*.md, skills/*.md, tools/*.json, chains.json, \
+                 grants.json) and leaves everything else",
+                p.display()
+            ),
         }
     }
 }
 
 impl std::error::Error for PullError {}
 
+fn io(what: impl std::fmt::Display, e: std::io::Error) -> PullError {
+    PullError::Io(format!("{what}: {e}"))
+}
+
+/// A frontmatter block in the controlled subset `from_frontmatter` parses: one `key: value`
+/// or `key: [a, b]` per line.
+#[derive(Default)]
+struct Frontmatter(String);
+
+impl Frontmatter {
+    fn scalar(&mut self, key: &str, value: &str) {
+        if value.is_empty() {
+            self.0.push_str(&format!("{key}:\n"));
+        } else {
+            self.0.push_str(&format!("{key}: {value}\n"));
+        }
+    }
+
+    fn list<S: AsRef<str>>(&mut self, key: &str, items: impl IntoIterator<Item = S>) {
+        let items: Vec<String> = items.into_iter().map(|s| s.as_ref().to_string()).collect();
+        self.0.push_str(&format!("{key}: [{}]\n", items.join(", ")));
+    }
+
+    /// `key: [k=v, …]`, sorted by key so a pull is deterministic.
+    fn pairs<V: std::fmt::Display>(
+        &mut self,
+        key: &str,
+        map: impl IntoIterator<Item = (String, V)>,
+    ) {
+        let sorted: BTreeMap<String, V> = map.into_iter().collect();
+        self.list(key, sorted.into_iter().map(|(k, v)| format!("{k}={v}")));
+    }
+
+    fn finish(self, body: &str) -> String {
+        format!("---\n{}---\n{body}", self.0)
+    }
+}
+
+/// A line break inside a frontmatter value would end its line: refuse it by field name
+/// (the parse-back check would only see a malformed line, not which field made it).
+fn single_line<'a>(
+    what: &str,
+    field: &str,
+    values: impl IntoIterator<Item = &'a str>,
+) -> Result<(), PullError> {
+    for v in values {
+        if v.contains(['\n', '\r']) {
+            return Err(PullError::Unrepresentable(format!(
+                "{what}: its {field} holds a line break, which the frontmatter format cannot \
+                 carry; nothing was written"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// `<n><unit>` in the largest unit that is exact — the grammar `timeout` and
+/// `confirm_timeout` parse. Sub-second and negative durations have no spelling.
+fn duration(what: &str, field: &str, d: chrono::Duration) -> Result<String, PullError> {
+    if d.subsec_nanos() != 0 || d < chrono::Duration::zero() {
+        return Err(PullError::Unrepresentable(format!(
+            "{what}: its {field} ({d}) is not a whole, non-negative number of seconds, which \
+             the frontmatter format cannot carry; nothing was written"
+        )));
+    }
+    let s = d.num_seconds();
+    Ok(match s {
+        _ if s != 0 && s % 86_400 == 0 => format!("{}d", s / 86_400),
+        _ if s != 0 && s % 3_600 == 0 => format!("{}h", s / 3_600),
+        _ if s != 0 && s % 60 == 0 => format!("{}m", s / 60),
+        _ => format!("{s}s"),
+    })
+}
+
+/// The parse-back check: `rendered` must read back as exactly `expected`, or the field that
+/// would change is named and the pull refused.
+fn same<T: Serialize>(what: &str, expected: &T, back: &T) -> Result<(), PullError> {
+    let (want, got) = (to_json(what, expected)?, to_json(what, back)?);
+    if want == got {
+        return Ok(());
+    }
+    let field = match (&want, &got) {
+        (serde_json::Value::Object(w), serde_json::Value::Object(g)) => w
+            .keys()
+            .chain(g.keys())
+            .find(|k| w.get(*k) != g.get(*k))
+            .cloned()
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+    Err(PullError::Unrepresentable(format!(
+        "{what}: its {field} would not read back as stored — the frontmatter format cannot \
+         carry it (a leading or trailing space, a comma or '=' inside a list item, a value \
+         shaped like a [list], an empty value, or a blank line opening the body); nothing \
+         was written"
+    )))
+}
+
+fn to_json<T: Serialize>(what: &str, t: &T) -> Result<serde_json::Value, PullError> {
+    serde_json::to_value(t)
+        .map_err(|e| PullError::Unrepresentable(format!("{what}: does not serialize: {e}")))
+}
+
+fn unparsable(what: &str, e: OrchestratorError) -> PullError {
+    PullError::Unrepresentable(format!(
+        "{what}: the frontmatter it would be written as does not parse back ({e}); nothing \
+         was written"
+    ))
+}
+
 /// An agent as the `agents/*.md` file `push` reads. Its `grants` are NOT part of it — they
 /// live in the root's `grants.json`.
 pub fn render_agent(a: &AgentDefinition) -> Result<String, PullError> {
-    let _ = a;
-    Ok(String::new())
+    // Exhaustive on purpose: a field the gateway adds is a compile error HERE, never a key a
+    // pull silently drops and the next push of the pulled directory silently erases.
+    let AgentDefinition {
+        name,
+        area,
+        kind,
+        chain,
+        chains,
+        grants: _,
+        tools,
+        skills,
+        system_prompt,
+        backed_by,
+        default_planner,
+        tool_limits,
+        confirm_tools,
+        confirm_timeout,
+        escalate_to,
+    } = a;
+    let what = format!("agent {name:?}");
+    single_line(&what, "name", [name.as_str()])?;
+    single_line(&what, "area", [area.as_str()])?;
+    single_line(&what, "kind", [kind.as_str()])?;
+    single_line(&what, "chain", chain.as_deref())?;
+    single_line(
+        &what,
+        "chains",
+        chains.iter().flat_map(|(k, v)| [k.as_str(), v.as_str()]),
+    )?;
+    single_line(&what, "tools", tools.iter().map(String::as_str))?;
+    single_line(&what, "skills", skills.iter().map(String::as_str))?;
+    single_line(&what, "tool_limits", tool_limits.keys().map(String::as_str))?;
+    single_line(
+        &what,
+        "confirm_tools",
+        confirm_tools.iter().map(String::as_str),
+    )?;
+    single_line(&what, "escalate_to", escalate_to.as_deref())?;
+
+    let mut fm = Frontmatter::default();
+    fm.scalar("name", name);
+    fm.scalar("area", area);
+    fm.scalar("kind", kind);
+    if let Some(c) = chain {
+        fm.scalar("chain", c);
+    }
+    if !chains.is_empty() {
+        fm.pairs("chains", chains.clone());
+    }
+    fm.list("tools", tools);
+    fm.list("skills", skills);
+    match backed_by {
+        AgentBacking::Model => {}
+        AgentBacking::Human { timeout } => {
+            fm.scalar("backed_by", "human");
+            if let Some(t) = timeout {
+                fm.scalar("timeout", &duration(&what, "backed_by timeout", *t)?);
+            }
+        }
+    }
+    if *default_planner {
+        fm.scalar("default_planner", "true");
+    }
+    if !tool_limits.is_empty() {
+        fm.pairs("tool_limits", tool_limits.clone());
+    }
+    if !confirm_tools.is_empty() {
+        fm.list("confirm_tools", confirm_tools);
+    }
+    if let Some(t) = confirm_timeout {
+        fm.scalar("confirm_timeout", &duration(&what, "confirm_timeout", *t)?);
+    }
+    if let Some(e) = escalate_to {
+        fm.scalar("escalate_to", e);
+    }
+    let md = fm.finish(system_prompt);
+
+    let back = AgentDefinition::from_frontmatter(&md).map_err(|e| unparsable(&what, e))?;
+    let mut expected = a.clone();
+    expected.grants.clear();
+    same(&what, &expected, &back)?;
+    Ok(md)
 }
 
 /// A skill as the `skills/*.md` file `push` reads.
 pub fn render_skill(s: &SkillDef) -> Result<String, PullError> {
-    let _ = s;
-    Ok(String::new())
+    // Exhaustive for the same reason as `render_agent`.
+    let SkillDef {
+        name,
+        description,
+        body,
+        activation,
+    } = s;
+    let what = format!("skill {name:?}");
+    single_line(&what, "name", [name.as_str()])?;
+    single_line(&what, "description", description.as_deref())?;
+    let mut fm = Frontmatter::default();
+    fm.scalar("name", name);
+    if let Some(d) = description {
+        fm.scalar("description", d);
+    }
+    match activation {
+        Activation::Always => {}
+        Activation::OnKeywords(kw) => {
+            single_line(&what, "activation", kw.iter().map(String::as_str))?;
+            fm.list("activate_on", kw);
+        }
+    }
+    let md = fm.finish(body);
+
+    let back = SkillDef::from_frontmatter(&md).map_err(|e| unparsable(&what, e))?;
+    same(&what, s, &back)?;
+    Ok(md)
 }
 
-/// Every file of the registry directory for `cfg`, validated, in a stable order.
-pub fn render(cfg: &RegistryConfig) -> Result<Vec<RegistryFile>, PullError> {
-    let _ = cfg;
-    Ok(Vec::new())
+/// A tool as the `tools/*.json` file `push` reads.
+fn render_tool(t: &ToolSpec) -> Result<String, PullError> {
+    let what = format!("tool {:?}", t.name);
+    let json = pretty(&what, t)?;
+    let back: ToolSpec = serde_json::from_str(&json)
+        .map_err(|e| PullError::Unrepresentable(format!("{what}: does not parse back: {e}")))?;
+    same(&what, t, &back)?;
+    Ok(json)
 }
+
+fn pretty<T: Serialize + ?Sized>(what: &str, t: &T) -> Result<String, PullError> {
+    serde_json::to_string_pretty(t)
+        .map(|s| s + "\n")
+        .map_err(|e| PullError::Unrepresentable(format!("{what}: does not serialize: {e}")))
+}
+
+/// Filenames for entity names. The loader never reads a filename back (only its extension),
+/// so the name is free to be made safe: an entity name is free text and must never steer a
+/// write outside the directory, hide as a dot-file, or — on a case-insensitive filesystem —
+/// land on the same file as another entity's.
+#[derive(Default)]
+struct FileNames(HashSet<String>);
+
+impl FileNames {
+    fn for_name(&mut self, name: &str) -> String {
+        let mut stem: String = name
+            .chars()
+            .take(100)
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if stem.is_empty() || stem.starts_with('.') {
+            stem.insert(0, '_');
+        }
+        let mut candidate = stem.clone();
+        let mut n = 2;
+        while !self.0.insert(candidate.to_ascii_lowercase()) {
+            candidate = format!("{stem}-{n}");
+            n += 1;
+        }
+        candidate
+    }
+}
+
+/// Every file of the registry directory for `cfg`, validated, in a stable order: agents,
+/// skills and tools by name, then `chains.json` and `grants.json` (always both, so the layout
+/// is the same for every registry).
+pub fn render(cfg: &RegistryConfig) -> Result<Vec<RegistryFile>, PullError> {
+    let mut cfg = cfg.clone();
+    canonicalize(&mut cfg);
+    let mut files = Vec::new();
+
+    let mut names = FileNames::default();
+    for a in &cfg.agents {
+        files.push(RegistryFile {
+            path: Path::new("agents").join(format!("{}.md", names.for_name(&a.name))),
+            contents: render_agent(a)?,
+        });
+    }
+    let mut names = FileNames::default();
+    for s in &cfg.skills {
+        files.push(RegistryFile {
+            path: Path::new("skills").join(format!("{}.md", names.for_name(&s.name))),
+            contents: render_skill(s)?,
+        });
+    }
+    let mut names = FileNames::default();
+    for t in &cfg.tools {
+        files.push(RegistryFile {
+            path: Path::new("tools").join(format!("{}.json", names.for_name(&t.name))),
+            contents: render_tool(t)?,
+        });
+    }
+    files.push(RegistryFile {
+        path: PathBuf::from("chains.json"),
+        contents: pretty("chain bindings", &cfg.chain_bindings)?,
+    });
+    let grants: BTreeMap<&str, BTreeMap<&str, &Permissions>> = cfg
+        .agents
+        .iter()
+        .filter(|a| !a.grants.is_empty())
+        .map(|a| {
+            (
+                a.name.as_str(),
+                a.grants.iter().map(|(t, p)| (t.as_str(), p)).collect(),
+            )
+        })
+        .collect();
+    files.push(RegistryFile {
+        path: PathBuf::from("grants.json"),
+        contents: pretty("grants", &grants)?,
+    });
+    Ok(files)
+}
+
+/// The files a push reads: `(subdirectory, extension)`, plus the two root files.
+const LAYOUT_DIRS: [(&str, &str); 3] = [("agents", "md"), ("skills", "md"), ("tools", "json")];
+const LAYOUT_ROOT_FILES: [&str; 2] = ["chains.json", "grants.json"];
 
 /// Write `cfg` into `dir` as the layout `config push` reads.
 ///
-/// Refuses a non-empty `dir` unless `force`; with `force` it first removes every file `push`
-/// would read (`agents/*.md`, `skills/*.md`, `tools/*.json`, `chains.json`, `grants.json`) and
-/// leaves anything else alone, so the result pushes back as exactly `cfg`.
+/// Every file is rendered and checked first, so a refusal writes nothing. Refuses a non-empty
+/// `dir` unless `force`; with `force` it first removes every file `push` would read
+/// (`agents/*.md`, `skills/*.md`, `tools/*.json`, `chains.json`, `grants.json`) and leaves
+/// anything else alone, so the result pushes back as exactly `cfg` — a stale agent left from
+/// an earlier pull would otherwise come back as an addition.
 pub fn pull(cfg: &RegistryConfig, dir: &Path, force: bool) -> Result<PullReport, PullError> {
-    let _ = (cfg, dir, force);
-    Ok(PullReport::default())
+    let files = render(cfg)?;
+    let removed = prepare(dir, force)?;
+    for (sub, _) in LAYOUT_DIRS {
+        let d = dir.join(sub);
+        std::fs::create_dir_all(&d).map_err(|e| io(format!("create {}", d.display()), e))?;
+    }
+    for f in &files {
+        let path = dir.join(&f.path);
+        // `create_new`: after `prepare` no layout file exists, so a file already here is one
+        // this pull did not expect (e.g. `Foo.md` beside a `foo.md` on a case-insensitive
+        // filesystem) — loud, never overwritten.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .and_then(|mut file| file.write_all(f.contents.as_bytes()))
+            .map_err(|e| io(format!("write {}", path.display()), e))?;
+    }
+    Ok(PullReport {
+        agents: cfg.agents.len(),
+        skills: cfg.skills.len(),
+        tools: cfg.tools.len(),
+        chain_bindings: cfg.chain_bindings.len(),
+        removed,
+    })
+}
+
+/// Make `dir` ready to receive a pull; returns how many layout files `force` removed.
+fn prepare(dir: &Path, force: bool) -> Result<usize, PullError> {
+    match std::fs::metadata(dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(dir).map_err(|e| io(format!("create {}", dir.display()), e))?;
+            return Ok(0);
+        }
+        Err(e) => return Err(io(format!("read {}", dir.display()), e)),
+        Ok(m) if !m.is_dir() => {
+            return Err(PullError::Io(format!(
+                "{} exists and is not a directory",
+                dir.display()
+            )));
+        }
+        Ok(_) => {}
+    }
+    let mut entries =
+        std::fs::read_dir(dir).map_err(|e| io(format!("read {}", dir.display()), e))?;
+    if entries.next().is_none() {
+        return Ok(0);
+    }
+    if !force {
+        return Err(PullError::NotEmpty(dir.to_path_buf()));
+    }
+    let mut removed = 0;
+    for (sub, ext) in LAYOUT_DIRS {
+        let d = dir.join(sub);
+        match std::fs::symlink_metadata(&d) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(io(format!("read {}", d.display()), e)),
+            // Clearing through a symlink would delete files outside the directory.
+            Ok(m) if m.file_type().is_symlink() => {
+                return Err(PullError::Io(format!(
+                    "refusing to clear {}: it is a symlink",
+                    d.display()
+                )));
+            }
+            Ok(m) if !m.is_dir() => {
+                return Err(PullError::Io(format!("{} is not a directory", d.display())));
+            }
+            Ok(_) => {}
+        }
+        let read = std::fs::read_dir(&d).map_err(|e| io(format!("read {}", d.display()), e))?;
+        for entry in read {
+            let p = entry
+                .map_err(|e| io(format!("read {}", d.display()), e))?
+                .path();
+            if p.extension().and_then(|x| x.to_str()) == Some(ext) {
+                std::fs::remove_file(&p).map_err(|e| io(format!("remove {}", p.display()), e))?;
+                removed += 1;
+            }
+        }
+    }
+    for name in LAYOUT_ROOT_FILES {
+        let p = dir.join(name);
+        match std::fs::remove_file(&p) {
+            Ok(()) => removed += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io(format!("remove {}", p.display()), e)),
+        }
+    }
+    Ok(removed)
 }
 
 #[cfg(test)]

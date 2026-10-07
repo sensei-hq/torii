@@ -43,6 +43,7 @@ pub async fn status(
                 .map_err(OrchestratorError::Journal)?;
             let (spent, budget) = orchestrator::spend_of(&events);
             let budgeted = budgeted_turns(&events);
+            let spend_advice = spend_unrecorded_advice(&r);
 
             if json {
                 let base = render::json(&[r]).map_err(|e| CliError::error(e.to_string()))?;
@@ -53,7 +54,7 @@ pub async fn status(
                 // does, so re-serializing would silently reorder every key. Only
                 // taking that detour when there is something to splice in is what
                 // keeps the unbudgeted, undegraded case byte-identical.
-                if budget.is_none() && budgeted.is_empty() {
+                if budget.is_none() && budgeted.is_empty() && spend_advice.is_none() {
                     return Ok(Outcome::ok(base));
                 }
                 // Reuse `render::json` for the row shape + redaction, then splice
@@ -68,6 +69,9 @@ pub async fn status(
                 if !budgeted.is_empty() {
                     rows[0]["context_budgeted"] = serde_json::to_value(&budgeted)
                         .map_err(|e| CliError::error(e.to_string()))?;
+                }
+                if let Some(advice) = spend_advice {
+                    rows[0]["spend_unrecorded"] = serde_json::json!(advice);
                 }
                 Ok(Outcome::ok(
                     serde_json::to_string_pretty(&rows)
@@ -94,10 +98,38 @@ pub async fn status(
                         budgeted.len()
                     ));
                 }
+                if let Some(advice) = spend_advice {
+                    text.push_str(&format!("spend unrecorded: {advice}\n"));
+                }
                 Ok(Outcome::ok(text))
             }
         }
     }
+}
+
+/// How the gateway's `Scheduler` begins the reason it files a run under when a drive fails
+/// with `OrchestratorError::SpendUnrecorded` — the error's own `Display`, which the scheduler
+/// records verbatim. The scheduled row is the ONLY place that failure survives: it means the
+/// journal append carrying the spend failed, so the journal has nothing to fold. Pinned
+/// against the real error in `status_of_a_run_failed_on_an_unrecorded_spend_says_to_reconcile_first`.
+const SPEND_UNRECORDED_PREFIX: &str = "spend not recorded at ";
+
+/// What `status` tells an operator about a run filed for an unrecorded spend (AG-12 × AG-3).
+/// The one failure a plain re-drive makes worse: the paid call has no memo, so a re-drive
+/// dispatches it and pays for it again, outside every cap.
+const SPEND_UNRECORDED_ADVICE: &str = "reconcile the provider-side spend for this call (the \
+     provider's usage or billing records) before re-driving this run — the call was dispatched \
+     and paid for, but its usage never reached the journal, so no budget counts it and a \
+     re-drive would dispatch and pay for it again";
+
+/// [`SPEND_UNRECORDED_ADVICE`] for a run the scheduler failed on an unrecorded spend, and
+/// `None` for every other row — a recorded spend needs no reconciling.
+fn spend_unrecorded_advice(r: &orchestrator_core::ScheduledRun) -> Option<&'static str> {
+    (r.status == RunStatus::Failed
+        && r.reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with(SPEND_UNRECORDED_PREFIX)))
+    .then_some(SPEND_UNRECORDED_ADVICE)
 }
 
 /// One SP-7b `ContextBudgeted` row in the shape `status` reports it.

@@ -15,6 +15,7 @@ use gateway::types::{
     capability::Capability,
     request::{InferenceRequest, Payload},
 };
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 
 use super::{RagError, EMBED_DIM};
@@ -50,9 +51,11 @@ pub fn validate_dims(rows: &[Vec<f32>]) -> Result<(), RagError> {
 /// Deterministic, hermetic embedder for unit/integration tests: SHA-256(text) seeds an xorshift PRNG
 /// that fills exactly [`EMBED_DIM`] f32 in [-1, 1], then L2-normalizes. Identical text → identical
 /// vector (so tests can seed two tenants with the SAME vector to prove cross-tenant isolation). No
-/// model, no network.
+/// model, no network. Test-only (`cfg(test)`): prod always embeds through [`EngineEmbedder`].
+#[cfg(test)]
 pub struct StubEmbedder;
 
+#[cfg(test)]
 #[async_trait]
 impl Embedder for StubEmbedder {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, RagError> {
@@ -60,6 +63,7 @@ impl Embedder for StubEmbedder {
     }
 }
 
+#[cfg(test)]
 fn stub_vector(text: &str) -> Vec<f32> {
     let digest = Sha256::digest(text.as_bytes());
     // seed the PRNG from the first 8 bytes of the digest (force odd/non-zero).
@@ -85,8 +89,10 @@ fn stub_vector(text: &str) -> Vec<f32> {
 }
 
 /// A stub that returns the WRONG dimensionality — exercises the [`validate_dim`] failure path.
+#[cfg(test)]
 pub struct WrongDimStubEmbedder(pub usize);
 
+#[cfg(test)]
 #[async_trait]
 impl Embedder for WrongDimStubEmbedder {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, RagError> {

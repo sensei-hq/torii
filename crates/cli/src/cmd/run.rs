@@ -5355,6 +5355,92 @@ pub(crate) mod tests {
         assert!(!out.text.contains(secret), "{}", out.text);
     }
 
+    #[tokio::test]
+    async fn status_shows_a_pending_tool_confirmation_and_how_to_answer_it() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, Some(at(9000))).await;
+        let j = tool_confirm_journal(run, Some(at(9000))).await;
+
+        let out = status(&s, &NoWakeAttemptCounts, &j, run, false)
+            .await
+            .expect("status");
+        assert_eq!(out.code, EXIT_OK, "{}", out.text);
+        let line = out
+            .text
+            .lines()
+            .find(|l| l.starts_with("tool confirmation pending:"))
+            .unwrap_or_else(|| panic!("no confirmation line:\n{}", out.text));
+        for want in [
+            "deployer",
+            "deploy",
+            "deployer#t1#1",
+            &shown_at(9000),
+            &format!("torii run tool approve {} --call deployer#t1#1", run.0),
+        ] {
+            assert!(line.contains(want), "{want:?} missing: {line}");
+        }
+
+        let out = status(&s, &NoWakeAttemptCounts, &j, run, true)
+            .await
+            .expect("status");
+        let v: serde_json::Value = serde_json::from_str(&out.text).expect("json");
+        assert_eq!(
+            v[0]["tool_confirms"][0]["tool_confirm"]["effect_id"],
+            serde_json::json!("deployer#t1#1"),
+            "{v}"
+        );
+        assert_eq!(
+            v[0]["tool_confirms"][0]["node"],
+            serde_json::json!("deployer")
+        );
+    }
+
+    #[tokio::test]
+    async fn status_shows_an_escalated_questions_holder_and_current_deadline() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, Some(at(2000))).await;
+        let j = escalated_journal(run, &[("legal-lead", Some(2000))]).await;
+
+        let out = status(&s, &NoWakeAttemptCounts, &j, run, false)
+            .await
+            .expect("status");
+        let line = out
+            .text
+            .lines()
+            .find(|l| l.starts_with("escalated:"))
+            .unwrap_or_else(|| panic!("no escalation line:\n{}", out.text));
+        assert!(
+            line.contains("reviewer")
+                && line.contains("legal-lead")
+                && line.contains(&shown_at(2000)),
+            "{line}"
+        );
+        assert!(!line.contains(&shown_at(1000)), "{line}");
+
+        let out = status(&s, &NoWakeAttemptCounts, &j, run, true)
+            .await
+            .expect("status");
+        let v: serde_json::Value = serde_json::from_str(&out.text).expect("json");
+        assert_eq!(
+            v[0]["escalations"],
+            serde_json::json!([{"node": "reviewer", "escalated_to": "legal-lead", "deadline": at(2000)}]),
+            "{v}"
+        );
+    }
+
+    /// An answered escalation is history, not a wait: nothing to show.
+    #[tokio::test]
+    async fn status_shows_no_escalation_once_the_question_is_answered() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let j = escalated_journal(run, &[("legal-lead", Some(2000))]).await;
+        append_completion(&j, run, &reviewer()).await;
+        let out = status(&s, &NoWakeAttemptCounts, &j, run, false)
+            .await
+            .expect("status");
+        assert!(!out.text.contains("escalated"), "{}", out.text);
+    }
+
     /// The third waiting kind must be VISIBLE. `signal_states`' `AgentAwaited` arm is the
     /// only thing that puts a human-backed agent in the awaited set, and until this test
     /// nothing in `list-paused` exercised it — dropping that arm reddened nine `cmd::human`

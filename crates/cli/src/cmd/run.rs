@@ -3804,7 +3804,7 @@ pub(crate) mod tests {
     /// Which concurrent actor lands in the gap between `wake`'s pre-check (`status`)
     /// and its own `force_wake` call.
     #[derive(Clone, Copy)]
-    enum ConcurrentActor {
+    pub(crate) enum ConcurrentActor {
         /// A worker's tick claims the same due pause first (`paused -> waking`).
         ClaimsFirst,
         /// Another operator cancels the run first (`paused -> cancelled`).
@@ -3822,10 +3822,13 @@ pub(crate) mod tests {
     /// (the pre-check) and only then `store.force_wake` — so running the concurrent
     /// actor at the top of THIS `force_wake` lands it exactly in that gap, reproducing
     /// a real multi-process race deterministically, single-threaded, no database.
-    struct RacingStore {
-        inner: InMemorySchedulerStore,
-        run: RunId,
-        actor: ConcurrentActor,
+    ///
+    /// `pub(crate)` for `cmd::tool`'s tests: a run already claimed when the decision's own
+    /// `force_wake` lands is the path on which `tool decide` re-reads its journal.
+    pub(crate) struct RacingStore {
+        pub(crate) inner: InMemorySchedulerStore,
+        pub(crate) run: RunId,
+        pub(crate) actor: ConcurrentActor,
     }
 
     #[async_trait::async_trait]

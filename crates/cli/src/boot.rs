@@ -20,9 +20,11 @@ use orchestrator_store::{
     FilesystemConfigSource, InMemoryConfigStore, InMemoryContentStore, InMemoryContextStore,
     InMemoryJournal, InMemorySchedulerStore,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use torii_core::events::{DEFAULT_EVENT_BUFFER, RunEventSink, RunEvents};
+use torii_core::registry::RegistryReloader;
 
 pub const ENV_DATABASE_URL: &str = "DATABASE_URL";
 pub const ENV_FENCE_VERSION: &str = "TORII_FENCE_VERSION";
@@ -810,12 +812,22 @@ pub struct HeavyDeps {
     pub clock: Arc<dyn Clock>,
     /// AG-18: the run events the scheduler's drives report (torii-core's `RunEventSink`).
     pub events: RunEvents,
+    /// AG-5: the registry handle the executor pins each run from, following the tenant's
+    /// durable config — `worker serve` refreshes it before every tick.
+    pub registry: RegistryReloader,
+    /// The chains this boot's gateway serves. A reloaded registry is checked against them:
+    /// the catalog is read once, at boot, so a chain added there since is unknown here.
+    pub gateway_chains: HashMap<String, kernel::types::config::FallbackChainConfig>,
 }
 
 impl HeavyDeps {
-    /// What `worker serve` ticks.
-    pub fn ticker(&self) -> &dyn crate::cmd::worker::Ticker {
-        &self.scheduler
+    /// What `worker serve` ticks: the scheduler, behind a registry refresh (AG-5).
+    pub fn ticker(&self) -> crate::cmd::worker::Reloading<'_> {
+        crate::cmd::worker::Reloading {
+            inner: &self.scheduler,
+            registry: &self.registry,
+            gateway_chains: &self.gateway_chains,
+        }
     }
 }
 
@@ -860,9 +872,8 @@ pub async fn heavy(
         RegistryHandle::from_source(light.config_source.as_ref() as &dyn ConfigSource).await?;
     // `snapshot()`, not `.current()` + `.generation()` as two separate lock
     // acquisitions: those release the lock in between, which is exactly the torn
-    // -read shape SP-DATA-2 eliminated. Not reachable today (boot is sequential
-    // and nothing calls `reload()`), but it must not quietly plant one for
-    // whoever wires the deferred reload trigger.
+    // -read shape SP-DATA-2 eliminated — and since AG-5 `worker serve` does `reload()` this
+    // handle (`RegistryReloader`), so a torn pair is a real hazard, not a hypothetical one.
     let (registry, generation) = handle.snapshot();
     let agents_n = registry.agents().count();
     let skills_n = registry.skills().count();
@@ -887,6 +898,7 @@ pub async fn heavy(
     // is captured from the shared, Arc-backed registry BEFORE `build()` consumes the
     // builder, and checked right after.
     let configured_routers: Vec<String> = gw_config.routers.keys().cloned().collect();
+    let gateway_chains = gw_config.chains.clone();
     let builder = gateway::FacadeBuilder::new(gw_config);
     let registered = builder.registry().clone();
     let facade = builder.build().await;
@@ -909,7 +921,7 @@ pub async fn heavy(
         .with_max_transient_attempts(drive.transient_attempts)
         .with_content_store(content)
         .with_context_store(context)
-        .with_registry_handle(handle)
+        .with_registry_handle(handle.clone())
         // A production binary defaults SECURE: s2 leaves the redactor off in the
         // library to stay byte-identical, but here it is unconditional and there is
         // deliberately no --no-redact flag.
@@ -989,11 +1001,17 @@ pub async fn heavy(
     )
     .with_wake_retry(wake_retry)
     .with_lease(drive.wake_lease);
+    // AG-5: the SAME handle the executor holds (clones share one lock), following the same
+    // store `config push` writes — so a reload is what the next drive pins.
+    let source: Arc<dyn ConfigSource> = light.config_source.clone();
+    let registry = RegistryReloader::new(handle, source);
     Ok(HeavyDeps {
         light,
         scheduler,
         clock,
         events,
+        registry,
+        gateway_chains,
     })
 }
 
@@ -2453,7 +2471,7 @@ mod tests {
 
         let (_tx, shutdown) = tokio::sync::watch::channel(0u64);
         crate::cmd::worker::serve(
-            worker.ticker(),
+            &worker.ticker(),
             crate::cmd::worker::ServeOpts {
                 interval: std::time::Duration::from_millis(10),
                 once: true,

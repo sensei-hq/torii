@@ -6,6 +6,7 @@
 
 pub mod config;
 pub mod events;
+pub mod registry;
 pub mod stores;
 
 pub use config::load_gateway_config;

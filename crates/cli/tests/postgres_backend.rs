@@ -361,6 +361,19 @@ async fn a_run_submitted_on_postgres_pauses_is_signalled_and_a_worker_completes_
         .expect("spawn"));
     assert!(status.contains("completed"), "{status}");
 
+    // AG-13: the worker that finished the run recorded its final spend on the issuer's budget
+    // nodes and closed its charge (the submit, which left it paused, could not).
+    let pool = torii_core::connect(&t.url, 1).await.expect("connect");
+    let settled: bool = sqlx::query_scalar(
+        "select settled from runs.run_charges where tenant_id = $1 and run_id = $2::uuid",
+    )
+    .bind(t.id)
+    .bind(&run)
+    .fetch_one(&pool)
+    .await
+    .expect("the run was charged to TORII_USER");
+    assert!(settled, "worker serve settles the runs it drives");
+
     // And the run is this tenant's: another tenant does not see it.
     let other = Tenant::new(&url).await;
     let out = other

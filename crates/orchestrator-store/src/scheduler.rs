@@ -26,8 +26,18 @@ impl PgSchedulerStore {
 
     /// AG-3: `run`'s consecutive wake attempts since its last successful drive, or `None` for
     /// a run this tenant does not have.
-    pub async fn wake_attempts(&self, _run: RunId) -> Result<Option<u32>, OrchestratorError> {
-        Ok(None)
+    /// A read for the operator (`torii run status`); the trait does not expose the counter.
+    pub async fn wake_attempts(&self, run: RunId) -> Result<Option<u32>, OrchestratorError> {
+        let row: Option<(i32,)> = sqlx::query_as(
+            "select attempts from runs.scheduled_runs where tenant_id = $1 and run_id = $2",
+        )
+        .bind(self.tenant)
+        .bind(run.0)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(store_err)?;
+        // Never negative through the trait; a hand-written negative reads as 0, not a wrap.
+        Ok(row.map(|(n,)| u32::try_from(n).unwrap_or(0)))
     }
 }
 

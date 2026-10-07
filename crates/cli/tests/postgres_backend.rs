@@ -727,3 +727,147 @@ fn walk(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     }
     out
 }
+
+/// A `worker serve` child, killed on drop (also when the test panicked), its stderr in a file.
+struct Worker {
+    child: std::process::Child,
+    log: std::path::PathBuf,
+}
+
+impl Worker {
+    fn log(&self) -> String {
+        std::fs::read_to_string(&self.log).unwrap_or_default()
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// **AG-5 Done-when, at the binary:** a LONG-RUNNING `torii worker serve` (no `--once`) follows a
+/// `config push` without a restart. It boots at generation 1; the operator pushes generation 2;
+/// a run submitted under generation 2 is signalled; and that same worker process drives it to
+/// `completed`. A worker frozen at its boot generation refuses the run at the config fence and
+/// files it `failed`.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn a_long_running_worker_serve_follows_a_config_push_without_restarting() {
+    let Some(url) = db_url() else { return };
+    let t = Tenant::new(&url).await;
+    let dir = tempfile::tempdir().unwrap();
+    ok(&t
+        .torii()
+        .args(["config", "push", "--yes"])
+        .arg(registry(dir.path(), "chat"))
+        .output()
+        .expect("spawn"));
+    assert_eq!(t.generation().await, Some(1), "precondition");
+
+    let log = dir.path().join("worker.log");
+    let worker = Worker {
+        child: t
+            .torii()
+            .env("TORII_FENCE_VERSION", "v1")
+            .env("RUST_LOG", "info")
+            .args(["worker", "serve", "--interval", "50ms"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::fs::File::create(&log).unwrap())
+            .spawn()
+            .expect("spawn worker serve"),
+        log,
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !worker.log().contains("registry loaded") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the worker never booted:\n{}",
+            worker.log()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    // Generation 2: a different registry, pushed while the worker runs.
+    let reg2 = dir.path().join("registry-2");
+    std::fs::create_dir_all(reg2.join("agents")).unwrap();
+    std::fs::write(
+        reg2.join("agents/reviewer.md"),
+        "---\nname: reviewer\narea: review\nkind: lead\nchain: chat\ntools: []\nskills: []\n---\nYou review.\n",
+    )
+    .unwrap();
+    ok(&t
+        .torii()
+        .args(["config", "push", "--yes"])
+        .arg(&reg2)
+        .output()
+        .expect("spawn"));
+    assert_eq!(t.generation().await, Some(2), "precondition");
+
+    let graph = dir.path().join("graph.json");
+    let g = Graph {
+        nodes: vec![Node {
+            id: NodeId("gate".into()),
+            kind: NodeKind::AwaitSignal { timeout: None },
+            deps: vec![],
+        }],
+    };
+    std::fs::write(&graph, serde_json::to_string(&g).unwrap()).unwrap();
+    let submitted = ok(&t
+        .torii()
+        .env("TORII_FENCE_VERSION", "v1")
+        .args(["run", "submit", "--graph"])
+        .arg(&graph)
+        .output()
+        .expect("spawn"));
+    let run = submitted
+        .lines()
+        .find_map(|l| l.strip_prefix("submitted: "))
+        .expect("the run id is announced")
+        .trim()
+        .to_string();
+    // The answer is journaled before the wake, so it is durable either way; but the worker
+    // polls every 50ms and may claim the run between `signal`'s wake and its re-read, which
+    // `signal` honestly reports as `not queued` (exit 2). The run's end state is the assertion.
+    let out = t
+        .torii()
+        .args(["run", "signal", &run, "--node", "gate", "--payload"])
+        .arg(r#"{"decision":"approved"}"#)
+        .output()
+        .expect("spawn");
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        said.contains("signalled: ") || said.contains("journaled durably"),
+        "the answer must have landed: {said}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let status = loop {
+        let out = t
+            .torii()
+            .args(["run", "status", &run, "--json"])
+            .output()
+            .expect("spawn");
+        let v: serde_json::Value =
+            serde_json::from_slice(&out.stdout).expect("run status --json is JSON");
+        // `run status --json` prints an array of rows; this run is its only one.
+        let v = v[0].clone();
+        let status = v["status"].as_str().unwrap_or_default().to_string();
+        if status == "completed" || status == "failed" || std::time::Instant::now() >= deadline {
+            break v;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    };
+    assert_eq!(
+        status["status"],
+        "completed",
+        "the running worker must drive a run submitted under the pushed generation: {status}\n\
+         worker log:\n{}",
+        worker.log()
+    );
+}

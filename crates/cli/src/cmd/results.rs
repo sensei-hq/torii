@@ -364,6 +364,58 @@ mod tests {
         assert!(!json.text.contains(&secret), "{}", json.text);
     }
 
+    /// AG-4 x AG-5: a node whose last attempt failed transiently, on a run paused for the retry
+    /// (`NodeFailed` then `RunPaused` with the same reason and a `resume_after`), shows the STATE
+    /// `retrying` — not `failed` — in the table's STATE column and on `--node`'s header line,
+    /// with the notice beside it. The notice is chosen not to contain the word, so only the
+    /// state column can satisfy the assertion.
+    #[tokio::test]
+    async fn a_node_awaiting_a_transient_retry_prints_retrying_in_the_table_and_with_node() {
+        let f = fixture(Some(RunStatus::Paused), vec![]).await;
+        let notice = "provider 500: attempt 1 of 3, again at the next wake";
+        for event in [
+            JournalEvent::NodeFailed {
+                node: n("x"),
+                error: notice.into(),
+            },
+            JournalEvent::RunPaused {
+                reason: notice.into(),
+                resume_after: Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
+            },
+        ] {
+            f.journal.append(f.run, event).await.unwrap();
+        }
+
+        let table = ask(&f, f.run, None, false).await;
+        assert_eq!(table.code, EXIT_PRECONDITION, "{}", table.text);
+        let row = table
+            .text
+            .lines()
+            .find(|l| l.starts_with("x "))
+            .expect("row");
+        assert_eq!(
+            row.split_whitespace().nth(1),
+            Some("retrying"),
+            "the STATE column: {row}"
+        );
+        assert!(row.contains(notice), "{row}");
+
+        let one = ask(&f, f.run, Some("x"), false).await;
+        assert_eq!(one.code, EXIT_PRECONDITION, "{}", one.text);
+        let line = one
+            .text
+            .lines()
+            .find(|l| l.starts_with("node x "))
+            .expect("node line");
+        assert_eq!(
+            line.split_whitespace().nth(2),
+            Some("retrying"),
+            "the node line's state: {}",
+            one.text
+        );
+        assert!(one.text.contains(notice), "{}", one.text);
+    }
+
     #[tokio::test]
     async fn an_unresolvable_ref_is_reported_on_its_row_at_exit_2() {
         let f = fixture(

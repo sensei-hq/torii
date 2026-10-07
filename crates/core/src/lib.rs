@@ -5,6 +5,7 @@
 //! "where a tenant's runs live".
 
 pub mod config;
+pub mod events;
 pub mod stores;
 
 pub use config::load_gateway_config;

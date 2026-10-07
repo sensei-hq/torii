@@ -11,6 +11,9 @@ name = "torii_core"
 # One gateway version across torii (TM-8a). Dev resolves via the workspace [patch].
 gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", tag = "v0.11.0" }
 anyhow = "1"
+# AG-9 (#46): the shipped default registry (`defaults/`) is compiled into the binary, so
+# `torii config init` works from an install or a container with no source tree beside it.
+include_dir = "0.7"
 # AG-18 (#53): the run-event sink (`events`) — `OrchestratorHooks` is an async trait, its
 # wire type serializes, and it hands events off over a bounded `tokio::sync::mpsc`.
 async-trait = "0.1"

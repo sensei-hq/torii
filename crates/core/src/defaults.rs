@@ -6,18 +6,106 @@
 //! content is compiled into the binary, so `init` works from an installed or containerised
 //! `torii` with no source tree beside it.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
-use orchestrator_core::{OrchestratorError, RegistryConfig};
+use include_dir::{include_dir, Dir};
+use orchestrator_core::{
+    AgentDefinition, ChainBinding, OrchestratorError, Permissions, RegistryConfig, SkillDef,
+    ToolSpec,
+};
 
-/// The shipped registry, parsed with the same per-file readers `config push` uses.
+/// The shipped registry directory, `crates/core/defaults/`, in the layout `config push` reads.
+static DEFAULTS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/defaults");
+
+/// The shipped registry, parsed file by file with the readers the gateway's
+/// `FilesystemConfigSource` (the directory `config push` reads) uses — `from_frontmatter` for
+/// `agents/*.md` and `skills/*.md`, serde for `tools/*.json`, `chains.json` and `grants.json`.
+/// A test reads the same files through `FilesystemConfigSource` itself and requires the same
+/// config, so the two cannot drift.
 pub fn config() -> Result<RegistryConfig, OrchestratorError> {
-    Ok(RegistryConfig::default())
+    let load = |what: String, e: &dyn std::fmt::Display| {
+        OrchestratorError::RegistryLoad(format!("the built-in defaults: {what}: {e}"))
+    };
+    let mut cfg = RegistryConfig::default();
+    for (path, md) in layer("agents", "md") {
+        cfg.agents.push(
+            AgentDefinition::from_frontmatter(md)
+                .map_err(|e| load(format!("parse agent {}", path.display()), &e))?,
+        );
+    }
+    for (path, md) in layer("skills", "md") {
+        cfg.skills.push(
+            SkillDef::from_frontmatter(md)
+                .map_err(|e| load(format!("parse skill {}", path.display()), &e))?,
+        );
+    }
+    for (path, json) in layer("tools", "json") {
+        cfg.tools.push(
+            serde_json::from_str::<ToolSpec>(json)
+                .map_err(|e| load(format!("parse tool {}", path.display()), &e))?,
+        );
+    }
+    if let Some(json) = root_file("chains.json") {
+        cfg.chain_bindings = serde_json::from_str::<Vec<ChainBinding>>(json)
+            .map_err(|e| load("parse chains.json".into(), &e))?;
+    }
+    if let Some(json) = root_file("grants.json") {
+        let all: HashMap<String, HashMap<String, Permissions>> =
+            serde_json::from_str(json).map_err(|e| load("parse grants.json".into(), &e))?;
+        for (agent, grants) in all {
+            cfg.agents
+                .iter_mut()
+                .find(|a| a.name == agent)
+                .ok_or_else(|| {
+                    load(
+                        "grants.json".into(),
+                        &format!("names unknown agent {agent}"),
+                    )
+                })?
+                .grants
+                .extend(grants);
+        }
+    }
+    Ok(cfg)
 }
 
 /// The shipped registry directory's files, relative to its root, in path order.
 pub fn files() -> Vec<(PathBuf, &'static str)> {
-    Vec::new()
+    let mut out = Vec::new();
+    collect(&DEFAULTS, &mut out);
+    out.sort();
+    out
+}
+
+fn collect(dir: &'static Dir<'static>, out: &mut Vec<(PathBuf, &'static str)>) {
+    for f in dir.files() {
+        if let Some(text) = f.contents_utf8() {
+            out.push((f.path().to_path_buf(), text));
+        }
+    }
+    for d in dir.dirs() {
+        collect(d, out);
+    }
+}
+
+/// `<sub>/*.<ext>` — flat, like the directory reader: a file one level deeper is not read.
+fn layer(sub: &str, ext: &str) -> Vec<(PathBuf, &'static str)> {
+    let mut out: Vec<_> = DEFAULTS
+        .get_dir(sub)
+        .map(|d| {
+            d.files()
+                .filter(|f| f.path().extension().and_then(|x| x.to_str()) == Some(ext))
+                .filter_map(|f| Some((f.path().to_path_buf(), f.contents_utf8()?)))
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+fn root_file(name: &str) -> Option<&'static str> {
+    DEFAULTS.get_file(name).and_then(|f| f.contents_utf8())
 }
 
 #[cfg(test)]

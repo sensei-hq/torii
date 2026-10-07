@@ -1,0 +1,22 @@
+[
+  {
+    "area": "planning",
+    "kind": "coordinator",
+    "chain": "local"
+  },
+  {
+    "area": "research",
+    "kind": "analyst",
+    "chain": "local"
+  },
+  {
+    "area": "review",
+    "kind": "critic",
+    "chain": "local"
+  },
+  {
+    "area": "writing",
+    "kind": "author",
+    "chain": "local"
+  }
+]

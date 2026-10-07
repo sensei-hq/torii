@@ -1,0 +1,23 @@
+{
+  "name": "list_skills",
+  "description": "List available skills",
+  "input_schema": {
+    "properties": {},
+    "type": "object"
+  },
+  "effect_class": "Pure",
+  "ttl_secs": null,
+  "source": null,
+  "permissions": {
+    "paths": [],
+    "commands": [],
+    "network": "Deny",
+    "caps": {
+      "cpu_ms": null,
+      "mem_bytes": null,
+      "wall_ms": null
+    }
+  },
+  "activation": "Always",
+  "credentials": []
+}

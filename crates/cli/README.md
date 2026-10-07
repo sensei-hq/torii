@@ -130,6 +130,8 @@ A worker serves **one tenant** (`TORII_TENANT`): its sweeps claim only that tena
 ```sh
 torii run status <id>            # one run's schedule record (+ token/money spend, wake attempts,
                                  #   pending tool confirmations and escalations)
+torii run results <id>           # what the run produced: each node's state and output
+                                 #   (--node <id> for one, whole; --json)
 torii run list-paused            # everything awaiting a wake, and what each run waits on
 torii run signal <...>           # deliver a decision to an AwaitSignal node
 torii run gate <...>             # decide a HumanGate or a Loop's human gate
@@ -140,6 +142,17 @@ torii run wake <id>              # queue a paused run for the next worker tick
 torii run cancel <id>            # cancel a non-terminal run so it is never woken
 torii run prune --older-than <>  # delete terminal run records
 ```
+
+**Results.** `run results <id>` prints one row per node — `completed`, `failed` (with its
+error) or `skipped` — where its output is stored, and the output itself, capped to one line;
+`--node <id>` prints one node's output whole, `--json` the lot. The outputs are the executor's own
+round checkpoint — the outputs the drive itself produced — so a human-answered node (a signal, a
+gate, a human-backed agent) has its output too. One over the executor's 4096-byte threshold lives in
+the tenant's content store (`cas <digest> <size>B`) and is read back from there. Outputs and errors
+are redacted. Exit `0` is a completed run whose outputs all read back; a run not yet completed
+still prints what it has produced so far (as of its last checkpoint) at exit `2`, as does an output
+the content store cannot return. Another tenant's run is exactly an unknown run: exit `2`, `no such
+run`, `null` under `--json`. Light tier: no gateway config, no credentials.
 
 **Budgets.** `run submit --budget-tokens N` caps a run's tokens and `--budget-usd D` its money
 (whole micro-dollars: at most 6 decimal places, refused rather than rounded); either, both or

@@ -7739,6 +7739,7 @@ dependencies = [
  "chrono",
  "sensei-gateway",
  "sensei-orchestrator-core",
+ "sensei-orchestrator-store",
  "serde",
  "serde_json",
  "sqlx",

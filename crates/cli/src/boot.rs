@@ -812,6 +812,13 @@ pub struct HeavyDeps {
     pub events: RunEvents,
 }
 
+impl HeavyDeps {
+    /// What `worker serve` ticks.
+    pub fn ticker(&self) -> &dyn crate::cmd::worker::Ticker {
+        &self.scheduler
+    }
+}
+
 pub async fn heavy(
     env: &EnvConfig,
     gateway_config_file: Option<&Path>,
@@ -2374,6 +2381,94 @@ mod tests {
         assert!(
             deps.scheduler.executor().has_planner_selector(),
             "heavy() built an executor with NO planner selector",
+        );
+    }
+
+    /// **AG-5 — a running worker picks up a `config push` without restarting.** The worker
+    /// boots at generation 1; an operator pushes generation 2 with the real `config push`;
+    /// `run submit` (a fresh process, so booted at generation 2) submits a run that waits on a
+    /// signal; the operator answers it; and the SAME worker drives it. A worker frozen at
+    /// generation 1 refuses that run at the config fence and files it `failed`.
+    #[cfg_attr(
+        not(have_database_url),
+        ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+    )]
+    #[tokio::test]
+    async fn a_running_worker_picks_up_a_config_push_without_restarting() {
+        let Some(url) = crate::test_guard::db_url() else {
+            return;
+        };
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        t.stores()
+            .config
+            .store_and_bump(&probe_agent("torii-reload-before", "chat"))
+            .await
+            .expect("seed generation 1");
+        let env = tenant_env(&url, t.id, "torii-reload-probe-fence");
+        let worker = heavy(&env, None, None).await.expect("the worker boots");
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("agents")).unwrap();
+        std::fs::write(
+            dir.path().join("agents/after.md"),
+            "---\nname: torii-reload-after\narea: test\nkind: test\nchain: chat\ntools: []\nskills: []\n---\nAfter.\n",
+        )
+        .unwrap();
+        let operator = light(&env).await.expect("light boots");
+        let out = crate::cmd::config::push(
+            operator.config_source.as_ref(),
+            operator.scheduler_store.as_ref(),
+            dir.path(),
+            operator.gateway_config.as_deref(),
+            true,
+            &mut |_| true,
+        )
+        .await
+        .expect("push");
+        assert_eq!(out.code, crate::errors::EXIT_OK, "{}", out.text);
+
+        let submitter = heavy(&env, None, None).await.expect("run submit boots");
+        let run = RunId(uuid::Uuid::new_v4());
+        crate::cmd::run::submit(
+            &submitter.scheduler,
+            run,
+            signal_graph(),
+            orchestrator_core::RunBudget::default(),
+            || {},
+        )
+        .await
+        .expect("submit pauses on the signal");
+        drop(submitter);
+        let out = crate::cmd::run::signal(
+            operator.scheduler_store.as_ref(),
+            operator.journal.as_ref(),
+            run,
+            orchestrator_core::NodeId("gate".into()),
+            serde_json::json!({"decision": "approved"}),
+            chrono::Utc::now(),
+        )
+        .await
+        .expect("signal");
+        assert_eq!(out.code, crate::errors::EXIT_OK, "{}", out.text);
+
+        let (_tx, shutdown) = tokio::sync::watch::channel(0u64);
+        crate::cmd::worker::serve(
+            worker.ticker(),
+            crate::cmd::worker::ServeOpts {
+                interval: std::time::Duration::from_millis(10),
+                once: true,
+            },
+            shutdown,
+        )
+        .await
+        .expect("serve --once");
+        let st = worker.scheduler.status(run).await.unwrap().expect("row");
+        drop(t);
+        assert_eq!(
+            st.status,
+            orchestrator_core::RunStatus::Completed,
+            "the worker must drive a run submitted under the pushed generation: {:?}",
+            st.reason
         );
     }
 

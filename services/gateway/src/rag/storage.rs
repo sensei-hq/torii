@@ -3,7 +3,7 @@
 //! Objects live in a tenant/space-scoped Supabase Storage bucket, hash-addressed, and are served
 //! via SHORT-LIVED signed URLs minted server-side ONLY AFTER the classification/read check (spec §5,
 //! "object storage"). [`SupabaseStorage`] talks the Storage REST API as `service_role`;
-//! [`InMemoryStore`] backs hermetic tests.
+//! `InMemoryStore` (test-only) backs hermetic tests.
 
 #[cfg(test)]
 use std::collections::HashMap;

@@ -265,6 +265,23 @@ enum RunAction {
         #[command(subcommand)]
         action: cmd::human::AgentAction,
     },
+    /// Approve or reject a confirm-before-run tool call an agent is waiting on
+    ///
+    /// An agent whose definition lists a tool under `confirm_tools` pauses before each call
+    /// of it until a person decides. `list-paused` and `status` show every pending call on a
+    /// `tool:` row — the node, the tool, the (redacted) arguments, the deadline, and the
+    /// call's id, which is what `--call` takes. One node can have several pending calls; each
+    /// is decided on its own.
+    ///
+    /// An approval runs the tool on the next worker tick; a rejection — or the deadline
+    /// passing — tells the model `not_confirmed` and the agent carries on. `--note` is
+    /// recorded for the audit and never shown to the model. `--as` is ATTRIBUTION, NOT
+    /// AUTHENTICATION; who may approve is not enforced here (torii#47).
+    Tool {
+        // In the LIBRARY (`cmd::tool`), for the reason `cmd::gate::GateAction` records.
+        #[command(subcommand)]
+        action: cmd::tool::ToolAction,
+    },
     /// Cancel a non-terminal run so it is never woken
     Cancel { run_id: String },
     /// Queue a paused run for the next worker tick
@@ -572,6 +589,26 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                     orchestrator_core::NodeId(a.node),
                     &a.text,
                     &actor,
+                    chrono::Utc::now(),
+                )
+                .await
+            }
+            RunAction::Tool { action } => {
+                // One normalised shape and exactly ONE call to `decide`, as `run gate` does.
+                let d0 = cmd::tool::tool_decision_of(action);
+                // Parse BEFORE connecting, like every other run-id verb.
+                let run = parse_run_id(&d0.run_id)?;
+                // LIGHT tier: the scheduler store and the journal, nothing else.
+                let d = boot::light(&env).await?;
+                cmd::tool::decide(
+                    d.scheduler_store.as_ref(),
+                    d.journal.as_ref(),
+                    run,
+                    &d0.call,
+                    d0.node.map(orchestrator_core::NodeId),
+                    d0.approved,
+                    &d0.actor,
+                    d0.note.as_deref(),
                     chrono::Utc::now(),
                 )
                 .await

@@ -37,8 +37,10 @@ pub struct NodeResult {
     pub output: Option<serde_json::Value>,
     /// Why a CAS-stored output could not be read back.
     pub unresolved: Option<String>,
-    /// The first `NodeFailed` error of a node that never completed — RAW, like
-    /// `ScheduledRun.reason`: redacting free text for display is the renderer's job.
+    /// The LAST `NodeFailed` error of a node with no later completion — the one it stopped on,
+    /// the same text `ScheduledRun.reason` carries for a run that failed on it (or, while
+    /// `Retrying`, the pending retry's notice). RAW, like `ScheduledRun.reason`: redacting free
+    /// text for display is the renderer's job.
     pub error: Option<String>,
 }
 
@@ -47,6 +49,10 @@ pub struct NodeResult {
 pub enum NodeState {
     Completed,
     Failed,
+    /// Its last attempt failed transiently and the run is paused until the retry; `error` is the
+    /// retry notice. Only on a run that is not terminal — on a terminal one nothing will retry
+    /// it, and it is `Failed`.
+    Retrying,
     Skipped,
 }
 
@@ -77,9 +83,12 @@ pub enum Stored {
 /// (`fold_journal`) is crate-private; re-deriving it here would be a second answer to "what did
 /// this node output" that could only drift.
 ///
-/// **The journal is folded for what the checkpoint does not carry:** a node's failure. The first
-/// `NodeFailed` per node is its error — the same first-wins the executor's fold keeps — and a
-/// node the checkpoint lists as completed carries none (it failed, was retried and completed).
+/// **The journal is folded for what the checkpoint does not carry:** a node's failure. The LAST
+/// `NodeFailed` per node is its error (see [`fold_failures`]): under transient retry the earlier
+/// rows are "retrying" notices, and the last is what `run status` reports. A node the checkpoint
+/// lists as completed, or with a later `NodeCompleted` in the journal, carries none (it failed,
+/// was retried and completed). A node whose last failure is a pending transient retry is
+/// `Retrying` while the run is not terminal.
 ///
 /// A CAS ref is resolved through `content` — the tenant's CAS — and a ref that cannot be read
 /// back is reported on its node (`unresolved`) rather than failing the whole read, so one lost
@@ -104,14 +113,7 @@ pub async fn run_results(
         .await
         .map_err(OrchestratorError::Journal)?;
 
-    let mut first_failure: HashMap<NodeId, String> = HashMap::new();
-    for (_, event) in &events {
-        if let JournalEvent::NodeFailed { node, error } = event {
-            first_failure
-                .entry(node.clone())
-                .or_insert_with(|| error.clone());
-        }
-    }
+    let failures = fold_failures(&events);
 
     let mut rows: BTreeMap<String, NodeResult> = BTreeMap::new();
     let blank = |node: &NodeId, state: NodeState| NodeResult {
@@ -157,14 +159,19 @@ pub async fn run_results(
             }
         }
     }
-    for (node, error) in first_failure {
+    let retry_pending = !row.status.is_terminal();
+    for (node, failure) in failures {
         if completed.contains(&node) {
             continue;
         }
+        let (state, error) = match failure {
+            Failure::Retrying(e) if retry_pending => (NodeState::Retrying, e),
+            Failure::Retrying(e) | Failure::Failed(e) => (NodeState::Failed, e),
+        };
         let r = rows
             .entry(node.0.clone())
-            .or_insert_with(|| blank(&node, NodeState::Failed));
-        r.state = NodeState::Failed;
+            .or_insert_with(|| blank(&node, state));
+        r.state = state;
         r.error = Some(error);
     }
 
@@ -178,6 +185,51 @@ pub async fn run_results(
 
 /// The executor's redactor, built once (it compiles a regex set).
 static REDACTOR: LazyLock<PatternRedactor> = LazyLock::new(PatternRedactor::default);
+
+/// Where a node's failures left it, by the journal alone.
+enum Failure {
+    /// Its last attempt failed, and that failure is the one it stopped on.
+    Failed(String),
+    /// Its last attempt failed transiently and the run paused for the retry: the executor's
+    /// retry shape is a `NodeFailed` followed by a `RunPaused` carrying the same reason and a
+    /// `resume_after` — the wake the node re-attempts on.
+    Retrying(String),
+}
+
+/// Each node's LAST failure, in journal order, unless a later `NodeCompleted` superseded it.
+///
+/// Last, not first: under transient retry a node appends one `NodeFailed` per attempt, and every
+/// one but the last is a "retrying (attempt k of N)" notice — the terminal error, the one
+/// `ScheduledRun.reason` carries, is the final row. A `NodeCompleted` clears the failure: it is
+/// the only record of a namespaced inner node (`sub/x`) that failed, retried and completed,
+/// since the outer checkpoint lists only `sub`.
+fn fold_failures(events: &[(Seq, JournalEvent)]) -> HashMap<NodeId, Failure> {
+    let mut failures: HashMap<NodeId, Failure> = HashMap::new();
+    for (_, event) in events {
+        match event {
+            JournalEvent::NodeFailed { node, error } => {
+                failures.insert(node.clone(), Failure::Failed(error.clone()));
+            }
+            JournalEvent::NodeCompleted { node } => {
+                failures.remove(node);
+            }
+            JournalEvent::RunPaused {
+                reason,
+                resume_after: Some(_),
+            } => {
+                for failure in failures.values_mut() {
+                    if let Failure::Failed(e) = failure {
+                        if e == reason {
+                            *failure = Failure::Retrying(std::mem::take(e));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    failures
+}
 
 async fn resolve(
     content: &dyn ContentStore,

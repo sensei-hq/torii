@@ -113,6 +113,7 @@ fn state_str(s: NodeState) -> &'static str {
     match s {
         NodeState::Completed => "completed",
         NodeState::Failed => "failed",
+        NodeState::Retrying => "retrying",
         NodeState::Skipped => "skipped",
     }
 }

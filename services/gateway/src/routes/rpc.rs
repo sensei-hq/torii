@@ -29,7 +29,9 @@ use crate::{
 };
 
 /// URL-safe slug from a display name: lowercase, non-alphanumerics → single '-', trimmed.
-/// Empty input (or all-punctuation) → "org".
+/// Empty input (or all-punctuation) → "org". A name that slugifies to something UUID-shaped
+/// (e.g. another tenant's id) is prefixed `org-`: a tenant is named by its id OR its slug
+/// (`TORII_TENANT`, `torii_core::resolve_tenant`), so a slug must never read as an id (AG-7).
 fn slugify(name: &str) -> String {
     let mut s = String::new();
     let mut prev_dash = false;
@@ -46,19 +48,39 @@ fn slugify(name: &str) -> String {
     if s.is_empty() {
         "org".to_string()
     } else {
-        s
+        not_uuid_shaped(s)
     }
 }
 
-/// Red-phase stubs (AG-7): the real implementations follow in the next commit.
-#[cfg(test)]
-fn is_uuid_shaped(_slug: &str) -> bool {
-    false
+/// Whether `slug` reads as a UUID: exactly 32 hex digits once hyphens are stripped. This is
+/// the `core.tenants.slug` CHECK's rule (`tenants_slug_not_uuid`) — deliberately a superset of
+/// what `uuid::Uuid::parse_str` and Postgres' `uuid` input accept — so a slug this helper
+/// passes is never refused by the database.
+fn is_uuid_shaped(slug: &str) -> bool {
+    let mut hex = 0;
+    for ch in slug.chars().filter(|c| *c != '-') {
+        if !ch.is_ascii_hexdigit() {
+            return false;
+        }
+        hex += 1;
+    }
+    hex == 32
 }
 
-#[cfg(test)]
+/// `slug`, made unable to pass for a tenant id: a UUID-shaped slug gets an `org-` prefix
+/// (the id stays legible, `o`/`r`/`g` are not hex). Any other slug is returned unchanged.
+fn not_uuid_shaped(slug: String) -> String {
+    if is_uuid_shaped(&slug) {
+        format!("org-{slug}")
+    } else {
+        slug
+    }
+}
+
+/// The collision-retry slug: `base` plus a random `suffix`. Guarded again, because a hex
+/// base and a hex suffix can add up to 32 hex digits even when `base` alone could not.
 fn suffixed_slug(base: &str, suffix: &str) -> String {
-    format!("{base}-{suffix}")
+    not_uuid_shaped(format!("{base}-{suffix}"))
 }
 
 #[cfg(test)]
@@ -1409,7 +1431,7 @@ async fn insert_tenant_dedup_slug(
                         .is_some_and(|d| d.is_unique_violation()) =>
             {
                 let _ = sp.rollback().await; // ROLLBACK TO SAVEPOINT — un-poison the outer tx
-                slug = format!("{base}-{}", &Uuid::new_v4().to_string()[..6]);
+                slug = suffixed_slug(&base, &Uuid::new_v4().to_string()[..6]);
                 last_err = Some(e);
             }
             Err(e) => {

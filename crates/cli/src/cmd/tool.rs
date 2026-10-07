@@ -113,6 +113,31 @@ pub fn tool_decision_of(action: ToolAction) -> ToolDecision {
     }
 }
 
+/// AG-15: the refusal every OTHER waiting verb gives a node whose wait is a pending
+/// confirm-before-run tool call, naming this verb and the call — `None` when the node has
+/// none. `what` is the kind the refusing verb serves ("an AwaitSignal", …).
+///
+/// Such a node published no node-level ask, so without this the other verbs fall to a
+/// generic "not awaiting" that sends an operator to re-check a node id that was right.
+pub(crate) fn pending_call_refusal(
+    events: &[(orchestrator_core::Seq, JournalEvent)],
+    node: &NodeId,
+    run: RunId,
+    what: &str,
+) -> Option<String> {
+    let ask = crate::cmd::run::tool_confirm_asks(events)
+        .into_iter()
+        .find(|a| &a.node == node && a.state == ToolConfirmState::Pending)?;
+    let shown = render::cap_chars(&render::one_line(&node.0), 80);
+    Some(format!(
+        "not delivered: {shown} is not {what} — it is waiting on a confirm-before-run tool \
+         call ({}). Use: torii run tool approve {} --call {} (or reject)",
+        render::cap_chars(&render::one_line(&ask.tool), 80),
+        run.0,
+        ask.effect_id.0
+    ))
+}
+
 /// Scrub one operator-supplied string with the shared redactor before it is journaled —
 /// fail-CLOSED on a non-string result, as `run gate` and `run agent answer` are.
 fn redact(text: &str) -> String {

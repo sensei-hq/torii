@@ -2015,6 +2015,56 @@ pub enum StoreLifetime {
 pub const STRANDED_PAUSE: &str = "nothing can resume it: the memory backend keeps every store \
     in this process, so no worker, wake or answer from another process can ever see this run";
 
+/// #55 (AG-12): refuse a money cap the gateway could not meter, BEFORE anything is submitted.
+///
+/// Under `--budget-usd` the engine refuses a call on a chain with an unpriced model — but
+/// mid-run, as a failed node. `torii_core::pricing::unpriced_chains` (the one implementation the
+/// API's submit shares) finds every chain the graph can use that has one; this names each chain,
+/// who uses it and the models without a price, and says what fixes it. `Ok` when there is no
+/// money cap or every reachable chain prices.
+pub fn require_priced_for_money_cap(
+    budget: &RunBudget,
+    graph: &orchestrator_core::Graph,
+    registry: &orchestrator_core::Registry,
+    pricing: &kernel::types::config::GatewayConfig,
+    source: &str,
+) -> Result<(), CliError> {
+    if budget.money.is_none() {
+        return Ok(());
+    }
+    let unpriced = torii_core::pricing::unpriced_chains(graph, registry, pricing);
+    if unpriced.is_empty() {
+        return Ok(());
+    }
+    use torii_core::pricing::Unpriced;
+    let list = unpriced
+        .iter()
+        .map(|u| {
+            let why = match &u.why {
+                Unpriced::Models(models) => format!(
+                    "{} no pricing: {}",
+                    if models.len() == 1 { "has" } else { "have" },
+                    models.join(", ")
+                ),
+                Unpriced::NoModels => "has no model the gateway config defines".to_string(),
+                Unpriced::UnknownChain => "is not in the gateway config".to_string(),
+            };
+            format!(
+                "chain {:?} (used by {}) {why}",
+                render::one_line(&u.chain),
+                render::one_line(&u.used_by.join(", "))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(CliError::error(format!(
+        "not submitted: --budget-usd caps this run's money, so every model it can call must \
+         declare pricing, and the gateway would refuse these mid-run as unpriced: {list}. \
+         Declare `pricing` on each model in {source} (an explicit zero for a free or local \
+         model), or submit without --budget-usd."
+    )))
+}
+
 /// Submit a fresh run and drive it inline. Blocks until the run pauses or ends —
 /// there is no `--detach` yet, because `enqueue` stamps the row `waking`, so a
 /// detached run would only be picked up once the lease expired and the crash-reclaim

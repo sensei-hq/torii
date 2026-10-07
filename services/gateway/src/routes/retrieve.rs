@@ -28,12 +28,20 @@ pub struct RetrieveBody {
     /// Accepted for API stability. v1 serves `RetrievalConfig::default()`; per-request override
     /// merge is a tracked seam (see below) and is NEVER persisted here.
     #[serde(default)]
+    #[expect(
+        dead_code,
+        reason = "C5 spec request field (docs/specs/C5-rag-document-intelligence.md § retrieve); per-request override merge not built yet"
+    )]
     pub config_override: Option<serde_json::Value>,
     #[serde(default)]
     pub inspect: Option<bool>,
     /// A session-scoped config override — accepted but **NEVER persisted** (persisting a space
     /// default is `POST /rpc/retrieval/set-config`, gated on `retrieval.manage`). v1 ignores it.
     #[serde(default)]
+    #[expect(
+        dead_code,
+        reason = "C5 spec request field (docs/specs/C5-rag-document-intelligence.md § retrieve); accepted and ignored, never persisted"
+    )]
     pub session_only: Option<serde_json::Value>,
 }
 

@@ -97,7 +97,15 @@ pub struct Block {
 pub enum ElementType {
     Heading,
     Prose,
+    #[expect(
+        dead_code,
+        reason = "reserved for the deferred layout-aware/OCR parser backends (docs/plans/C5-rag-backend-build-plan.md § Deferred); chunk.rs already maps them"
+    )]
     Table,
+    #[expect(
+        dead_code,
+        reason = "reserved for the deferred layout-aware/OCR parser backends (docs/plans/C5-rag-backend-build-plan.md § Deferred); chunk.rs already maps them"
+    )]
     Caption,
 }
 
@@ -122,8 +130,16 @@ pub struct ImageRef {
 #[derive(Debug, Clone)]
 pub struct ParseOpts {
     /// OCR tier. v1 = [`OcrTier::None`] only (Tier-0 clean-text-layer); the seam for Tier-1/2.
+    #[expect(
+        dead_code,
+        reason = "OCR Tier-1/2 seam — deferred (docs/plans/C5-rag-backend-build-plan.md § Deferred); Tier-0 never reads it"
+    )]
     pub ocr: OcrTier,
     /// Selected parser backend id. v1 ships only `"default"` ([`DefaultParser`]).
+    #[expect(
+        dead_code,
+        reason = "backend dispatch seam — v1 has one parser, so nothing selects on it yet (docs/plans/C5-rag-backend-build-plan.md § Deferred)"
+    )]
     pub backend: String,
 }
 

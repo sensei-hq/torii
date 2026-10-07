@@ -9,19 +9,39 @@
 use super::RagError;
 
 /// A validated, read-only query plan (text-to-SQL/formula) — shape filled in when §3c lands.
+#[expect(
+    dead_code,
+    reason = "§3c secure dataset compute seam, deferred (DECISIONS §3c; docs/plans/C5-rag-backend-build-plan.md § Deferred)"
+)]
 pub struct Plan;
 /// A handle to a per-tenant dataset in the trusted boundary (DEK-decrypted only here) — deferred.
+#[expect(
+    dead_code,
+    reason = "§3c secure dataset compute seam, deferred (DECISIONS §3c; docs/plans/C5-rag-backend-build-plan.md § Deferred)"
+)]
 pub struct DatasetHandle;
 /// An aggregate/derived result that has passed the k-anon + W5 redaction gates — deferred.
+#[expect(
+    dead_code,
+    reason = "§3c secure dataset compute seam, deferred (DECISIONS §3c; docs/plans/C5-rag-backend-build-plan.md § Deferred)"
+)]
 pub struct GatedResult;
 
 /// Sandboxed, read-only executor for §3c plans (SELECT-only AST allow-list, statement timeout,
 /// row/cost caps). Deferred: the only impl in v1 is [`NoopSecureExecutor`].
+#[expect(
+    dead_code,
+    reason = "§3c secure dataset compute seam, deferred (DECISIONS §3c; docs/plans/C5-rag-backend-build-plan.md § Deferred)"
+)]
 pub trait SecureExecutor: Send + Sync {
     fn execute(&self, plan: &Plan, ds: &DatasetHandle) -> Result<GatedResult, RagError>;
 }
 
 /// v1 no-op: §3c compute is deferred (fail-closed).
+#[expect(
+    dead_code,
+    reason = "§3c secure dataset compute seam, deferred (DECISIONS §3c; docs/plans/C5-rag-backend-build-plan.md § Deferred)"
+)]
 pub struct NoopSecureExecutor;
 
 impl SecureExecutor for NoopSecureExecutor {

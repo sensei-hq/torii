@@ -34,7 +34,7 @@ async fn require_read(
     state: &SharedState,
     claims: &Claims,
     capability: &str,
-) -> Result<Uuid, Response> {
+) -> Result<Uuid, Box<Response>> {
     let tenant = claims
         .tenant_id
         .ok_or_else(|| (StatusCode::FORBIDDEN, "no active tenant").into_response())?;
@@ -60,7 +60,7 @@ async fn require_read(
 /// Member-accessible tenant resolution — the same freshness gate as `require_read` but no
 /// specific capability. For reads any authenticated member may perform (e.g. the list of
 /// models they are allowed to call), as opposed to the admin management views.
-async fn require_member(state: &SharedState, claims: &Claims) -> Result<Uuid, Response> {
+async fn require_member(state: &SharedState, claims: &Claims) -> Result<Uuid, Box<Response>> {
     let tenant = claims
         .tenant_id
         .ok_or_else(|| (StatusCode::FORBIDDEN, "no active tenant").into_response())?;
@@ -88,7 +88,7 @@ pub async fn get_audit(
 ) -> Response {
     let tenant = match require_read(&state, &claims, "audit.read").await {
         Ok(t) => t,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // Build the JSON array in-DB (avoids per-row mapping); tenant-scoped + capped.
     let rows: Result<Value, _> = sqlx::query_scalar(
@@ -118,7 +118,7 @@ pub async fn get_requests(
 ) -> Response {
     let tenant = match require_read(&state, &claims, "audit.read").await {
         Ok(t) => t,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let rows: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.recorded_at desc), '[]'::json) from ( \
@@ -154,7 +154,7 @@ pub async fn get_request_trace(
 ) -> Response {
     let tenant = match require_read(&state, &claims, "audit.read").await {
         Ok(t) => t,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let store = PgGatewayStore {
         pool: state.pool.clone(),
@@ -182,7 +182,7 @@ pub async fn get_budgets(
 ) -> Response {
     let tenant = match require_read(&state, &claims, "budget.read").await {
         Ok(t) => t,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let nodes: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.kind), '[]'::json) from ( \
@@ -225,7 +225,7 @@ pub async fn get_apikeys(
 ) -> Response {
     let tenant = match require_read(&state, &claims, "apikey.manage").await {
         Ok(t) => t,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let rows: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.created_at desc), '[]'::json) from ( \
@@ -277,7 +277,7 @@ pub async fn get_connections(
 ) -> Response {
     let tenant = match require_read(&state, &claims, "connection.manage").await {
         Ok(t) => t,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     match tenant_connections(&state.pool, tenant).await {
         Ok(providers) => (StatusCode::OK, Json(json!({ "providers": providers }))).into_response(),
@@ -299,7 +299,7 @@ pub async fn get_org(
 ) -> Response {
     let tenant = match require_read(&state, &claims, "role.manage").await {
         Ok(t) => t,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let members: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.display_name), '[]'::json) from ( \
@@ -356,7 +356,7 @@ pub async fn get_models(
 ) -> Response {
     let tenant = match require_read(&state, &claims, "model.manage").await {
         Ok(t) => t,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // Catalog is global (catalog.models); enablement is per-tenant and DERIVED from chain
     // membership (§D Phase 3) — a model is `enabled` iff it appears in the tenant's resolved+viable
@@ -395,7 +395,7 @@ pub async fn get_available_models(
 ) -> Response {
     let tenant = match require_member(&state, &claims).await {
         Ok(t) => t,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // §D Phase 3: the CHAT models a member may call = the DISTINCT models in the tenant's
     // resolved+viable chains FOR THE CHAT CAPABILITY (chains_for_tenant already applies
@@ -436,7 +436,7 @@ pub async fn get_tools(
 ) -> Response {
     let tenant = match require_read(&state, &claims, "mcp.manage").await {
         Ok(t) => t,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let build = async {
         // servers visible to the tenant; effective enabled = tenant override else default.
@@ -506,7 +506,7 @@ pub async fn get_devices(
 ) -> Response {
     let tenant = match require_member(&state, &claims).await {
         Ok(t) => t,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let actor = match Uuid::parse_str(&claims.sub) {
         Ok(a) => a,
@@ -576,7 +576,7 @@ pub async fn get_routing(
 ) -> Response {
     let tenant = match require_read(&state, &claims, "chain.read").await {
         Ok(t) => t,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // Read the BASE table (not effective_chain_models, which filters is_active=true) so
     // disabled steps are shown and can be re-enabled. Includes the step id for the toggle.
@@ -612,7 +612,7 @@ pub async fn get_governance(
 ) -> Response {
     let tenant = match require_read(&state, &claims, "governance.manage").await {
         Ok(t) => t,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // §D Phase 4: reads through the feature_governance_for_tenant shield (governance.features ×
     // the resolved workspace feature_policies state). The shield exposes `slug` over the
@@ -644,7 +644,7 @@ pub async fn get_settings(
 ) -> Response {
     let tenant = match require_read(&state, &claims, "tenant.manage").await {
         Ok(t) => t,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // §D Phase 4: /v1/settings reads the workspace toggles via the settings_for_tenant shield
     // (governance.settings absorbed tenant_settings) — {setting_key, enabled} contract preserved.

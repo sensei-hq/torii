@@ -28,12 +28,20 @@ pub struct RetrieveBody {
     /// Accepted for API stability. v1 serves `RetrievalConfig::default()`; per-request override
     /// merge is a tracked seam (see below) and is NEVER persisted here.
     #[serde(default)]
+    #[expect(
+        dead_code,
+        reason = "C5 spec request field (docs/specs/C5-rag-document-intelligence.md § retrieve); per-request override merge not built yet"
+    )]
     pub config_override: Option<serde_json::Value>,
     #[serde(default)]
     pub inspect: Option<bool>,
     /// A session-scoped config override — accepted but **NEVER persisted** (persisting a space
     /// default is `POST /rpc/retrieval/set-config`, gated on `retrieval.manage`). v1 ignores it.
     #[serde(default)]
+    #[expect(
+        dead_code,
+        reason = "C5 spec request field (docs/specs/C5-rag-document-intelligence.md § retrieve); accepted and ignored, never persisted"
+    )]
     pub session_only: Option<serde_json::Value>,
 }
 
@@ -50,7 +58,7 @@ pub async fn retrieve(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.read").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     // no-hardcoded-ops: resolve the per-space RetrievalConfig from governance.settings over the fallback
@@ -89,7 +97,7 @@ pub async fn retrieval_config(
 ) -> Response {
     let (tenant, _actor) = match authorize(&state, &claims, "doc.read").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let cfg = crate::rag::resolve_retrieval_config(&state.pool, tenant, Some(space_id)).await;
     (StatusCode::OK, Json(cfg)).into_response()

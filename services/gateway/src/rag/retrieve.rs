@@ -22,6 +22,10 @@ pub struct RetrieveQuery {
     pub profile_id: Uuid,
     pub top_k: Option<i32>,
     pub doc_ids: Option<Vec<Uuid>>,
+    #[expect(
+        dead_code,
+        reason = "C5 spec `inspect?:bool` (docs/specs/C5-rag-document-intelligence.md § retrieve); v1 always returns the full inspector block, so nothing branches on it yet"
+    )]
     pub inspect: bool,
 }
 
@@ -76,6 +80,10 @@ pub trait RetrievalEngine: Send + Sync {
 
 /// Cross-encoder rerank (GH-8) — DEFERRED. The seam is here so enabling it is additive (the wide
 /// two-stage k is already retrieved); v1's [`NoopReranker`] returns Unsupported.
+#[expect(
+    dead_code,
+    reason = "cross-encoder rerank seam, deferred (GH-8; docs/plans/C5-rag-backend-build-plan.md § Deferred)"
+)]
 #[async_trait]
 pub trait RerankProvider: Send + Sync {
     async fn rerank(
@@ -86,6 +94,10 @@ pub trait RerankProvider: Send + Sync {
     ) -> Result<Vec<ScoredChunk>, RagError>;
 }
 
+#[expect(
+    dead_code,
+    reason = "cross-encoder rerank seam, deferred (GH-8; docs/plans/C5-rag-backend-build-plan.md § Deferred)"
+)]
 pub struct NoopReranker;
 
 #[async_trait]
@@ -139,7 +151,7 @@ impl RetrievalEngine for HybridRetriever {
     ) -> Result<RetrieveResult, RagError> {
         let t0 = Instant::now();
         // Embed the query (validate_dims enforced inside the embedder).
-        let embedded = self.embedder.embed(&[q.text.clone()]).await?;
+        let embedded = self.embedder.embed(std::slice::from_ref(&q.text)).await?;
         let qvec = embedded
             .into_iter()
             .next()

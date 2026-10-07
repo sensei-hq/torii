@@ -1331,6 +1331,39 @@ mod tests {
         }
     }
 
+    /// AG-5: unset, `TORII_TRANSIENT_ATTEMPTS` is 3 (retry ON); `1` is off and accepted; zero,
+    /// garbage and a typo-sized value are refused by the heavy tier only, naming the variable.
+    #[test]
+    fn the_transient_attempts_are_read_and_a_bad_one_is_refused_by_the_heavy_tier() {
+        let e = env_config_from(getter(&[(ENV_DATABASE_URL, "postgres://h/db")])).expect("ok");
+        assert_eq!(
+            require_drive_policy(&e)
+                .expect("default")
+                .transient_attempts,
+            3
+        );
+        let e = env_config_from(getter(&[
+            (ENV_DATABASE_URL, "postgres://h/db"),
+            (ENV_TRANSIENT_ATTEMPTS, " 1 "),
+        ]))
+        .expect("ok");
+        assert_eq!(require_drive_policy(&e).expect("off").transient_attempts, 1);
+        for bad in ["0", "-1", "three", "300"] {
+            let e = env_config_from(getter(&[
+                (ENV_DATABASE_URL, "postgres://h/db"),
+                (ENV_TRANSIENT_ATTEMPTS, bad),
+            ]))
+            .expect("a bad drive policy must not fail the environment the light tier reads");
+            let err = require_drive_policy(&e).expect_err("the heavy tier must refuse");
+            assert_eq!(err.code, crate::errors::EXIT_ERROR);
+            assert!(
+                err.message.contains(ENV_TRANSIENT_ATTEMPTS) && err.message.contains(bad),
+                "{}",
+                err.message
+            );
+        }
+    }
+
     /// The heavy tier's refusal of a bad `TORII_WAKE_*` set: the environment itself PARSES
     /// (the light tier never reads the policy), and [`require_wake_retry`] is what refuses.
     fn wake_err(pairs: &[(&str, &str)]) -> CliError {

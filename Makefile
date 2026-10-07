@@ -10,7 +10,7 @@
 ## Bun workspaces: packages/* apps/*
 ## Cargo workspace: Cargo.toml at monorepo root → target/ at monorepo root
 
-.PHONY: install build test check lint fmt fmt-check hooks e2e clean clean-cache clean-all sweep help bump \
+.PHONY: install build test check lint fmt fmt-check clippy rust-lint hooks e2e clean clean-cache clean-all sweep help bump \
         gateway-build gateway-service gateway-restart gateway-stop gateway-logs gateway-status
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -53,10 +53,15 @@ check: ## Type-check all workspaces (svelte-check + tsc)
 lint: ## Prettier format-check + ESLint across all workspaces
 	bun run lint
 
-# ── Rust formatting ───────────────────────────────────────────────────────────
+# ── Rust formatting + lint ────────────────────────────────────────────────────
 #
-# Every commit is rustfmt-clean: the tracked .githooks/pre-commit runs fmt-check, and CI
-# (coverage.yml) runs it too. `make hooks` once per clone enables the hook.
+# Every commit is rustfmt- and clippy-clean: the tracked .githooks/pre-commit runs fmt-check
+# then clippy, and CI (coverage.yml) runs both too. `make hooks` once per clone enables the hook.
+#
+# clippy runs on rustup's `stable` — the toolchain CI's dtolnay/rust-toolchain@stable resolves —
+# rather than whatever `cargo` is first on PATH: a Homebrew rustc can lag stable and miss a lint
+# CI then fails on. Falls back to plain `cargo` where rustup is not installed.
+RUST_STABLE := $(shell command -v rustup >/dev/null 2>&1 && echo "rustup run stable")
 
 fmt: ## Format all Rust code (cargo fmt --all) — run before every commit
 	cargo fmt --all
@@ -64,7 +69,12 @@ fmt: ## Format all Rust code (cargo fmt --all) — run before every commit
 fmt-check: ## Check Rust formatting without modifying files
 	cargo fmt --all --check
 
-hooks: ## Install the tracked git pre-commit hook (cargo fmt --all --check)
+clippy: ## Lint every Rust crate (workspace, all targets) on stable, warnings are errors
+	$(RUST_STABLE) cargo clippy --workspace --all-targets -- -D warnings
+
+rust-lint: fmt-check clippy ## Rust gate: fmt-check + clippy (what the pre-commit hook and CI run)
+
+hooks: ## Install the tracked git pre-commit hook (fmt-check + clippy -D warnings)
 	git config core.hooksPath .githooks
 	@echo "pre-commit hook enabled (.githooks/pre-commit)"
 

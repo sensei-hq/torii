@@ -5987,4 +5987,99 @@ pub(crate) mod tests {
             );
         }
     }
+
+    // ---- AG-18 (#53): `status` on a run filed for an unrecorded spend ------------------
+
+    /// The reason the gateway's `Scheduler` files a run under when a drive fails with
+    /// `OrchestratorError::SpendUnrecorded` — built from the REAL error's `Display`, so a
+    /// gateway rewording breaks these tests instead of silently dropping the advice.
+    fn spend_unrecorded_reason() -> String {
+        OrchestratorError::SpendUnrecorded {
+            node: NodeId("draft/0".into()),
+            source: Box::new(OrchestratorError::Journal(
+                orchestrator_core::JournalError::Backend("connection reset by peer".into()),
+            )),
+        }
+        .to_string()
+    }
+
+    /// A run the scheduler filed terminal-`Failed` with `reason`.
+    async fn failed_store(run: RunId, reason: &str) -> InMemorySchedulerStore {
+        let s = InMemorySchedulerStore::default();
+        s.enqueue(run, &empty_graph(), now()).await.unwrap();
+        s.record_terminal(run, RunStatus::Failed, Some(reason))
+            .await
+            .unwrap();
+        s
+    }
+
+    /// AG-12 × AG-3: a paid model call whose spend never reached the journal is the one
+    /// failure a plain re-drive makes WORSE — the call has no memo, so it is dispatched and
+    /// paid for again, outside every cap. `status` must show why the run failed AND tell the
+    /// operator to reconcile the provider-side spend before re-driving it.
+    #[tokio::test]
+    async fn status_of_a_run_failed_on_an_unrecorded_spend_says_to_reconcile_first() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = failed_store(run, &spend_unrecorded_reason()).await;
+
+        let out = status(&s, &empty_journal(), run, false)
+            .await
+            .expect("status");
+        assert_eq!(out.code, EXIT_OK);
+        assert!(
+            out.text.contains("spend not recorded at") && out.text.contains("draft/0"),
+            "the reason must name the node whose spend was lost: {}",
+            out.text
+        );
+        assert!(
+            out.text.contains("reconcile") && out.text.contains("provider"),
+            "the operator must be told to reconcile provider-side spend: {}",
+            out.text
+        );
+        assert!(
+            out.text.contains("before re-driving"),
+            "…and to do it BEFORE re-driving, or the call is paid for twice: {}",
+            out.text
+        );
+    }
+
+    /// The same advice under `--json`, as its own key — a script that alerts on a failed
+    /// run must be able to tell "reconcile spend first" from any other failure without
+    /// parsing the reason's prose.
+    #[tokio::test]
+    async fn status_json_of_a_run_failed_on_an_unrecorded_spend_carries_the_advice() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = failed_store(run, &spend_unrecorded_reason()).await;
+
+        let out = status(&s, &empty_journal(), run, true)
+            .await
+            .expect("status");
+        let v: serde_json::Value = serde_json::from_str(&out.text)
+            .unwrap_or_else(|e| panic!("--json emitted non-JSON {:?}: {e}", out.text));
+        let advice = v[0]["spend_unrecorded"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no spend_unrecorded advice: {v}"));
+        assert!(
+            advice.contains("reconcile") && advice.contains("before re-driving"),
+            "{advice}"
+        );
+        assert!(
+            v[0]["reason"]
+                .as_str()
+                .is_some_and(|r| r.contains("spend not recorded at")),
+            "the reason itself is still reported: {v}"
+        );
+    }
+
+    /// Any OTHER failure gets no spend advice: telling an operator to reconcile a spend that
+    /// was recorded would send them auditing a provider bill for nothing.
+    #[tokio::test]
+    async fn status_of_an_ordinary_failure_gives_no_spend_advice() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = failed_store(run, "node draft/0 failed: model refused").await;
+        let text = status(&s, &empty_journal(), run, false).await.unwrap().text;
+        let json = status(&s, &empty_journal(), run, true).await.unwrap().text;
+        assert!(!text.contains("reconcile"), "{text}");
+        assert!(!json.contains("spend_unrecorded"), "{json}");
+    }
 }

@@ -5853,4 +5853,138 @@ pub(crate) mod tests {
             "…while the iteration that IS asking must still be listed:\n{block}"
         );
     }
+
+    // ---- AG-18 (#53): a hooked drive's `DecisionHookFired` decides nothing -------------
+
+    /// Every event of `src`, appended to `dst` in order — so one journal can hold the
+    /// fixtures several helpers build, each in the shape the executor writes.
+    async fn copy_into(dst: &InMemoryJournal, run: RunId, src: &InMemoryJournal) {
+        for (_, e) in src.load(run).await.unwrap() {
+            dst.append(run, e).await.unwrap();
+        }
+    }
+
+    /// A run with ALL FOUR waiting kinds still asking, one `AwaitSignal` that was answered
+    /// and completed, and a token budget with spend — every input the readers that decide
+    /// what a run waits on (and what it spent) consult.
+    async fn every_waiting_kind(run: RunId) -> InMemoryJournal {
+        let j = journal_with_budget_and_spend(run, 50_000).await;
+        let deadline = Some(now() + chrono::Duration::hours(1));
+        copy_into(&j, run, &awaiting_journal(run, &gate(), deadline).await).await;
+        copy_into(
+            &j,
+            run,
+            &gate_journal(run, &release(), deadline, &["ship", "reject"]).await,
+        )
+        .await;
+        copy_into(&j, run, &agent_journal(run, &reviewer(), deadline).await).await;
+        copy_into(
+            &j,
+            run,
+            &loop_gate_journal(run, &loop_gate(), None, &["ship", "revise"]).await,
+        )
+        .await;
+        let done = NodeId("done".into());
+        copy_into(&j, run, &awaiting_journal(run, &done, None).await).await;
+        j.append(
+            run,
+            JournalEvent::SignalReceived {
+                node: done.clone(),
+                payload: approved(),
+            },
+        )
+        .await
+        .unwrap();
+        append_completion(&j, run, &done).await;
+        j
+    }
+
+    /// Every node [`every_waiting_kind`] journals, plus `worker`: a model-backed agent that
+    /// never asked a human, whose only rows are the call-keyed markers of AG-15 tool
+    /// confirmations — so a reader that listed it would be inventing an ask.
+    fn every_node() -> [NodeId; 6] {
+        [
+            gate(),
+            release(),
+            reviewer(),
+            loop_gate(),
+            NodeId("done".into()),
+            NodeId("worker".into()),
+        ]
+    }
+
+    /// `src` as a HOOKED drive would have journaled it: after every event, a node-keyed and
+    /// a call-keyed `DecisionHookFired` (AG-2, gateway v0.11) for [`every_node`], each
+    /// naming the seq of the event before it as the decision it reported.
+    async fn hooked(run: RunId, src: &InMemoryJournal) -> InMemoryJournal {
+        let nodes = every_node();
+        let j = InMemoryJournal::new();
+        for (_, e) in src.load(run).await.unwrap() {
+            let at = j.append(run, e).await.unwrap();
+            for node in &nodes {
+                for effect_id in [None, Some(EffectId("call-1".into()))] {
+                    j.append(
+                        run,
+                        JournalEvent::DecisionHookFired {
+                            node: node.clone(),
+                            decision: Some(at),
+                            effect_id,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
+        }
+        j
+    }
+
+    /// AG-18 (#53): `DecisionHookFired` is a once-per-decision REPORTING marker a hooked
+    /// drive appends after the decision row it honoured. It says nothing about what a run
+    /// waits on, so every reader that decides that — `list-paused`, `status`, and the
+    /// node-state fold `signal`/`gate decide`/`agent answer` pre-check against — must read a
+    /// hooked journal exactly as the unhooked one. A reader that took the marker for a
+    /// terminal or an awaiting event would hide a live ask or advertise a dead one.
+    #[tokio::test]
+    async fn a_hooked_drives_decision_markers_change_nothing_a_reader_decides() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let plain = every_waiting_kind(run).await;
+        let hooked = hooked(run, &plain).await;
+
+        for json in [false, true] {
+            let a = list_paused(&s, &plain, json).await.expect("lists");
+            let b = list_paused(&s, &hooked, json).await.expect("lists");
+            assert_eq!(
+                (a.code, &a.text),
+                (b.code, &b.text),
+                "list-paused (json={json}) must ignore DecisionHookFired"
+            );
+            let a = status(&s, &plain, run, json).await.expect("status");
+            let b = status(&s, &hooked, run, json).await.expect("status");
+            assert_eq!(
+                (a.code, &a.text),
+                (b.code, &b.text),
+                "status (json={json}) must ignore DecisionHookFired"
+            );
+        }
+        // The fixture is not vacuous: all four kinds are listed, and the answered one is not.
+        let listed = list_paused(&s, &plain, false).await.unwrap().text;
+        for node in ["gate", "release", "reviewer", "lp/0/__gate__"] {
+            assert!(listed.contains(node), "{node} must be listed:\n{listed}");
+        }
+
+        let (plain, hooked) = (
+            plain.load(run).await.unwrap(),
+            hooked.load(run).await.unwrap(),
+        );
+        for node in every_node() {
+            assert_eq!(
+                signal_state(&plain, &node),
+                signal_state(&hooked, &node),
+                "{}: the node-state fold must ignore DecisionHookFired",
+                node.0
+            );
+        }
+    }
 }

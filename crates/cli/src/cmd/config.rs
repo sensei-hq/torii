@@ -569,6 +569,22 @@ mod tests {
         );
     }
 
+    /// AG-6 (#35): `config show` and `config pull` exist, so the gap entry that denied them
+    /// is false — the same staleness pin as the planner-designation one above.
+    #[test]
+    fn the_readme_known_gaps_do_not_deny_config_show_or_pull() {
+        let readme = include_str!("../../README.md");
+        let gaps = readme
+            .split_once("## Known gaps")
+            .expect("the README still has a Known gaps section")
+            .1;
+        assert!(
+            !gaps.contains("config pull") && !gaps.contains("config show"),
+            "`torii config show` and `torii config pull` are wired, so a gap entry naming \
+             either denies a shipped command: {gaps}"
+        );
+    }
+
     /// **SP-REG-5 — all three chain-reference surfaces are checked, with attribution.**
     ///
     /// `Registry::chain_names` covers the same three surfaces but returns a deduplicated SET,

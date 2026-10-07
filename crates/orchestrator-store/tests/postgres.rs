@@ -22,6 +22,7 @@ fn started() -> JournalEvent {
     JournalEvent::RunStarted {
         version: "v1".into(),
         budget: None,
+        money_budget: None,
     }
 }
 
@@ -386,6 +387,10 @@ async fn agents_and_tools_round_trip_through_jsonb_including_nested_fields() {
         skills: vec!["concise".into()],
         system_prompt: "be careful".into(),
         backed_by: AgentBacking::Model,
+        tool_limits: HashMap::new(),
+        confirm_tools: vec![],
+        confirm_timeout: None,
+        escalate_to: None,
     };
     let input_schema = serde_json::json!({"type":"object","properties":{"q":{"type":"string"}}});
     let tool = ToolSpec {
@@ -464,6 +469,10 @@ async fn a_publish_replaces_every_registry_table_not_just_skills() {
             skills: vec![],
             system_prompt: String::new(),
             backed_by: AgentBacking::Model,
+            tool_limits: HashMap::new(),
+            confirm_tools: vec![],
+            confirm_timeout: None,
+            escalate_to: None,
         }],
         skills: vec![skill("gone-skill")],
         tools: vec![cfg_tool("gone-tool")],
@@ -587,6 +596,60 @@ async fn prune_terminal_deletes_old_terminal_rows_and_never_a_live_one() {
         RunStatus::Waking
     );
     assert_eq!(s.count_terminal_before(cutoff).await.unwrap(), 0);
+    t.drop_tenant().await;
+}
+
+/// AG-3 (torii#53): `run status` reports a run's consecutive wake attempts, which the
+/// `SchedulerStore` trait does not expose — `wake_attempts` reads the counter the trait's
+/// methods keep, for THIS tenant only. Pinned through the trait's own transitions (enqueue =
+/// 1, begin_wake_attempt + 1, record_wake_failed unchanged, record_paused resets to 0) rather
+/// than a hand-written row, so the reader cannot drift from the writers.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn wake_attempts_reads_the_counter_the_scheduler_keeps_for_this_tenant_only() {
+    let Some(pool) = pool().await else { return };
+    let t = Tenant::new(&pool).await;
+    let other = Tenant::new(&pool).await;
+    let s = t.scheduler();
+    let r = run();
+    assert_eq!(
+        s.wake_attempts(r).await.unwrap(),
+        None,
+        "an unknown run has no count"
+    );
+    s.enqueue(r, &sg(), ts(0)).await.unwrap();
+    assert_eq!(
+        s.wake_attempts(r).await.unwrap(),
+        Some(1),
+        "submit's inline drive is attempt 1"
+    );
+    let retry = |_: u32| ts(100);
+    s.begin_wake_attempt(r, &retry).await.unwrap();
+    s.record_wake_failed(r, ts(100), "boom").await.unwrap();
+    assert_eq!(
+        s.wake_attempts(r).await.unwrap(),
+        Some(2),
+        "a counted attempt that failed stays counted"
+    );
+    assert_eq!(
+        other.scheduler().wake_attempts(r).await.unwrap(),
+        None,
+        "another tenant never sees this tenant's run"
+    );
+    s.claim_due(ts(100), Duration::seconds(60), 10)
+        .await
+        .unwrap();
+    s.begin_wake_attempt(r, &retry).await.unwrap();
+    s.record_paused(r, None, "gated").await.unwrap();
+    assert_eq!(
+        s.wake_attempts(r).await.unwrap(),
+        Some(0),
+        "a successful drive resets the count"
+    );
+    other.drop_tenant().await;
     t.drop_tenant().await;
 }
 

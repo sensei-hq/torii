@@ -7,13 +7,33 @@ use crate::errors::CliError;
 use crate::render;
 use chrono::{DateTime, Utc};
 use orchestrator_core::{
-    ExecutionJournal, JournalEvent, NodeId, OrchestratorError, RunId, RunStatus, SchedulerStore,
-    Scope, Seq, TokenBudget,
+    ExecutionJournal, JournalEvent, NodeId, OrchestratorError, RunBudget, RunId, RunStatus,
+    SchedulerStore, Scope, Seq,
 };
 use std::collections::HashMap;
 
+/// AG-3: a run's consecutive wake attempts since its last successful drive — the counter the
+/// scheduler store keeps and the `SchedulerStore` trait does not expose. `None` ⇒ unknown run,
+/// or a backend that cannot report it.
+#[async_trait::async_trait]
+pub trait WakeAttemptCounts: Send + Sync {
+    async fn wake_attempts(&self, run: RunId) -> Result<Option<u32>, OrchestratorError>;
+}
+
+/// The memory backend: its store lives in one process, so a later `torii run status` (a NEW
+/// process) never sees the run at all — there is no count to report.
+pub struct NoWakeAttemptCounts;
+
+#[async_trait::async_trait]
+impl WakeAttemptCounts for NoWakeAttemptCounts {
+    async fn wake_attempts(&self, _run: RunId) -> Result<Option<u32>, OrchestratorError> {
+        Ok(None)
+    }
+}
+
 pub async fn status(
     store: &dyn SchedulerStore,
+    attempts: &dyn WakeAttemptCounts,
     journal: &dyn ExecutionJournal,
     run: RunId,
     json: bool,
@@ -42,7 +62,25 @@ pub async fn status(
                 .await
                 .map_err(OrchestratorError::Journal)?;
             let (spent, budget) = orchestrator::spend_of(&events);
+            // AG-12: the money twin, through the engine's own fold for the same reason. Its
+            // cap is `None` on a run that never had one — and then the spend is 0 by
+            // construction (cost is ledgered only under a cap), so nothing is shown.
+            let (spent_micro_usd, money_budget) = orchestrator::money_spend_of(&events);
             let budgeted = budgeted_turns(&events);
+            let spend_advice = spend_unrecorded_advice(&r);
+            let wake_attempts = reportable_wake_attempts(&r, attempts.wake_attempts(run).await?);
+            // AG-15: what a human must act on that `list-paused` alone used to surface —
+            // pending confirm-before-run calls, and escalated questions with their CURRENT
+            // holder and deadline. The listing's own fold, filtered, so the two cannot differ.
+            let waiting = awaiting_nodes(&events);
+            let tool_confirms: Vec<&render::AwaitingNode> = waiting
+                .iter()
+                .filter(|n| n.tool_confirm.is_some())
+                .collect();
+            let escalated: Vec<&render::AwaitingNode> = waiting
+                .iter()
+                .filter(|n| n.escalated_to.is_some())
+                .collect();
 
             if json {
                 let base = render::json(&[r]).map_err(|e| CliError::error(e.to_string()))?;
@@ -53,7 +91,14 @@ pub async fn status(
                 // does, so re-serializing would silently reorder every key. Only
                 // taking that detour when there is something to splice in is what
                 // keeps the unbudgeted, undegraded case byte-identical.
-                if budget.is_none() && budgeted.is_empty() {
+                if budget.is_none()
+                    && money_budget.is_none()
+                    && budgeted.is_empty()
+                    && spend_advice.is_none()
+                    && wake_attempts.is_none()
+                    && tool_confirms.is_empty()
+                    && escalated.is_empty()
+                {
                     return Ok(Outcome::ok(base));
                 }
                 // Reuse `render::json` for the row shape + redaction, then splice
@@ -65,9 +110,37 @@ pub async fn status(
                     rows[0]["spent"] = serde_json::json!(spent);
                     rows[0]["budget"] = serde_json::json!(cap);
                 }
+                if let Some(cap) = money_budget {
+                    rows[0]["spent_micro_usd"] = serde_json::json!(spent_micro_usd);
+                    rows[0]["money_budget_micro_usd"] = serde_json::json!(cap);
+                }
                 if !budgeted.is_empty() {
                     rows[0]["context_budgeted"] = serde_json::to_value(&budgeted)
                         .map_err(|e| CliError::error(e.to_string()))?;
+                }
+                if let Some(advice) = spend_advice {
+                    rows[0]["spend_unrecorded"] = serde_json::json!(advice);
+                }
+                if let Some(n) = wake_attempts {
+                    rows[0]["wake_attempts"] = serde_json::json!(n);
+                }
+                if !tool_confirms.is_empty() {
+                    rows[0]["tool_confirms"] = serde_json::to_value(&tool_confirms)
+                        .map_err(|e| CliError::error(e.to_string()))?;
+                }
+                if !escalated.is_empty() {
+                    rows[0]["escalations"] = serde_json::Value::Array(
+                        escalated
+                            .iter()
+                            .map(|n| {
+                                serde_json::json!({
+                                    "node": n.node,
+                                    "escalated_to": n.escalated_to,
+                                    "deadline": n.deadline,
+                                })
+                            })
+                            .collect(),
+                    );
                 }
                 Ok(Outcome::ok(
                     serde_json::to_string_pretty(&rows)
@@ -79,6 +152,13 @@ pub async fn status(
                 // the table stays byte-identical to the pre-SP-DATA-5 output.
                 if let Some(cap) = budget {
                     text.push_str(&format!("spent: {spent} / budget: {cap} tokens\n"));
+                }
+                if let Some(cap) = money_budget {
+                    text.push_str(&format!(
+                        "money spent: {} / budget: {}\n",
+                        fmt_usd(spent_micro_usd),
+                        fmt_usd(cap)
+                    ));
                 }
                 if !budgeted.is_empty() {
                     let deps: u32 = budgeted.iter().map(|t| t.dropped_deps).sum();
@@ -94,10 +174,57 @@ pub async fn status(
                         budgeted.len()
                     ));
                 }
+                if let Some(advice) = spend_advice {
+                    text.push_str(&format!("spend unrecorded: {advice}\n"));
+                }
+                if let Some(n) = wake_attempts {
+                    text.push_str(&format!(
+                        "wake attempts: {n} consecutive since the last successful drive\n"
+                    ));
+                }
+                for n in &tool_confirms {
+                    text.push_str(&render::tool_confirm_line(run, n));
+                }
+                for n in &escalated {
+                    text.push_str(&render::escalation_line(n));
+                }
                 Ok(Outcome::ok(text))
             }
         }
     }
+}
+
+/// How the gateway's `Scheduler` begins the reason it files a run under when a drive fails
+/// with `OrchestratorError::SpendUnrecorded` — the error's own `Display`, which the scheduler
+/// records verbatim. The scheduled row is the ONLY place that failure survives: it means the
+/// journal append carrying the spend failed, so the journal has nothing to fold. Pinned
+/// against the real error in `status_of_a_run_failed_on_an_unrecorded_spend_says_to_reconcile_first`.
+const SPEND_UNRECORDED_PREFIX: &str = "spend not recorded at ";
+
+/// What `status` tells an operator about a run filed for an unrecorded spend (AG-12 × AG-3).
+/// The one failure a plain re-drive makes worse: the paid call has no memo, so a re-drive
+/// dispatches it and pays for it again, outside every cap.
+const SPEND_UNRECORDED_ADVICE: &str = "reconcile the provider-side spend for this call (the \
+     provider's usage or billing records) before re-driving this run — the call was dispatched \
+     and paid for, but its usage never reached the journal, so no budget counts it and a \
+     re-drive would dispatch and pay for it again";
+
+/// [`SPEND_UNRECORDED_ADVICE`] for a run the scheduler failed on an unrecorded spend, and
+/// `None` for every other row — a recorded spend needs no reconciling.
+fn spend_unrecorded_advice(r: &orchestrator_core::ScheduledRun) -> Option<&'static str> {
+    (r.status == RunStatus::Failed
+        && r.reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with(SPEND_UNRECORDED_PREFIX)))
+    .then_some(SPEND_UNRECORDED_ADVICE)
+}
+
+/// AG-3: the wake-attempt count worth showing — only on a LIVE run that has attempts since
+/// its last successful drive (a `waking` row mid-attempt, or a `paused` one backing off).
+/// A healthy pause has a count of 0, and a terminal run's count is history (one that gave up
+/// names it in its reason), so neither gets a line and both stay byte-identical.
+fn reportable_wake_attempts(r: &orchestrator_core::ScheduledRun, n: Option<u32>) -> Option<u32> {
+    n.filter(|&n| n > 0 && !r.status.is_terminal())
 }
 
 /// One SP-7b `ContextBudgeted` row in the shape `status` reports it.
@@ -283,7 +410,7 @@ pub async fn wake(
     journal: &dyn ExecutionJournal,
     run: RunId,
     now: DateTime<Utc>,
-    budget: Option<TokenBudget>,
+    budget: RunBudget,
 ) -> Result<Outcome, CliError> {
     let Some(before) = store.status(run).await? else {
         return Ok(Outcome::precondition(format!("no such run: {}", run.0)));
@@ -307,8 +434,48 @@ pub async fn wake(
     // one moment later, under the very cap they just tried to raise. Appending
     // first closes that window: any worker that can observe the wake can only ever
     // fold a journal that already includes the raise.
-    if let Some(b) = budget {
-        journal
+    // AG-12: a money raise MOVES an existing money cap and never introduces one — the
+    // engine's fold ignores `MoneyBudgetRaised` on a run whose `RunStarted.money_budget` is
+    // `None` (cost is ledgered only while a cap is in force, so a cap introduced mid-run would
+    // be weighed against spend it never counted). Journaling it anyway and reporting `queued`
+    // would tell the operator a limit is in force that nothing enforces, so it is refused
+    // here, BEFORE anything is written — the token raise beside it included, so a refusal
+    // writes nothing at all.
+    if budget.money.is_some() {
+        let events = journal
+            .load(run)
+            .await
+            .map_err(OrchestratorError::Journal)?;
+        if orchestrator::money_spend_of(&events).1.is_none() {
+            return Ok(Outcome::precondition(format!(
+                "not queued: {} was submitted without a money cap, and --budget-usd can only \
+                 move an existing money cap, never introduce one (spend is counted only while \
+                 a cap is in force, so a cap added now would be weighed against spend it never \
+                 saw). Nothing was written. Submit a new run with --budget-usd to cap its \
+                 spend, or wake this one without it.",
+                run.0
+            )));
+        }
+    }
+    // Past the FIRST append the command can no longer be all-or-nothing — two journal rows
+    // are not one transaction. So every fault after a durable append is REPORTED, naming
+    // exactly which raise landed and which did not, never `?`-ed: a bare error reads as "it
+    // did not go through" for a cap that has in fact moved (`cmd::tool::decide`'s rule).
+    // Before any append, nothing is durable and a fault is still a plain error.
+    let mut landed: Vec<String> = Vec::new();
+    let partial = |landed: &[String], what: &str, e: &dyn std::fmt::Display, rest: &str| {
+        let e = render::safe_reason(&e.to_string());
+        Outcome::precondition(format!(
+            "not queued: {} — {} journaled durably, but {what} failed: {e}.{rest} Run \
+             `torii run wake {}` to finish (repeating a raise that landed is harmless: it \
+             names a total, not an increment).",
+            run.0,
+            landed.join(" and "),
+            run.0
+        ))
+    };
+    if let Some(b) = budget.tokens {
+        let seq = journal
             .append(
                 run,
                 JournalEvent::BudgetRaised {
@@ -317,14 +484,71 @@ pub async fn wake(
             )
             .await
             .map_err(OrchestratorError::Journal)?;
+        landed.push(format!(
+            "the token cap raise to {} (seq {seq}) is",
+            b.total_tokens
+        ));
     }
-    store.force_wake(run, now).await?;
+    // The money twin of the raise above, under the same append-BEFORE-`force_wake` rule.
+    if let Some(m) = budget.money {
+        let usd = fmt_usd(m.total_micro_usd);
+        let appended = journal
+            .append(
+                run,
+                JournalEvent::MoneyBudgetRaised {
+                    new_total_micro_usd: m.total_micro_usd,
+                },
+            )
+            .await;
+        match appended {
+            Ok(seq) => landed.push(format!("the money cap raise to {usd} (seq {seq}) is")),
+            Err(e) if landed.is_empty() => return Err(OrchestratorError::Journal(e).into()),
+            Err(e) => {
+                return Ok(partial(
+                    &landed,
+                    "the money cap raise",
+                    &e,
+                    &format!(
+                        " The money cap is not raised to {usd} (nothing of it was \
+                         journaled), and the run is not queued."
+                    ),
+                ));
+            }
+        }
+    }
+    if let Err(e) = store.force_wake(run, now).await {
+        if landed.is_empty() {
+            return Err(e.into());
+        }
+        return Ok(partial(&landed, "the wake", &e, " The run is not queued."));
+    }
     // This row is never deleted by any shipped store, so `None` here would mean a
     // hypothetical future retention/purge raced us, not a reachable path today.
-    let after = store
-        .status(run)
-        .await?
-        .ok_or_else(|| CliError::error(format!("run {} vanished mid-wake", run.0)))?;
+    let reread = match store.status(run).await {
+        Ok(Some(after)) => Ok(after),
+        Ok(None) => Err(CliError::error(format!("run {} vanished mid-wake", run.0))),
+        Err(e) => Err(CliError::from(e)),
+    };
+    // `force_wake` has committed by now, so the run may well be queued: a re-read fault
+    // must neither claim "not queued" nor be a bare error (both read as "it did not go
+    // through"). Say what is durable and point at `run status` to see the outcome.
+    let after = match reread {
+        Ok(after) => after,
+        Err(e) => {
+            let e = render::safe_reason(&e.message);
+            let raised = if landed.is_empty() {
+                String::new()
+            } else {
+                format!("{} journaled durably and ", landed.join(" and "))
+            };
+            return Ok(Outcome::precondition(format!(
+                "wake sent: {} — {raised}the wake was requested, but the status re-read \
+                 failed: {e}. Whether it applied could not be read back; check \
+                 `torii run status {}` before waking again.",
+                run.0, run.0
+            )));
+        }
+    };
     // The primary signal is STATUS, not next_wake's mere presence: `claim_due` flips
     // `paused -> waking` and leaves a stale `next_wake` untouched, and `cancel` clears
     // it to NULL — neither on its own tells us whether OUR force_wake actually applied
@@ -354,8 +578,13 @@ pub async fn wake(
             run.0
         )))
     } else {
+        let journaled = if landed.is_empty() {
+            String::new()
+        } else {
+            format!(" ({} journaled durably)", landed.join(" and "))
+        };
         Ok(Outcome::precondition(format!(
-            "not queued: {} is {} — force_wake did not apply",
+            "not queued: {} is {} — force_wake did not apply{journaled}",
             run.0,
             after.status.as_str()
         )))
@@ -568,9 +797,14 @@ fn signal_states(events: &[(Seq, JournalEvent)]) -> HashMap<NodeId, SignalStateA
             _ => {}
         }
     }
+    // AG-15: an escalated question's CURRENT deadline is its last hop's. The `AgentAwaited`
+    // one stays first-wins above (the executor never moves it either) — it is simply no
+    // longer the deadline anything waits on.
+    let escalated = escalations(events);
     awaited
         .into_iter()
         .map(|(node, deadline)| {
+            let deadline = escalated.get(&node).map_or(deadline, |(_, d)| *d);
             let at = match terminal.get(&node) {
                 Some((seq, state)) => SignalStateAt {
                     state: state.clone(),
@@ -593,6 +827,126 @@ fn signal_states(events: &[(Seq, JournalEvent)]) -> HashMap<NodeId, SignalStateA
             (node, at)
         })
         .collect()
+}
+
+/// AG-15: every escalated human-backed `Agent` node's CURRENT holder and deadline — the
+/// `to` and `deadline` of its last `AgentEscalated` hop.
+///
+/// Hops fold FIRST-wins per target, exactly as the executor's fold does: a duplicated hop to
+/// an agent already in the node's chain moves nothing (the executor never appends one, but a
+/// journal torii did not write may). So the current hop is the last DISTINCT target in
+/// journal order, with the deadline its first row recorded.
+pub(crate) fn escalations(
+    events: &[(Seq, JournalEvent)],
+) -> HashMap<NodeId, (String, Option<DateTime<Utc>>)> {
+    let mut seen: HashMap<NodeId, std::collections::HashSet<String>> = HashMap::new();
+    let mut current = HashMap::new();
+    for (_, e) in events {
+        if let JournalEvent::AgentEscalated {
+            node, to, deadline, ..
+        } = e
+            && seen.entry(node.clone()).or_default().insert(to.clone())
+        {
+            current.insert(node.clone(), (to.clone(), *deadline));
+        }
+    }
+    current
+}
+
+/// AG-15: where one confirm-before-run tool call stands, folded from the journal.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ToolConfirmState {
+    /// Asked, and nothing has settled it: a decision appended now WILL be read.
+    Pending,
+    /// A human already decided it (LAST decision, as the executor folds it).
+    Decided { approved: bool, actor: String },
+    /// The executor already recorded the call's outcome — an expiry's `not_confirmed`, or
+    /// the approved tool's own result. Nothing re-reads a decision for it.
+    Recorded,
+    /// The node it belongs to terminated (or the whole run completed) without settling it.
+    NodeTerminal(SignalState),
+}
+
+/// One `ToolConfirmAwaited` as the journal recorded it (FIRST record wins, like every
+/// waiting record), with its folded [`ToolConfirmState`].
+#[derive(Debug, Clone)]
+pub(crate) struct ToolConfirmAsk {
+    pub node: NodeId,
+    pub effect_id: orchestrator_core::EffectId,
+    pub tool: String,
+    pub arguments: String,
+    pub deadline: Option<DateTime<Utc>>,
+    pub state: ToolConfirmState,
+}
+
+/// AG-15: every confirm-before-run call this run has asked about, in journal order, each
+/// with where it stands. ONE fold, shared by the listing (which shows the `Pending` ones) and
+/// by `run tool approve|reject` (which refuses every other state, naming it).
+pub(crate) fn tool_confirm_asks(events: &[(Seq, JournalEvent)]) -> Vec<ToolConfirmAsk> {
+    use orchestrator_core::EffectId;
+    let mut asks: Vec<ToolConfirmAsk> = Vec::new();
+    let mut decided: HashMap<EffectId, (bool, String)> = HashMap::new();
+    let mut recorded: std::collections::HashSet<EffectId> = Default::default();
+    let mut terminal: HashMap<NodeId, SignalState> = HashMap::new();
+    let mut run_completed = false;
+    for (_, e) in events {
+        match e {
+            JournalEvent::ToolConfirmAwaited {
+                node,
+                effect_id,
+                tool,
+                arguments,
+                deadline,
+                ..
+            } if !asks.iter().any(|a| &a.effect_id == effect_id) => asks.push(ToolConfirmAsk {
+                node: node.clone(),
+                effect_id: effect_id.clone(),
+                tool: tool.clone(),
+                arguments: arguments.clone(),
+                deadline: *deadline,
+                state: ToolConfirmState::Pending,
+            }),
+            JournalEvent::ToolConfirmDecided {
+                effect_id,
+                approved,
+                actor,
+                ..
+            } => {
+                decided.insert(effect_id.clone(), (*approved, actor.clone()));
+            }
+            JournalEvent::EffectRecorded { effect_id, .. } => {
+                recorded.insert(effect_id.clone());
+            }
+            JournalEvent::NodeCompleted { node } => {
+                terminal.insert(node.clone(), SignalState::Completed);
+            }
+            JournalEvent::NodeFailed { node, .. } => {
+                terminal.insert(node.clone(), SignalState::Failed);
+            }
+            JournalEvent::NodeSkipped { node } => {
+                terminal.insert(node.clone(), SignalState::Skipped);
+            }
+            JournalEvent::RunCompleted => run_completed = true,
+            _ => {}
+        }
+    }
+    for a in &mut asks {
+        a.state = if recorded.contains(&a.effect_id) {
+            ToolConfirmState::Recorded
+        } else if let Some((approved, actor)) = decided.get(&a.effect_id) {
+            ToolConfirmState::Decided {
+                approved: *approved,
+                actor: actor.clone(),
+            }
+        } else if let Some(t) = terminal.get(&a.node) {
+            ToolConfirmState::NodeTerminal(t.clone())
+        } else if run_completed {
+            ToolConfirmState::NodeTerminal(SignalState::Completed)
+        } else {
+            ToolConfirmState::Pending
+        };
+    }
+    asks
 }
 
 /// One node's [`SignalState`], folded from `events`.
@@ -693,6 +1047,7 @@ fn awaiting_nodes(events: &[(Seq, JournalEvent)]) -> Vec<render::AwaitingNode> {
             acc
         });
 
+    let escalated = escalations(events);
     let mut out: Vec<render::AwaitingNode> = signal_states(events)
         .into_iter()
         .filter_map(|(node, st)| match st.state {
@@ -744,15 +1099,37 @@ fn awaiting_nodes(events: &[(Seq, JournalEvent)]) -> Vec<render::AwaitingNode> {
                     None => (None, questions.get(&node).cloned()),
                 };
                 Some(render::AwaitingNode {
+                    escalated_to: escalated.get(&node).map(|(to, _)| to.clone()),
                     node,
                     deadline,
                     options,
                     question,
+                    tool_confirm: None,
                 })
             }
             _ => None,
         })
         .collect();
+    // AG-15: each pending confirm-before-run CALL is its own row — keyed by the call, not the
+    // node, because one agent node can ask about several. The arguments are what the human
+    // approves, so they are shown, REDACTED here once for every sink (as a question is).
+    out.extend(
+        tool_confirm_asks(events)
+            .into_iter()
+            .filter(|a| a.state == ToolConfirmState::Pending)
+            .map(|a| render::AwaitingNode {
+                node: a.node,
+                deadline: a.deadline,
+                options: None,
+                question: None,
+                escalated_to: None,
+                tool_confirm: Some(render::ToolConfirmCall {
+                    effect_id: a.effect_id.0,
+                    tool: a.tool,
+                    arguments: render::redact_arguments(&a.arguments),
+                }),
+            }),
+    );
     out.sort_by(|a, b| a.node.0.cmp(&b.node.0));
     out
 }
@@ -1102,6 +1479,13 @@ pub async fn signal(
         )));
     }
 
+    // AG-15: a node whose only wait is a confirm-before-run CALL is answered by `run tool`.
+    if let Some(refusal) =
+        crate::cmd::tool::pending_call_refusal(&events, &node, run, "an AwaitSignal")
+    {
+        return Ok(Outcome::precondition(refusal));
+    }
+
     match signal_state(&events, &node) {
         SignalState::Awaiting { .. } => {}
         // Everything else is a no-op at the node, so say so instead of writing.
@@ -1407,6 +1791,75 @@ pub fn parse_budget_tokens(s: &str) -> Result<u64, String> {
     Ok(v)
 }
 
+/// AG-12: parse `--budget-usd` (whole or fractional US dollars) into integer micro-dollars,
+/// the unit `MoneyBudget` is denominated in.
+///
+/// **Decimal, never `f64`.** The engine keeps money as integers so that "spent >= cap" cannot
+/// depend on summation order; parsing the cap through a float would reintroduce binary
+/// rounding at the one place a human typed an exact figure (`0.29 * 1e6` is
+/// `289999.99999999994` in `f64`). So the digits are split at the point and scaled as
+/// integers.
+///
+/// Accepted: `D`, `D.`, `D.F` and `.F`, with at most six fractional digits — a micro-dollar is
+/// the engine's resolution, and a finer figure is REFUSED rather than rounded, because either
+/// rounding direction silently moves a limit the operator stated. No sign, no exponent, no
+/// currency symbol, no separators: each is a spelling whose meaning a parser would have to
+/// guess. Zero is refused like a sub-floor `--budget-tokens`: a run capped at $0 is refused
+/// every priced call, so it would pause having done nothing (`run cancel` halts a run).
+pub fn parse_budget_usd(s: &str) -> Result<u64, String> {
+    let t = s.trim();
+    let bad = |why: &str| format!("invalid --budget-usd {t:?}: {why}");
+    let (whole, frac) = t.split_once('.').unwrap_or((t, ""));
+    let digits = |p: &str| p.bytes().all(|b| b.is_ascii_digit());
+    if (whole.is_empty() && frac.is_empty()) || !digits(whole) || !digits(frac) {
+        return Err(bad(
+            "expected a plain dollar amount such as 5, 0.25 or 12.50 — no sign, exponent, \
+             currency symbol or separators",
+        ));
+    }
+    const PLACES: usize = 6;
+    if frac.len() > PLACES {
+        return Err(bad(&format!(
+            "a money cap is kept in whole micro-dollars ($0.000001), so it takes at most \
+             {PLACES} decimal places — it is refused rather than rounded, because rounding \
+             either way would move the limit you stated"
+        )));
+    }
+    let overflow = || bad("too large to represent in micro-dollars");
+    let whole: u64 = if whole.is_empty() {
+        0
+    } else {
+        whole.parse().map_err(|_| overflow())?
+    };
+    let frac: u64 = if frac.is_empty() {
+        0
+    } else {
+        format!("{frac:0<PLACES$}")
+            .parse()
+            .map_err(|_| overflow())?
+    };
+    let micro = whole
+        .checked_mul(orchestrator_core::MICRO_USD_PER_USD)
+        .and_then(|w| w.checked_add(frac))
+        .ok_or_else(overflow)?;
+    if micro == 0 {
+        return Err(bad(
+            "a $0 cap refuses every priced model call, so the run would pause before doing \
+             any work. To halt a run, use `torii run cancel`",
+        ));
+    }
+    Ok(micro)
+}
+
+/// AG-12: render integer micro-dollars as a dollar figure — exact (all six places when they
+/// are needed, so a sub-cent spend never reads as `$0.00`), and at least cents otherwise.
+pub fn fmt_usd(micro: u64) -> String {
+    let per = orchestrator_core::MICRO_USD_PER_USD;
+    let frac = format!("{:06}", micro % per);
+    let frac = frac.trim_end_matches('0');
+    format!("${}.{frac:0<2}", micro / per)
+}
+
 /// Parse a retention window: `30d`, `12h`, `90m`, `45s`.
 ///
 /// A SIBLING of [`crate::cmd::worker::parse_interval`], deliberately, rather than an
@@ -1553,7 +2006,7 @@ pub async fn submit(
     scheduler: &orchestrator::Scheduler,
     run: RunId,
     graph: orchestrator_core::Graph,
-    budget: Option<TokenBudget>,
+    budget: RunBudget,
     announce: impl FnOnce(),
 ) -> Result<Outcome, CliError> {
     // A run id that already has a schedule record cannot be submitted again. Left to
@@ -1580,9 +2033,10 @@ pub async fn submit(
         )));
     }
     announce();
-    // SP-DATA-5 Task 5: `submit_budgeted` with `None` is exactly `submit` — the
-    // operator-specified cap (if any) rides on `RunStarted` from here.
-    let outcome = scheduler.submit_budgeted(run, graph, budget).await?;
+    // SP-DATA-5 / AG-12: `submit_with_budget` with `RunBudget::default()` is exactly
+    // `submit` — the operator-specified caps (token, money, both or neither) ride on
+    // `RunStarted` from here.
+    let outcome = scheduler.submit_with_budget(run, graph, budget).await?;
     if let Some(p) = &outcome.paused {
         return Ok(Outcome::ok(format!(
             "paused: {} at node {} ({})",
@@ -1630,7 +2084,9 @@ pub(crate) mod tests {
     // shape the command that answers it folds, or the two drift silently.
     use crate::cmd::human::tests::{THE_QUESTION, agent_journal, agent_journal_asking, reviewer};
     use crate::errors::{EXIT_OK, EXIT_PRECONDITION};
-    use orchestrator_core::{EffectClass, EffectId, EffectOutput, Graph, NodeId, TokenUsage};
+    use orchestrator_core::{
+        EffectClass, EffectId, EffectOutput, Graph, MoneyBudget, NodeId, TokenBudget, TokenUsage,
+    };
     use orchestrator_store::{InMemoryJournal, InMemorySchedulerStore};
     use std::sync::Arc;
 
@@ -1666,9 +2122,15 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn status_of_an_unknown_run_is_a_precondition_failure_not_an_error() {
         let s = InMemorySchedulerStore::default();
-        let out = status(&s, &empty_journal(), RunId(uuid::Uuid::new_v4()), false)
-            .await
-            .expect("no hard error");
+        let out = status(
+            &s,
+            &NoWakeAttemptCounts,
+            &empty_journal(),
+            RunId(uuid::Uuid::new_v4()),
+            false,
+        )
+        .await
+        .expect("no hard error");
         assert_eq!(out.code, EXIT_PRECONDITION);
         assert!(out.text.contains("no such run"), "{}", out.text);
     }
@@ -1679,9 +2141,15 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn status_of_an_unknown_run_is_still_valid_json_under_json() {
         let s = InMemorySchedulerStore::default();
-        let out = status(&s, &empty_journal(), RunId(uuid::Uuid::new_v4()), true)
-            .await
-            .expect("no hard error");
+        let out = status(
+            &s,
+            &NoWakeAttemptCounts,
+            &empty_journal(),
+            RunId(uuid::Uuid::new_v4()),
+            true,
+        )
+        .await
+        .expect("no hard error");
         assert_eq!(
             out.code, EXIT_PRECONDITION,
             "the exit code still says not-found: {}",
@@ -1763,7 +2231,7 @@ pub(crate) mod tests {
     async fn wake_says_queued_never_resumed() {
         let run = RunId(uuid::Uuid::new_v4());
         let s = paused_store(run, None).await;
-        let out = wake(&s, &empty_journal(), run, now(), None)
+        let out = wake(&s, &empty_journal(), run, now(), RunBudget::default())
             .await
             .expect("wakes");
         assert_eq!(out.code, EXIT_OK);
@@ -1785,7 +2253,7 @@ pub(crate) mod tests {
         let run = RunId(uuid::Uuid::new_v4());
         let s = InMemorySchedulerStore::default();
         s.enqueue(run, &empty_graph(), now()).await.unwrap(); // status = waking, not paused
-        let out = wake(&s, &empty_journal(), run, now(), None)
+        let out = wake(&s, &empty_journal(), run, now(), RunBudget::default())
             .await
             .expect("no hard error");
         assert_eq!(out.code, EXIT_PRECONDITION);
@@ -1861,6 +2329,78 @@ pub(crate) mod tests {
         assert!(parse_budget_tokens("").is_err());
     }
 
+    // ---- AG-12: `--budget-usd` on submit/wake, money spend in status -------------------
+
+    #[test]
+    fn parse_budget_usd_reads_dollars_exactly_into_micro_dollars() {
+        assert_eq!(parse_budget_usd("5"), Ok(5_000_000));
+        assert_eq!(parse_budget_usd("5."), Ok(5_000_000));
+        assert_eq!(parse_budget_usd("0.10"), Ok(100_000));
+        assert_eq!(parse_budget_usd(".5"), Ok(500_000));
+        assert_eq!(parse_budget_usd("12.345678"), Ok(12_345_678));
+        assert_eq!(
+            parse_budget_usd("0.000001"),
+            Ok(1),
+            "one micro-dollar is the smallest representable cap"
+        );
+        // The case a float parse gets wrong: 0.29 * 1e6 = 289999.99999999994 in f64, which
+        // truncates to 289999. Decimal parsing must not depend on binary rounding.
+        assert_eq!(parse_budget_usd("0.29"), Ok(290_000));
+        assert_eq!(parse_budget_usd("1.005"), Ok(1_005_000));
+        assert_eq!(
+            parse_budget_usd(" 20 "),
+            Ok(20_000_000),
+            "whitespace is trimmed"
+        );
+    }
+
+    #[test]
+    fn parse_budget_usd_rejects_what_is_not_a_plain_non_negative_dollar_amount() {
+        for bad in [
+            "", ".", "-1", "-0.5", "+5", "NaN", "nan", "inf", "-inf", "1e3", "5 usd", "$5",
+            "1,000", "0x10", "1.2.3",
+        ] {
+            let e = parse_budget_usd(bad).expect_err(bad);
+            assert!(e.contains("--budget-usd"), "{bad:?}: {e}");
+        }
+        let e = parse_budget_usd("-1").expect_err("negative");
+        assert!(e.contains("-1"), "must echo the offending value: {e}");
+    }
+
+    #[test]
+    fn parse_budget_usd_refuses_more_precision_than_a_micro_dollar_rather_than_rounding() {
+        let e = parse_budget_usd("0.0000001").expect_err("finer than one micro-dollar");
+        assert!(e.contains("--budget-usd"), "{e}");
+        assert!(
+            e.contains("6 decimal places") || e.contains("micro-dollar"),
+            "must say what the resolution is, so the operator can fix it: {e}"
+        );
+        assert!(
+            parse_budget_usd("1.0000000").is_err(),
+            "trailing zeros past 6 too"
+        );
+    }
+
+    #[test]
+    fn parse_budget_usd_refuses_zero_and_overflow() {
+        let e = parse_budget_usd("0").expect_err("a zero cap refuses every priced call");
+        assert!(e.contains("--budget-usd"), "{e}");
+        assert!(parse_budget_usd("0.000000").is_err());
+        let e = parse_budget_usd("18446744073710").expect_err("past u64::MAX micro-dollars");
+        assert!(e.contains("--budget-usd"), "{e}");
+    }
+
+    #[test]
+    fn fmt_usd_renders_micro_dollars_exactly() {
+        assert_eq!(fmt_usd(0), "$0.00");
+        assert_eq!(fmt_usd(1), "$0.000001");
+        assert_eq!(fmt_usd(100_000), "$0.10");
+        assert_eq!(fmt_usd(1_500_000), "$1.50");
+        assert_eq!(fmt_usd(12_345_678), "$12.345678");
+        assert_eq!(fmt_usd(290_000), "$0.29");
+        assert_eq!(fmt_usd(5_000_000), "$5.00");
+    }
+
     /// A journal seeded with `RunStarted{budget}` plus two `EffectRecorded{usage}` — the
     /// DB-free harness the task calls for, proving `status` displays spend without a live
     /// Postgres.
@@ -1872,6 +2412,7 @@ pub(crate) mod tests {
                 JournalEvent::RunStarted {
                     version: "v1".into(),
                     budget: Some(TokenBudget { total_tokens: cap }),
+                    money_budget: None,
                 },
             )
             .await
@@ -1891,6 +2432,7 @@ pub(crate) mod tests {
                         input_tokens: 100,
                         output_tokens: 50,
                         total_tokens: 150,
+                        cost_micro_usd: None,
                     }),
                 },
             )
@@ -1911,6 +2453,7 @@ pub(crate) mod tests {
                         input_tokens: 20,
                         output_tokens: 30,
                         total_tokens: 50,
+                        cost_micro_usd: None,
                     }),
                 },
             )
@@ -1925,7 +2468,9 @@ pub(crate) mod tests {
         let s = paused_store(run, Some(now())).await;
         let journal = journal_with_budget_and_spend(run, 50_000).await;
 
-        let out = status(&s, &journal, run, false).await.expect("status");
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, false)
+            .await
+            .expect("status");
         assert_eq!(out.code, EXIT_OK);
         assert!(
             out.text.contains("200") && out.text.contains("50000"),
@@ -1941,7 +2486,9 @@ pub(crate) mod tests {
         let s = paused_store(run, Some(now())).await;
         let journal = journal_with_budget_and_spend(run, 50_000).await;
 
-        let out = status(&s, &journal, run, true).await.expect("status");
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, true)
+            .await
+            .expect("status");
         assert_eq!(out.code, EXIT_OK);
         let v: serde_json::Value = serde_json::from_str(&out.text).expect("valid json");
         assert_eq!(v[0]["spent"], serde_json::json!(200));
@@ -1981,7 +2528,9 @@ pub(crate) mod tests {
         let s = paused_store(run, Some(now())).await;
         let journal = journal_with_a_budgeted_turn(run).await;
 
-        let out = status(&s, &journal, run, false).await.expect("status");
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, false)
+            .await
+            .expect("status");
         assert_eq!(out.code, EXIT_OK);
         assert!(
             out.text.contains('B'),
@@ -2002,7 +2551,9 @@ pub(crate) mod tests {
         let s = paused_store(run, Some(now())).await;
         let journal = journal_with_a_budgeted_turn(run).await;
 
-        let out = status(&s, &journal, run, true).await.expect("status");
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, true)
+            .await
+            .expect("status");
         assert_eq!(out.code, EXIT_OK);
         let v: serde_json::Value = serde_json::from_str(&out.text).expect("valid json");
         let turns = &v[0]["context_budgeted"];
@@ -2032,7 +2583,9 @@ pub(crate) mod tests {
         // `RunStarted.budget` is explicitly `None` (Task 1's additivity case).
         let journal = empty_journal();
 
-        let out = status(&s, &journal, run, false).await.expect("status");
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, false)
+            .await
+            .expect("status");
         let row = s.status(run).await.unwrap().unwrap();
         assert_eq!(
             out.text,
@@ -2048,7 +2601,9 @@ pub(crate) mod tests {
         let s = paused_store(run, Some(now())).await;
         let journal = empty_journal();
 
-        let out = status(&s, &journal, run, true).await.expect("status");
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, true)
+            .await
+            .expect("status");
         let row = s.status(run).await.unwrap().unwrap();
         assert_eq!(
             out.text,
@@ -2068,9 +2623,12 @@ pub(crate) mod tests {
             &journal,
             run,
             now(),
-            Some(TokenBudget {
-                total_tokens: 5_000,
-            }),
+            RunBudget {
+                tokens: Some(TokenBudget {
+                    total_tokens: 5_000,
+                }),
+                money: None,
+            },
         )
         .await
         .expect("wakes");
@@ -2094,7 +2652,9 @@ pub(crate) mod tests {
         let s = paused_store(run, Some(now())).await;
         let journal = empty_journal();
 
-        let out = wake(&s, &journal, run, now(), None).await.expect("wakes");
+        let out = wake(&s, &journal, run, now(), RunBudget::default())
+            .await
+            .expect("wakes");
         assert_eq!(out.code, EXIT_OK, "{}", out.text);
         assert!(
             journal.load(run).await.unwrap().is_empty(),
@@ -2192,15 +2752,25 @@ pub(crate) mod tests {
             &journal,
             run,
             now(),
-            Some(TokenBudget {
-                total_tokens: 5_000,
-            }),
+            RunBudget {
+                tokens: Some(TokenBudget {
+                    total_tokens: 5_000,
+                }),
+                money: None,
+            },
         )
         .await;
 
+        // AG-18 review: the raise is DURABLE by the time the wake fails, so the fault is
+        // reported as "journaled, not queued" — a bare `Err` would read as "nothing happened".
+        let out = result.expect("a fault after a durable append is reported, not `?`-ed");
+        assert_eq!(out.code, EXIT_PRECONDITION, "{}", out.text);
         assert!(
-            result.is_err(),
-            "the injected force_wake failure must surface, not be swallowed"
+            out.text.contains("journaled durably")
+                && out.text.contains("5000")
+                && out.text.contains("torii run wake"),
+            "{}",
+            out.text
         );
         let events = journal.load(run).await.unwrap();
         assert!(
@@ -2213,6 +2783,445 @@ pub(crate) mod tests {
             "BudgetRaised must already be durable even though force_wake failed — proving \
              the append happens BEFORE force_wake is called, not after: {events:?}"
         );
+    }
+
+    /// A journal whose run STARTED with a money cap of `cap` micro-dollars (or none), plus one
+    /// priced call that cost `spent` micro-dollars.
+    async fn journal_with_money(run: RunId, cap: Option<u64>, spent: u64) -> InMemoryJournal {
+        let journal = empty_journal();
+        journal
+            .append(
+                run,
+                JournalEvent::RunStarted {
+                    version: "v1".into(),
+                    budget: None,
+                    money_budget: cap.map(|total_micro_usd| MoneyBudget { total_micro_usd }),
+                },
+            )
+            .await
+            .unwrap();
+        journal
+            .append(
+                run,
+                JournalEvent::EffectRecorded {
+                    node: NodeId("n1".into()),
+                    effect_id: EffectId("e1".into()),
+                    class: EffectClass::Pure,
+                    input_hash: "h".into(),
+                    seq: 0,
+                    output: EffectOutput::Inline(serde_json::Value::Null),
+                    observation: None,
+                    usage: Some(TokenUsage {
+                        input_tokens: 100,
+                        output_tokens: 50,
+                        total_tokens: 150,
+                        cost_micro_usd: cap.map(|_| spent),
+                    }),
+                },
+            )
+            .await
+            .unwrap();
+        journal
+    }
+
+    fn money(total_micro_usd: u64) -> RunBudget {
+        RunBudget {
+            tokens: None,
+            money: Some(MoneyBudget { total_micro_usd }),
+        }
+    }
+
+    fn money_raises(events: &[(Seq, JournalEvent)]) -> Vec<u64> {
+        events
+            .iter()
+            .filter_map(|(_, e)| match e {
+                JournalEvent::MoneyBudgetRaised {
+                    new_total_micro_usd,
+                } => Some(*new_total_micro_usd),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn wake_with_budget_usd_appends_money_budget_raised_to_the_journal() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let journal = journal_with_money(run, Some(1_000_000), 999_000).await;
+
+        let out = wake(&s, &journal, run, now(), money(5_000_000))
+            .await
+            .expect("wakes");
+        assert_eq!(out.code, EXIT_OK, "{}", out.text);
+        let events = journal.load(run).await.unwrap();
+        assert_eq!(money_raises(&events), vec![5_000_000], "{events:?}");
+        assert_eq!(
+            orchestrator::money_spend_of(&events),
+            (999_000, Some(5_000_000)),
+            "the raise is what the engine's own fold now reads as the cap"
+        );
+    }
+
+    #[tokio::test]
+    async fn wake_appends_money_budget_raised_before_calling_force_wake() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let store = FailingForceWakeStore(paused_store(run, None).await);
+        let journal = journal_with_money(run, Some(1_000_000), 999_000).await;
+
+        let out = wake(&store, &journal, run, now(), money(5_000_000))
+            .await
+            .expect("a fault after a durable append is reported, not `?`-ed");
+        assert_eq!(out.code, EXIT_PRECONDITION, "{}", out.text);
+        assert!(
+            out.text.contains("journaled durably") && out.text.contains("$5.00"),
+            "{}",
+            out.text
+        );
+        assert_eq!(
+            money_raises(&journal.load(run).await.unwrap()),
+            vec![5_000_000],
+            "MoneyBudgetRaised must already be durable when force_wake runs"
+        );
+    }
+
+    /// A journal that delegates everything EXCEPT a `MoneyBudgetRaised` append, which fails
+    /// with a hostile backend error — the second of `wake`'s two appends, after the token
+    /// raise beside it has already landed.
+    struct FailsTheMoneyRaise(InMemoryJournal);
+
+    #[async_trait::async_trait]
+    impl ExecutionJournal for FailsTheMoneyRaise {
+        async fn append(
+            &self,
+            run: RunId,
+            event: JournalEvent,
+        ) -> Result<Seq, orchestrator_core::JournalError> {
+            if matches!(event, JournalEvent::MoneyBudgetRaised { .. }) {
+                return Err(hostile_backend_error(run));
+            }
+            self.0.append(run, event).await
+        }
+        async fn load(
+            &self,
+            run: RunId,
+        ) -> Result<Vec<(Seq, JournalEvent)>, orchestrator_core::JournalError> {
+            self.0.load(run).await
+        }
+    }
+
+    /// AG-18 review: once the token raise is durable, a fault on the money raise must say so —
+    /// which cap moved, which did not, and that nothing was queued — never a bare `?` that
+    /// reads as "nothing happened" while the token cap has in fact moved.
+    #[tokio::test]
+    async fn a_money_raise_fault_after_the_token_raise_landed_reports_what_was_applied() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let journal = FailsTheMoneyRaise(journal_with_money(run, Some(1_000_000), 999_000).await);
+
+        let out = wake(
+            &s,
+            &journal,
+            run,
+            now(),
+            RunBudget {
+                tokens: Some(TokenBudget {
+                    total_tokens: 5_000,
+                }),
+                money: Some(MoneyBudget {
+                    total_micro_usd: 5_000_000,
+                }),
+            },
+        )
+        .await
+        .expect("a fault after a durable append is reported, not `?`-ed");
+
+        assert_eq!(out.code, EXIT_PRECONDITION, "{}", out.text);
+        let t = &out.text;
+        assert!(t.starts_with("not queued"), "{t}");
+        assert!(
+            t.contains("token cap") && t.contains("5000") && t.contains("journaled durably"),
+            "names the raise that DID land: {t}"
+        );
+        assert!(
+            t.contains("money cap") && t.contains("$5.00") && t.contains("not raised"),
+            "names the raise that did NOT: {t}"
+        );
+        assert!(t.contains("torii run wake"), "says how to finish: {t}");
+        assert!(
+            !t.contains(&hostile_password()) && !t.contains('\u{1b}'),
+            "the backend fault is rendered safe: {t}"
+        );
+        let events = journal.load(run).await.unwrap();
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                JournalEvent::BudgetRaised {
+                    new_total_tokens: 5_000
+                }
+            )),
+            "{events:?}"
+        );
+        assert!(money_raises(&events).is_empty(), "{events:?}");
+        assert_ne!(
+            s.status(run).await.unwrap().unwrap().next_wake,
+            Some(now()),
+            "a half-applied raise is not queued"
+        );
+    }
+
+    /// Delegates to a real store, but every `status()` after the FIRST fails: `wake`'s
+    /// pre-check reads fine, `force_wake` commits, and the post-wake re-read faults.
+    struct FailsTheReread(InMemorySchedulerStore, std::sync::atomic::AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl SchedulerStore for FailsTheReread {
+        async fn enqueue(
+            &self,
+            run: RunId,
+            graph: &Graph,
+            now: DateTime<Utc>,
+        ) -> Result<(), OrchestratorError> {
+            self.0.enqueue(run, graph, now).await
+        }
+        async fn record_paused(
+            &self,
+            run: RunId,
+            next_wake: Option<DateTime<Utc>>,
+            reason: &str,
+        ) -> Result<(), OrchestratorError> {
+            self.0.record_paused(run, next_wake, reason).await
+        }
+        async fn record_terminal(
+            &self,
+            run: RunId,
+            status: RunStatus,
+            reason: Option<&str>,
+        ) -> Result<(), OrchestratorError> {
+            self.0.record_terminal(run, status, reason).await
+        }
+        async fn claim_due(
+            &self,
+            now: DateTime<Utc>,
+            lease: chrono::Duration,
+            limit: usize,
+        ) -> Result<Vec<(RunId, Graph)>, OrchestratorError> {
+            self.0.claim_due(now, lease, limit).await
+        }
+        async fn status(
+            &self,
+            run: RunId,
+        ) -> Result<Option<orchestrator_core::ScheduledRun>, OrchestratorError> {
+            if self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
+                return Err(OrchestratorError::Store(format!(
+                    "connection reset (password={})",
+                    hostile_password()
+                )));
+            }
+            self.0.status(run).await
+        }
+        async fn list_paused(
+            &self,
+        ) -> Result<Vec<orchestrator_core::ScheduledRun>, OrchestratorError> {
+            self.0.list_paused().await
+        }
+        async fn cancel(&self, run: RunId) -> Result<(), OrchestratorError> {
+            self.0.cancel(run).await
+        }
+        async fn count_terminal_before(
+            &self,
+            before: DateTime<Utc>,
+        ) -> Result<u64, OrchestratorError> {
+            self.0.count_terminal_before(before).await
+        }
+        async fn prune_terminal(&self, before: DateTime<Utc>) -> Result<u64, OrchestratorError> {
+            self.0.prune_terminal(before).await
+        }
+        async fn force_wake(
+            &self,
+            run: RunId,
+            now: DateTime<Utc>,
+        ) -> Result<(), OrchestratorError> {
+            self.0.force_wake(run, now).await
+        }
+    }
+
+    /// The re-read faults AFTER `force_wake` committed: the run IS queued, so the report
+    /// must not say "not queued" (nor tell the operator to wake again) — it says the wake
+    /// was sent and that its effect could not be read back, plus any raise that landed.
+    #[tokio::test]
+    async fn a_failed_reread_after_the_wake_never_claims_the_run_is_not_queued() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = FailsTheReread(paused_store(run, None).await, Default::default());
+        let journal = journal_with_money(run, Some(1_000_000), 0).await;
+
+        let out = wake(
+            &s,
+            &journal,
+            run,
+            now(),
+            RunBudget {
+                tokens: Some(TokenBudget {
+                    total_tokens: 5_000,
+                }),
+                money: None,
+            },
+        )
+        .await
+        .expect("a fault after a durable write is reported, not `?`-ed");
+
+        let t = &out.text;
+        assert!(!t.contains("not queued"), "the wake committed: {t}");
+        assert!(
+            t.contains("token cap") && t.contains("journaled durably"),
+            "{t}"
+        );
+        assert!(
+            t.contains("could not be read back") && t.contains("torii run status"),
+            "{t}"
+        );
+        assert!(
+            !t.contains(&hostile_password()),
+            "the fault is rendered safe: {t}"
+        );
+        assert_eq!(
+            s.0.status(run).await.unwrap().unwrap().next_wake,
+            Some(now()),
+            "it is queued"
+        );
+    }
+
+    /// Same fault with no raise: `force_wake` is itself a durable write, so a bare `Err`
+    /// ("it did not go through") would be just as wrong.
+    #[tokio::test]
+    async fn a_failed_reread_after_a_plain_wake_is_reported_not_errored() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = FailsTheReread(paused_store(run, None).await, Default::default());
+        let journal = journal_with_money(run, None, 0).await;
+
+        let out = wake(&s, &journal, run, now(), RunBudget::default())
+            .await
+            .expect("the wake committed, so the re-read fault is reported, not `?`-ed");
+
+        let t = &out.text;
+        assert!(!t.contains("not queued"), "{t}");
+        assert!(
+            t.contains("could not be read back") && t.contains("torii run status"),
+            "{t}"
+        );
+    }
+
+    /// A raise MOVES a money cap and never introduces one: the engine's fold ignores a
+    /// `MoneyBudgetRaised` on a run that started without a money cap. Journaling it anyway
+    /// and reporting `queued` would tell the operator a cap is in force that nothing enforces.
+    #[tokio::test]
+    async fn wake_with_budget_usd_on_a_run_without_a_money_cap_is_refused_and_writes_nothing() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let journal = journal_with_money(run, None, 0).await;
+        let before = journal.load(run).await.unwrap().len();
+
+        let out = wake(
+            &s,
+            &journal,
+            run,
+            now(),
+            RunBudget {
+                tokens: Some(TokenBudget {
+                    total_tokens: 5_000,
+                }),
+                money: Some(MoneyBudget {
+                    total_micro_usd: 5_000_000,
+                }),
+            },
+        )
+        .await
+        .expect("a refusal, not an error");
+        assert_eq!(out.code, EXIT_PRECONDITION, "{}", out.text);
+        assert!(
+            out.text.contains("money cap") && out.text.contains("--budget-usd"),
+            "must say the run has no money cap to move and what to do instead: {}",
+            out.text
+        );
+        assert_eq!(
+            journal.load(run).await.unwrap().len(),
+            before,
+            "nothing is journaled — not the money raise, and not the token raise beside it"
+        );
+        let after = s.status(run).await.unwrap().unwrap();
+        assert_eq!(
+            (after.status, after.next_wake),
+            (RunStatus::Paused, None),
+            "and the run is not queued"
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_with_budget_usd_journals_the_money_cap_on_run_started() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let store = Arc::new(InMemorySchedulerStore::default());
+        let journal = Arc::new(InMemoryJournal::new());
+        let (gw, _calls) = orchestrator::test_support::recording_gateway().await;
+        let clock = orchestrator::test_support::FakeClock::new(now());
+        let exec = orchestrator::Executor::new(Arc::new(gw), journal.clone(), "v1");
+        let sched = orchestrator::Scheduler::new(store, exec, journal.clone(), clock);
+
+        let out = submit(&sched, run, empty_graph(), money(2_500_000), || {})
+            .await
+            .expect("submits");
+        assert_eq!(out.code, EXIT_OK, "{}", out.text);
+        let events = journal.load(run).await.unwrap();
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                JournalEvent::RunStarted {
+                    money_budget: Some(MoneyBudget {
+                        total_micro_usd: 2_500_000
+                    }),
+                    ..
+                }
+            )),
+            "the money cap rides on RunStarted: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_shows_money_spent_and_cap_in_dollars() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let journal = journal_with_money(run, Some(5_000_000), 12_345).await;
+
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, false)
+            .await
+            .expect("status");
+        assert_eq!(out.code, EXIT_OK, "{}", out.text);
+        assert!(
+            out.text.contains("money spent: $0.012345 / budget: $5.00"),
+            "{}",
+            out.text
+        );
+
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, true)
+            .await
+            .expect("status");
+        let v: serde_json::Value = serde_json::from_str(&out.text).expect("valid json");
+        assert_eq!(v[0]["spent_micro_usd"], serde_json::json!(12_345));
+        assert_eq!(v[0]["money_budget_micro_usd"], serde_json::json!(5_000_000));
+    }
+
+    #[tokio::test]
+    async fn status_shows_no_money_line_for_a_run_without_a_money_cap() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let journal = journal_with_money(run, None, 0).await;
+
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, false)
+            .await
+            .expect("status");
+        assert!(!out.text.contains("money"), "{}", out.text);
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, true)
+            .await
+            .expect("status");
+        assert!(!out.text.contains("micro_usd"), "{}", out.text);
     }
 
     // ---- SP-DATA-4.1 #7: `torii run prune` -------------------------------------------
@@ -2532,9 +3541,11 @@ pub(crate) mod tests {
         let sched = scheduler_over(store.clone()).await;
 
         let mut announced = false;
-        let out = submit(&sched, run, empty_graph(), None, || announced = true)
-            .await
-            .expect("a duplicate submit is not a transport fault");
+        let out = submit(&sched, run, empty_graph(), RunBudget::default(), || {
+            announced = true
+        })
+        .await
+        .expect("a duplicate submit is not a transport fault");
 
         assert_eq!(
             out.code, EXIT_PRECONDITION,
@@ -2568,9 +3579,11 @@ pub(crate) mod tests {
         let sched = scheduler_over(store.clone()).await;
 
         let mut announced = false;
-        let out = submit(&sched, run, empty_graph(), None, || announced = true)
-            .await
-            .expect("a fresh submit runs");
+        let out = submit(&sched, run, empty_graph(), RunBudget::default(), || {
+            announced = true
+        })
+        .await
+        .expect("a fresh submit runs");
 
         assert!(announced, "the operator must get the id");
         assert_eq!(out.code, EXIT_OK, "{}", out.text);
@@ -2727,7 +3740,7 @@ pub(crate) mod tests {
             actor: ConcurrentActor::ClaimsFirst,
         };
 
-        let out = wake(&racing, &empty_journal(), run, now(), None)
+        let out = wake(&racing, &empty_journal(), run, now(), RunBudget::default())
             .await
             .expect("no hard error");
 
@@ -2763,7 +3776,7 @@ pub(crate) mod tests {
             actor: ConcurrentActor::CancelsFirst,
         };
 
-        let out = wake(&racing, &empty_journal(), run, now(), None)
+        let out = wake(&racing, &empty_journal(), run, now(), RunBudget::default())
             .await
             .expect("no hard error");
 
@@ -2797,7 +3810,7 @@ pub(crate) mod tests {
             actor: ConcurrentActor::ReclaimsThenRepausesWithUnrelatedDeadline,
         };
 
-        let out = wake(&racing, &empty_journal(), run, now(), None)
+        let out = wake(&racing, &empty_journal(), run, now(), RunBudget::default())
             .await
             .expect("no hard error");
 
@@ -4378,6 +5391,409 @@ pub(crate) mod tests {
 
     // ---- SP-6 s3: a human-backed `Agent` in the listing -------------------------------
 
+    // ---- AG-15: an ESCALATED human-backed agent ----------------------------------------
+
+    fn at(secs: i64) -> DateTime<Utc> {
+        DateTime::<Utc>::from_timestamp(secs, 0).unwrap()
+    }
+
+    fn shown_at(secs: i64) -> String {
+        at(secs).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    }
+
+    /// `reviewer` asked with a deadline of `at(1000)`, let it expire, and the question was
+    /// escalated along `hops` — each `(to, deadline)` journaled as the executor writes it.
+    async fn escalated_journal(run: RunId, hops: &[(&str, Option<i64>)]) -> InMemoryJournal {
+        let j = agent_journal(run, &reviewer(), Some(at(1000))).await;
+        let mut from = "reviewer".to_string();
+        for (to, deadline) in hops {
+            j.append(
+                run,
+                JournalEvent::AgentEscalated {
+                    node: reviewer(),
+                    from: from.clone(),
+                    to: to.to_string(),
+                    deadline: deadline.map(at),
+                },
+            )
+            .await
+            .unwrap();
+            j.append(
+                run,
+                JournalEvent::RunPaused {
+                    reason: format!("human_agent: escalated to {to}"),
+                    resume_after: deadline.map(at),
+                },
+            )
+            .await
+            .unwrap();
+            from = to.to_string();
+        }
+        j
+    }
+
+    /// The CURRENT deadline of an escalated question is the last hop's, never the original
+    /// `AgentAwaited` one (which is first-wins, has passed, and is left untouched by the
+    /// executor). Every reader of a node's deadline goes through this fold.
+    #[tokio::test]
+    async fn an_escalated_agents_deadline_is_the_last_hops_not_the_original() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let j = escalated_journal(run, &[("legal-lead", Some(2000))]).await;
+        assert_eq!(
+            signal_state(&j.load(run).await.unwrap(), &reviewer()),
+            SignalState::Awaiting {
+                deadline: Some(at(2000))
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn list_paused_shows_an_escalated_agents_holder_and_current_deadline() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, Some(at(2000))).await;
+        let j = escalated_journal(run, &[("legal-lead", Some(2000))]).await;
+
+        let out = list_paused(&s, &j, false).await.expect("lists");
+        assert_eq!(out.code, EXIT_OK, "{}", out.text);
+        let row = awaiting_row(&out.text, run, "reviewer");
+        assert!(
+            row.contains(&format!("deadline {}", shown_at(2000))),
+            "the deadline shown must be the escalation's: {row}"
+        );
+        assert!(
+            !row.contains(&shown_at(1000)),
+            "the original, already-passed deadline must not be shown as current: {row}"
+        );
+        assert!(
+            row.contains("escalated to legal-lead"),
+            "the row must name who holds the question now: {row}"
+        );
+        assert!(row.contains(THE_QUESTION), "still the same question: {row}");
+
+        let out = list_paused(&s, &j, true).await.expect("lists");
+        let v: serde_json::Value = serde_json::from_str(&out.text).expect("json");
+        let node = &v[0]["awaiting"][0];
+        assert_eq!(node["escalated_to"], serde_json::json!("legal-lead"), "{v}");
+        assert_eq!(node["deadline"], serde_json::json!(at(2000)), "{v}");
+    }
+
+    /// Hops fold FIRST-wins per target (a duplicated hop moves nothing — the executor never
+    /// escalates to an agent already in the chain), and the current holder is the LAST
+    /// distinct one. An indefinite last hop reads as no deadline.
+    #[tokio::test]
+    async fn the_current_holder_is_the_last_distinct_hop_and_a_duplicate_moves_nothing() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let j = escalated_journal(
+            run,
+            &[
+                ("legal-lead", Some(2000)),
+                ("cto", None),
+                ("legal-lead", Some(4000)),
+            ],
+        )
+        .await;
+
+        assert_eq!(
+            signal_state(&j.load(run).await.unwrap(), &reviewer()),
+            SignalState::Awaiting { deadline: None }
+        );
+        let out = list_paused(&s, &j, false).await.expect("lists");
+        let row = awaiting_row(&out.text, run, "reviewer");
+        assert!(row.contains("escalated to cto"), "{row}");
+        assert!(row.contains("no deadline"), "{row}");
+        assert!(!row.contains(&shown_at(4000)), "{row}");
+    }
+
+    /// A run with no escalation lists exactly as before — no `escalated_to` key at all.
+    #[tokio::test]
+    async fn an_unescalated_agent_has_no_escalation_in_the_listing() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let j = agent_journal(run, &reviewer(), Some(at(1000))).await;
+        let out = list_paused(&s, &j, true).await.expect("lists");
+        assert!(!out.text.contains("escalated"), "{}", out.text);
+    }
+
+    // ---- AG-15: pending confirm-before-run tool calls --------------------------------
+
+    fn deployer() -> NodeId {
+        NodeId("deployer".into())
+    }
+
+    /// `deployer`'s model asked to call `tool` (a confirm-before-run tool) as call `eid`, and
+    /// the run paused for a human — `ToolConfirmAwaited` then `RunPaused`, as the executor
+    /// journals it.
+    pub(crate) async fn append_tool_confirm(
+        j: &InMemoryJournal,
+        run: RunId,
+        eid: &str,
+        tool: &str,
+        arguments: &str,
+        deadline: Option<DateTime<Utc>>,
+    ) {
+        j.append(
+            run,
+            JournalEvent::ToolConfirmAwaited {
+                node: deployer(),
+                effect_id: EffectId(eid.into()),
+                tool: tool.into(),
+                arguments: arguments.into(),
+                args_hash: "h".into(),
+                deadline,
+            },
+        )
+        .await
+        .unwrap();
+        j.append(
+            run,
+            JournalEvent::RunPaused {
+                reason: format!("tool_confirm: {tool} on node deployer, call {eid}"),
+                resume_after: deadline,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    pub(crate) async fn tool_confirm_journal(
+        run: RunId,
+        deadline: Option<DateTime<Utc>>,
+    ) -> InMemoryJournal {
+        let j = InMemoryJournal::new();
+        append_tool_confirm(
+            &j,
+            run,
+            "deployer#t1#1",
+            "deploy",
+            r#"{"env":"prod"}"#,
+            deadline,
+        )
+        .await;
+        j
+    }
+
+    #[tokio::test]
+    async fn list_paused_shows_a_pending_tool_confirmation_with_the_call_to_quote() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, Some(at(9000))).await;
+        let j = tool_confirm_journal(run, Some(at(9000))).await;
+
+        let out = list_paused(&s, &j, false).await.expect("lists");
+        assert_eq!(out.code, EXIT_OK, "{}", out.text);
+        let row = awaiting_row(&out.text, run, "deployer");
+        for want in ["tool: deploy", "deployer#t1#1", r#"{"env":"prod"}"#] {
+            assert!(row.contains(want), "the row must show {want:?}: {row}");
+        }
+        assert!(
+            row.contains(&format!("deadline {}", shown_at(9000))),
+            "{row}"
+        );
+        assert!(
+            out.text
+                .contains("torii run tool approve <run> --call <call>"),
+            "the block must name the verb a `tool:` row takes:\n{}",
+            out.text
+        );
+
+        let out = list_paused(&s, &j, true).await.expect("lists");
+        let v: serde_json::Value = serde_json::from_str(&out.text).expect("json");
+        assert_eq!(
+            v[0]["awaiting"][0]["tool_confirm"],
+            serde_json::json!({
+                "effect_id": "deployer#t1#1",
+                "tool": "deploy",
+                "arguments": r#"{"env":"prod"}"#,
+            }),
+            "{v}"
+        );
+        assert_eq!(v[0]["awaiting"][0]["node"], serde_json::json!("deployer"));
+    }
+
+    #[tokio::test]
+    async fn every_pending_call_of_one_node_gets_its_own_row() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let j = tool_confirm_journal(run, None).await;
+        append_tool_confirm(&j, run, "deployer#t1#2", "rollback", "{}", None).await;
+
+        let out = list_paused(&s, &j, false).await.expect("lists");
+        let (_, block) = out.text.split_once("AWAITING").expect("a block");
+        assert!(
+            block.contains("deployer#t1#1") && block.contains("deployer#t1#2"),
+            "{block}"
+        );
+    }
+
+    /// A call stops being pending once anything settles it: a decision, the executor's own
+    /// `not_confirmed` record (an expiry journals an `EffectRecorded` and NO decision), the
+    /// node terminating, or the run completing. Listing a settled call would send an
+    /// operator to a refusal.
+    #[tokio::test]
+    async fn a_settled_tool_confirmation_is_not_listed() {
+        let settle: Vec<(&str, JournalEvent)> = vec![
+            (
+                "decided",
+                JournalEvent::ToolConfirmDecided {
+                    node: deployer(),
+                    effect_id: EffectId("deployer#t1#1".into()),
+                    approved: false,
+                    actor: "alice".into(),
+                    note: None,
+                },
+            ),
+            (
+                "expired",
+                JournalEvent::EffectRecorded {
+                    node: deployer(),
+                    effect_id: EffectId("deployer#t1#1".into()),
+                    class: EffectClass::Pure,
+                    input_hash: "h".into(),
+                    seq: 0,
+                    output: EffectOutput::Inline(serde_json::json!({"error":"not_confirmed"})),
+                    observation: None,
+                    usage: None,
+                },
+            ),
+            (
+                "node failed",
+                JournalEvent::NodeFailed {
+                    node: deployer(),
+                    error: "boom".into(),
+                },
+            ),
+            ("run completed", JournalEvent::RunCompleted),
+        ];
+        for (why, e) in settle {
+            let run = RunId(uuid::Uuid::new_v4());
+            let s = paused_store(run, None).await;
+            let j = tool_confirm_journal(run, None).await;
+            j.append(run, e).await.unwrap();
+            let out = list_paused(&s, &j, false).await.expect("lists");
+            assert!(
+                !out.text.contains("AWAITING"),
+                "{why}: nothing is pending any more:\n{}",
+                out.text
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pending_calls_arguments_are_redacted_and_cannot_forge_a_row() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let j = InMemoryJournal::new();
+        let secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345";
+        append_tool_confirm(
+            &j,
+            run,
+            "deployer#t1#1",
+            "deploy",
+            &format!("{{\"key\":\"{secret}\"}}\n{} fake-row \u{1b}[2J", run.0),
+            None,
+        )
+        .await;
+
+        let out = list_paused(&s, &j, false).await.expect("lists");
+        assert!(!out.text.contains(secret), "{}", out.text);
+        assert!(!out.text.contains('\u{1b}'), "{}", out.text);
+        assert!(
+            !out.text.lines().any(|l| l.contains("fake-row")
+                && l.starts_with(&run.0.to_string())
+                && !l.contains("tool:")),
+            "a newline in the arguments must not forge a row:\n{}",
+            out.text
+        );
+        let out = list_paused(&s, &j, true).await.expect("lists");
+        assert!(!out.text.contains(secret), "{}", out.text);
+    }
+
+    #[tokio::test]
+    async fn status_shows_a_pending_tool_confirmation_and_how_to_answer_it() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, Some(at(9000))).await;
+        let j = tool_confirm_journal(run, Some(at(9000))).await;
+
+        let out = status(&s, &NoWakeAttemptCounts, &j, run, false)
+            .await
+            .expect("status");
+        assert_eq!(out.code, EXIT_OK, "{}", out.text);
+        let line = out
+            .text
+            .lines()
+            .find(|l| l.starts_with("tool confirmation pending:"))
+            .unwrap_or_else(|| panic!("no confirmation line:\n{}", out.text));
+        for want in [
+            "deployer",
+            "deploy",
+            "deployer#t1#1",
+            &shown_at(9000),
+            &format!("torii run tool approve {} --call deployer#t1#1", run.0),
+        ] {
+            assert!(line.contains(want), "{want:?} missing: {line}");
+        }
+
+        let out = status(&s, &NoWakeAttemptCounts, &j, run, true)
+            .await
+            .expect("status");
+        let v: serde_json::Value = serde_json::from_str(&out.text).expect("json");
+        assert_eq!(
+            v[0]["tool_confirms"][0]["tool_confirm"]["effect_id"],
+            serde_json::json!("deployer#t1#1"),
+            "{v}"
+        );
+        assert_eq!(
+            v[0]["tool_confirms"][0]["node"],
+            serde_json::json!("deployer")
+        );
+    }
+
+    #[tokio::test]
+    async fn status_shows_an_escalated_questions_holder_and_current_deadline() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, Some(at(2000))).await;
+        let j = escalated_journal(run, &[("legal-lead", Some(2000))]).await;
+
+        let out = status(&s, &NoWakeAttemptCounts, &j, run, false)
+            .await
+            .expect("status");
+        let line = out
+            .text
+            .lines()
+            .find(|l| l.starts_with("escalated:"))
+            .unwrap_or_else(|| panic!("no escalation line:\n{}", out.text));
+        assert!(
+            line.contains("reviewer")
+                && line.contains("legal-lead")
+                && line.contains(&shown_at(2000)),
+            "{line}"
+        );
+        assert!(!line.contains(&shown_at(1000)), "{line}");
+
+        let out = status(&s, &NoWakeAttemptCounts, &j, run, true)
+            .await
+            .expect("status");
+        let v: serde_json::Value = serde_json::from_str(&out.text).expect("json");
+        assert_eq!(
+            v[0]["escalations"],
+            serde_json::json!([{"node": "reviewer", "escalated_to": "legal-lead", "deadline": at(2000)}]),
+            "{v}"
+        );
+    }
+
+    /// An answered escalation is history, not a wait: nothing to show.
+    #[tokio::test]
+    async fn status_shows_no_escalation_once_the_question_is_answered() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let j = escalated_journal(run, &[("legal-lead", Some(2000))]).await;
+        append_completion(&j, run, &reviewer()).await;
+        let out = status(&s, &NoWakeAttemptCounts, &j, run, false)
+            .await
+            .expect("status");
+        assert!(!out.text.contains("escalated"), "{}", out.text);
+    }
+
     /// The third waiting kind must be VISIBLE. `signal_states`' `AgentAwaited` arm is the
     /// only thing that puts a human-backed agent in the awaited set, and until this test
     /// nothing in `list-paused` exercised it — dropping that arm reddened nine `cmd::human`
@@ -5226,6 +6642,7 @@ pub(crate) mod tests {
                 JournalEvent::RunStarted {
                     version: "v1".into(),
                     budget: None,
+                    money_budget: None,
                 },
             )
             .await
@@ -5848,5 +7265,332 @@ pub(crate) mod tests {
             block.contains("lp/1/__gate__"),
             "…while the iteration that IS asking must still be listed:\n{block}"
         );
+    }
+
+    // ---- AG-18 (#53): a hooked drive's `DecisionHookFired` decides nothing -------------
+
+    /// Every event of `src`, appended to `dst` in order — so one journal can hold the
+    /// fixtures several helpers build, each in the shape the executor writes.
+    async fn copy_into(dst: &InMemoryJournal, run: RunId, src: &InMemoryJournal) {
+        for (_, e) in src.load(run).await.unwrap() {
+            dst.append(run, e).await.unwrap();
+        }
+    }
+
+    /// A run with ALL FOUR waiting kinds still asking, one `AwaitSignal` that was answered
+    /// and completed, and a token budget with spend — every input the readers that decide
+    /// what a run waits on (and what it spent) consult.
+    async fn every_waiting_kind(run: RunId) -> InMemoryJournal {
+        let j = journal_with_budget_and_spend(run, 50_000).await;
+        let deadline = Some(now() + chrono::Duration::hours(1));
+        copy_into(&j, run, &awaiting_journal(run, &gate(), deadline).await).await;
+        copy_into(
+            &j,
+            run,
+            &gate_journal(run, &release(), deadline, &["ship", "reject"]).await,
+        )
+        .await;
+        copy_into(&j, run, &agent_journal(run, &reviewer(), deadline).await).await;
+        copy_into(
+            &j,
+            run,
+            &loop_gate_journal(run, &loop_gate(), None, &["ship", "revise"]).await,
+        )
+        .await;
+        let done = NodeId("done".into());
+        copy_into(&j, run, &awaiting_journal(run, &done, None).await).await;
+        j.append(
+            run,
+            JournalEvent::SignalReceived {
+                node: done.clone(),
+                payload: approved(),
+            },
+        )
+        .await
+        .unwrap();
+        append_completion(&j, run, &done).await;
+        j
+    }
+
+    /// Every node [`every_waiting_kind`] journals, plus `worker`: a model-backed agent that
+    /// never asked a human, whose only rows are the call-keyed markers of AG-15 tool
+    /// confirmations — so a reader that listed it would be inventing an ask.
+    fn every_node() -> [NodeId; 6] {
+        [
+            gate(),
+            release(),
+            reviewer(),
+            loop_gate(),
+            NodeId("done".into()),
+            NodeId("worker".into()),
+        ]
+    }
+
+    /// `src` as a HOOKED drive would have journaled it: after every event, a node-keyed and
+    /// a call-keyed `DecisionHookFired` (AG-2, gateway v0.11) for [`every_node`], each
+    /// naming the seq of the event before it as the decision it reported.
+    async fn hooked(run: RunId, src: &InMemoryJournal) -> InMemoryJournal {
+        let nodes = every_node();
+        let j = InMemoryJournal::new();
+        for (_, e) in src.load(run).await.unwrap() {
+            let at = j.append(run, e).await.unwrap();
+            for node in &nodes {
+                for effect_id in [None, Some(EffectId("call-1".into()))] {
+                    j.append(
+                        run,
+                        JournalEvent::DecisionHookFired {
+                            node: node.clone(),
+                            decision: Some(at),
+                            effect_id,
+                        },
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
+        }
+        j
+    }
+
+    /// AG-18 (#53): `DecisionHookFired` is a once-per-decision REPORTING marker a hooked
+    /// drive appends after the decision row it honoured. It says nothing about what a run
+    /// waits on, so every reader that decides that — `list-paused`, `status`, and the
+    /// node-state fold `signal`/`gate decide`/`agent answer` pre-check against — must read a
+    /// hooked journal exactly as the unhooked one. A reader that took the marker for a
+    /// terminal or an awaiting event would hide a live ask or advertise a dead one.
+    #[tokio::test]
+    async fn a_hooked_drives_decision_markers_change_nothing_a_reader_decides() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let plain = every_waiting_kind(run).await;
+        let hooked = hooked(run, &plain).await;
+
+        for json in [false, true] {
+            let a = list_paused(&s, &plain, json).await.expect("lists");
+            let b = list_paused(&s, &hooked, json).await.expect("lists");
+            assert_eq!(
+                (a.code, &a.text),
+                (b.code, &b.text),
+                "list-paused (json={json}) must ignore DecisionHookFired"
+            );
+            let a = status(&s, &NoWakeAttemptCounts, &plain, run, json)
+                .await
+                .expect("status");
+            let b = status(&s, &NoWakeAttemptCounts, &hooked, run, json)
+                .await
+                .expect("status");
+            assert_eq!(
+                (a.code, &a.text),
+                (b.code, &b.text),
+                "status (json={json}) must ignore DecisionHookFired"
+            );
+        }
+        // The fixture is not vacuous: all four kinds are listed, and the answered one is not.
+        let listed = list_paused(&s, &plain, false).await.unwrap().text;
+        for node in ["gate", "release", "reviewer", "lp/0/__gate__"] {
+            assert!(listed.contains(node), "{node} must be listed:\n{listed}");
+        }
+
+        let (plain, hooked) = (
+            plain.load(run).await.unwrap(),
+            hooked.load(run).await.unwrap(),
+        );
+        for node in every_node() {
+            assert_eq!(
+                signal_state(&plain, &node),
+                signal_state(&hooked, &node),
+                "{}: the node-state fold must ignore DecisionHookFired",
+                node.0
+            );
+        }
+    }
+
+    // ---- AG-18 (#53): `status` on a run filed for an unrecorded spend ------------------
+
+    /// The reason the gateway's `Scheduler` files a run under when a drive fails with
+    /// `OrchestratorError::SpendUnrecorded` — built from the REAL error's `Display`, so a
+    /// gateway rewording breaks these tests instead of silently dropping the advice.
+    fn spend_unrecorded_reason() -> String {
+        OrchestratorError::SpendUnrecorded {
+            node: NodeId("draft/0".into()),
+            source: Box::new(OrchestratorError::Journal(
+                orchestrator_core::JournalError::Backend("connection reset by peer".into()),
+            )),
+        }
+        .to_string()
+    }
+
+    /// A run the scheduler filed terminal-`Failed` with `reason`.
+    async fn failed_store(run: RunId, reason: &str) -> InMemorySchedulerStore {
+        let s = InMemorySchedulerStore::default();
+        s.enqueue(run, &empty_graph(), now()).await.unwrap();
+        s.record_terminal(run, RunStatus::Failed, Some(reason))
+            .await
+            .unwrap();
+        s
+    }
+
+    /// A fixed answer for `WakeAttemptCounts` — the in-memory store keeps the counter but
+    /// does not expose it, and the Postgres reader is pinned in orchestrator-store's tests.
+    struct FixedWakeAttempts(Option<u32>);
+
+    #[async_trait::async_trait]
+    impl WakeAttemptCounts for FixedWakeAttempts {
+        async fn wake_attempts(&self, _run: RunId) -> Result<Option<u32>, OrchestratorError> {
+            Ok(self.0)
+        }
+    }
+
+    /// A run whose last wake failed and is backing off: `paused` at its retry deadline, the
+    /// reason the scheduler's own "wake attempt n of cap failed" text.
+    async fn backing_off_store(run: RunId) -> InMemorySchedulerStore {
+        let s = InMemorySchedulerStore::default();
+        s.enqueue(run, &empty_graph(), now()).await.unwrap();
+        s.record_wake_failed(
+            run,
+            now() + chrono::Duration::seconds(60),
+            "wake attempt 1 of 5 failed (retrying at …): store: connection reset",
+        )
+        .await
+        .unwrap();
+        s
+    }
+
+    /// AG-3: an operator looking at a run that keeps failing to wake must see how many
+    /// consecutive attempts it has burned — the cap is counted in these, and the reason
+    /// names only the latest one.
+    #[tokio::test]
+    async fn status_shows_the_wake_attempt_count_of_a_run_backing_off() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = backing_off_store(run).await;
+        let out = status(
+            &s,
+            &FixedWakeAttempts(Some(3)),
+            &empty_journal(),
+            run,
+            false,
+        )
+        .await
+        .expect("status");
+        assert_eq!(out.code, EXIT_OK);
+        assert!(
+            out.text.contains("wake attempts: 3"),
+            "status must show the consecutive wake attempts: {}",
+            out.text
+        );
+    }
+
+    /// The same count under `--json`, as its own numeric key.
+    #[tokio::test]
+    async fn status_json_carries_the_wake_attempt_count() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = backing_off_store(run).await;
+        let out = status(&s, &FixedWakeAttempts(Some(3)), &empty_journal(), run, true)
+            .await
+            .expect("status");
+        let v: serde_json::Value = serde_json::from_str(&out.text)
+            .unwrap_or_else(|e| panic!("--json emitted non-JSON {:?}: {e}", out.text));
+        assert_eq!(v[0]["wake_attempts"], serde_json::json!(3), "{v}");
+    }
+
+    /// No count line where there is nothing to report: a run paused after a SUCCESSFUL drive
+    /// (count reset to 0) and a terminal run (its count is history, and a run that gave up
+    /// names its count in the reason) keep the pre-AG-3 output byte-identical.
+    #[tokio::test]
+    async fn status_shows_no_wake_attempts_for_a_healthy_pause_or_a_terminal_run() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let healthy = InMemorySchedulerStore::default();
+        healthy.enqueue(run, &empty_graph(), now()).await.unwrap();
+        healthy.record_paused(run, None, "gated").await.unwrap();
+        let terminal = failed_store(run, "node draft/0 failed: model refused").await;
+        for (s, count) in [(&healthy, Some(0)), (&terminal, Some(4))] {
+            for json in [false, true] {
+                let with = status(s, &FixedWakeAttempts(count), &empty_journal(), run, json)
+                    .await
+                    .unwrap()
+                    .text;
+                let without = status(s, &NoWakeAttemptCounts, &empty_journal(), run, json)
+                    .await
+                    .unwrap()
+                    .text;
+                assert_eq!(with, without, "count {count:?}, json {json}");
+            }
+        }
+    }
+
+    /// AG-12 × AG-3: a paid model call whose spend never reached the journal is the one
+    /// failure a plain re-drive makes WORSE — the call has no memo, so it is dispatched and
+    /// paid for again, outside every cap. `status` must show why the run failed AND tell the
+    /// operator to reconcile the provider-side spend before re-driving it.
+    #[tokio::test]
+    async fn status_of_a_run_failed_on_an_unrecorded_spend_says_to_reconcile_first() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = failed_store(run, &spend_unrecorded_reason()).await;
+
+        let out = status(&s, &NoWakeAttemptCounts, &empty_journal(), run, false)
+            .await
+            .expect("status");
+        assert_eq!(out.code, EXIT_OK);
+        assert!(
+            out.text.contains("spend not recorded at") && out.text.contains("draft/0"),
+            "the reason must name the node whose spend was lost: {}",
+            out.text
+        );
+        assert!(
+            out.text.contains("reconcile") && out.text.contains("provider"),
+            "the operator must be told to reconcile provider-side spend: {}",
+            out.text
+        );
+        assert!(
+            out.text.contains("before re-driving"),
+            "…and to do it BEFORE re-driving, or the call is paid for twice: {}",
+            out.text
+        );
+    }
+
+    /// The same advice under `--json`, as its own key — a script that alerts on a failed
+    /// run must be able to tell "reconcile spend first" from any other failure without
+    /// parsing the reason's prose.
+    #[tokio::test]
+    async fn status_json_of_a_run_failed_on_an_unrecorded_spend_carries_the_advice() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = failed_store(run, &spend_unrecorded_reason()).await;
+
+        let out = status(&s, &NoWakeAttemptCounts, &empty_journal(), run, true)
+            .await
+            .expect("status");
+        let v: serde_json::Value = serde_json::from_str(&out.text)
+            .unwrap_or_else(|e| panic!("--json emitted non-JSON {:?}: {e}", out.text));
+        let advice = v[0]["spend_unrecorded"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no spend_unrecorded advice: {v}"));
+        assert!(
+            advice.contains("reconcile") && advice.contains("before re-driving"),
+            "{advice}"
+        );
+        assert!(
+            v[0]["reason"]
+                .as_str()
+                .is_some_and(|r| r.contains("spend not recorded at")),
+            "the reason itself is still reported: {v}"
+        );
+    }
+
+    /// Any OTHER failure gets no spend advice: telling an operator to reconcile a spend that
+    /// was recorded would send them auditing a provider bill for nothing.
+    #[tokio::test]
+    async fn status_of_an_ordinary_failure_gives_no_spend_advice() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = failed_store(run, "node draft/0 failed: model refused").await;
+        let text = status(&s, &NoWakeAttemptCounts, &empty_journal(), run, false)
+            .await
+            .unwrap()
+            .text;
+        let json = status(&s, &NoWakeAttemptCounts, &empty_journal(), run, true)
+            .await
+            .unwrap()
+            .text;
+        assert!(!text.contains("reconcile"), "{text}");
+        assert!(!json.contains("spend_unrecorded"), "{json}");
     }
 }

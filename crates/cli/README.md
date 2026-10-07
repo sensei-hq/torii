@@ -22,6 +22,7 @@ toolkit does not yet do something, it says so rather than describing an intentio
 | **`TORII_TENANT`** | The tenant every command acts for — its id or its slug. Required on the Postgres backend: every run, journal and registry belongs to exactly one tenant, and another tenant's are invisible. |
 | **`TORII_FENCE_VERSION`** | Needed by `run submit` and `worker serve`. Set it **explicitly** (e.g. `v1`) and keep a fleet agreed on it — it is recorded in every run and checked on resume, so deriving it from a build version would strand every paused run on a routine deploy. |
 | **`TORII_POOL_SIZE`** | Optional. Defaults are fine to start. |
+| **`TORII_WAKE_MAX_ATTEMPTS`**, **`TORII_WAKE_BASE_BACKOFF`**, **`TORII_WAKE_MAX_BACKOFF`** | Optional (defaults `5`, `30s`, `60m`). How a wake that keeps failing is retried: a retryable drive error (a journal or store backend fault) or a worker lost mid-drive re-schedules the run after a backoff that doubles from the base up to the ceiling; the attempt past the cap is never driven — the run is filed `failed`, naming the count and the last error. A successful drive resets the count. Backoffs take `--interval`'s units (`500ms`, `30s`, `15m`); `0` attempts and a base above the ceiling are refused. Read only by the two commands that drive (`worker serve` and `run submit`), so keep a fleet agreed on them; a bad value fails those two, loudly, and no other command reads it (`run status`, `run list-paused`, `run cancel` and the answering verbs still work while you fix it). |
 | **`TORII_BACKEND`** | Optional: `postgres` (the default — everything above applies) or `memory`. `memory` keeps every store in the process — no database, no `DATABASE_URL` — for development and CI. Nothing survives the process, so a run it submits can only be observed or woken by that same process. |
 | **`TORII_REGISTRY_DIR`** | With `TORII_BACKEND=memory`: the registry directory (the `agents/ skills/ tools/` layout `config push` reads) loaded at boot, since there is no database to push to. |
 | **A gateway config** | On Postgres: **torii's catalog** — routers, models and chains, read by the same `torii_core::load_gateway_config` the API routes with. Nothing to pass; a `--gateway-config` there is refused. With `TORII_BACKEND=memory` only: `--gateway-config <file>` (JSON), required by `run submit` and `worker serve`. |
@@ -53,7 +54,8 @@ convenient for a first boot:
 
 ```
 <dir>/agents/*.md     # frontmatter: name, area, kind, chain | chains, tools, skills,
-                      #              backed_by, timeout, default_planner
+                      #              backed_by, timeout, default_planner, tool_limits,
+                      #              confirm_tools, confirm_timeout, escalate_to
                       # body = the agent's system_prompt
 <dir>/skills/*.md     # frontmatter: name, description, activate_on: [kw, ...]
                       # body = the skill text composed into the prompt
@@ -74,13 +76,26 @@ agent may carry it, a second is refused at load, and it is refused outside `area
 it would designate nothing. Both keys are read literally: `default_planner: yes` is a loud parse
 error, never a silent "unmarked".
 
+Tool policy and escalation (gateway AG-15): `tool_limits: [shell=3]` caps how many times one
+invocation of the agent may call a tool (further calls are refused to the model as
+`call_limit_reached`); `confirm_tools: [deploy]` makes every call of a listed tool wait for a person
+(`torii run tool approve|reject`), up to `confirm_timeout: 2h` if given, after which the model is
+told `not_confirmed`; `escalate_to: legal-lead` hands a human-backed agent's unanswered question to
+another human-backed agent when its `timeout` expires. Every one names only tools the agent lists,
+and `config push` refuses a malformed or impossible policy (a ceiling of 0, a confirmation on an
+unlisted tool, an escalation from a model-backed agent or round a cycle) at load.
+
 Per-tool `grants` are **not** agent frontmatter. They live in the registry root as
 `<dir>/grants.json` (`{"<agent>": {"<tool>": <permissions>}}`), beside the optional
 `<dir>/chains.json` of `(area, kind) → chain` bindings.
 
 A shipped `tools/*.json` declares a schema the model may call. The executable side must exist too —
-`torii` wires `fs_read`, `fs_write` and `shell`. A schema with no executable counterpart is a tool
-the model can call and the runtime cannot serve.
+`torii` wires `fs_read`, `fs_write` and `shell`, and (since gateway v0.11.0) every drive also
+composes the five planner discovery tools — `list_agents`, `list_skills`, `list_tools`,
+`list_chains`, `validate_plan` — over the registry that run is pinned to. Wired is not granted: an
+agent can call one only if it declares it in `tools:` and the registry carries its
+`tools/<name>.json` schema, exactly as for any other tool. A schema with no executable counterpart
+is a tool the model can call and the runtime cannot serve.
 
 ## The flow
 
@@ -113,15 +128,33 @@ A worker serves **one tenant** (`TORII_TENANT`): its sweeps claim only that tena
 ## Observing and intervening
 
 ```sh
-torii run status <id>            # one run's schedule record
-torii run list-paused            # everything awaiting a wake, and nodes awaiting a signal
+torii run status <id>            # one run's schedule record (+ token/money spend, wake attempts,
+                                 #   pending tool confirmations and escalations)
+torii run list-paused            # everything awaiting a wake, and what each run waits on
 torii run signal <...>           # deliver a decision to an AwaitSignal node
 torii run gate <...>             # decide a HumanGate or a Loop's human gate
 torii run agent <...>            # answer a human-backed Agent — a role a person fills
+torii run tool approve|reject <id> --call <effect_id>
+                                 # decide one confirm-before-run tool call
 torii run wake <id>              # queue a paused run for the next worker tick
 torii run cancel <id>            # cancel a non-terminal run so it is never woken
 torii run prune --older-than <>  # delete terminal run records
 ```
+
+**Budgets.** `run submit --budget-tokens N` caps a run's tokens and `--budget-usd D` its money
+(whole micro-dollars: at most 6 decimal places, refused rather than rounded); either, both or
+neither. A run that stops at a cap pauses, `run status` shows the spend against it, and `run wake
+--budget-tokens`/`--budget-usd` moves the cap before re-queueing. A money raise only moves a cap the
+run was SUBMITTED with — on a run without one it is refused and nothing is written. Under a money
+cap every model on the chains the run uses must declare pricing (an explicit zero for a free or
+local model); an unpriced one is refused.
+
+**Confirmations and escalations.** A `tool:` row in `list-paused` (and a `tool confirmation
+pending:` line in `status`) is one call of a `confirm_tools` tool waiting for a person; answer it
+with `run tool approve|reject <id> --call <effect_id>`. A call past its deadline, already decided,
+or already settled is refused before anything is written. An escalated question shows its current
+holder (`agent (escalated to <agent>):`) and that hop's deadline, and is answered with `run agent
+answer` as before. `--as` on every verb is attribution, not authentication.
 
 Exit codes: `0` ok · `1` error, including a run that executed and failed · `2` not-found,
 precondition-not-met, or a result printable but not the unqualified success you asked for. Exit 1
@@ -129,6 +162,13 @@ writes to stderr and nothing to stdout; exit 2 still prints its result. Note `2`
 usage-error code, so a script keying off it should check stderr too.
 
 Logs go to **stderr** via `RUST_LOG` (default `info`), never stdout, so `--json` output stays clean.
+
+`run submit` and `worker serve` also log every human-in-the-loop moment their drives report — a
+node starts waiting (signal, gate, agent question, loop gate, tool confirmation), a decision is
+honoured, a question is escalated — as one line per event at target `torii::run_event`, the event's
+JSON in `event` (e.g. `{"run":"…","type":"signal_received","node":"gate","payload":{…}}`). It is
+best-effort: a drive never waits on the log, and an event the log cannot keep up with is dropped
+and counted in a warning. `RUST_LOG=torii::run_event=info` shows only these.
 
 ## Known gaps
 

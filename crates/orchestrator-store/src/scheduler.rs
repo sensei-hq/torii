@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use orchestrator_core::{
-    Graph, OrchestratorError, RunId, RunLock, RunStatus, ScheduledRun, SchedulerStore,
+    Graph, OrchestratorError, RunId, RunLock, RunStatus, ScheduledRun, SchedulerStore, WakeAttempt,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -22,6 +22,22 @@ impl PgSchedulerStore {
     /// The schedule of `tenant` over `pool` (see [`connect`](crate::connect)).
     pub fn new(pool: PgPool, tenant: Uuid) -> Self {
         Self { pool, tenant }
+    }
+
+    /// AG-3: `run`'s consecutive wake attempts since its last successful drive, or `None` for
+    /// a run this tenant does not have.
+    /// A read for the operator (`torii run status`); the trait does not expose the counter.
+    pub async fn wake_attempts(&self, run: RunId) -> Result<Option<u32>, OrchestratorError> {
+        let row: Option<(i32,)> = sqlx::query_as(
+            "select attempts from runs.scheduled_runs where tenant_id = $1 and run_id = $2",
+        )
+        .bind(self.tenant)
+        .bind(run.0)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(store_err)?;
+        // Never negative through the trait; a hand-written negative reads as 0, not a wrap.
+        Ok(row.map(|(n,)| u32::try_from(n).unwrap_or(0)))
     }
 }
 
@@ -96,9 +112,12 @@ impl SchedulerStore for PgSchedulerStore {
     ) -> Result<(), OrchestratorError> {
         let g = serde_json::to_value(graph).map_err(store_err_ser)?;
         let res = sqlx::query(
+            // AG-3: `submit`'s inline drive is the run's first attempt, so a submit lost
+            // mid-drive is counted when its lease is reclaimed.
             "insert into runs.scheduled_runs \
-             (tenant_id, run_id, graph, status, claimed_at, updated_at) \
-             values ($1, $2, $3, 'waking', $4, $4) on conflict (tenant_id, run_id) do nothing",
+             (tenant_id, run_id, graph, status, claimed_at, attempts, last_wake_error, updated_at) \
+             values ($1, $2, $3, 'waking', $4, 1, null, $4) \
+             on conflict (tenant_id, run_id) do nothing",
         )
         .bind(self.tenant)
         .bind(run.0)
@@ -121,9 +140,11 @@ impl SchedulerStore for PgSchedulerStore {
         next_wake: Option<DateTime<Utc>>,
         reason: &str,
     ) -> Result<(), OrchestratorError> {
+        // AG-3: a drive that recorded a pause SUCCEEDED — the consecutive-failure count and the
+        // last recorded error restart, in the same conditional-on-waking UPDATE.
         sqlx::query(
             "update runs.scheduled_runs set status = 'paused', next_wake = $3, claimed_at = null, \
-                    reason = $4, updated_at = now() \
+                    reason = $4, attempts = 0, last_wake_error = null, updated_at = now() \
              where tenant_id = $1 and run_id = $2 and status = 'waking'",
         )
         .bind(self.tenant)
@@ -168,12 +189,16 @@ impl SchedulerStore for PgSchedulerStore {
         // Not `… where run_id in (select … limit $4 for update skip locked)`: Postgres may plan
         // that as a nested-loop semi join that re-runs the limited subquery per outer row, and
         // one claim then takes every due run regardless of `limit`.
+        // AG-3: on a `waking` row `next_wake` is the retry deadline `begin_wake_attempt` armed,
+        // so a lost drive is reclaimed only past BOTH its lease and its backoff (a NULL
+        // `next_wake` — a submit lost mid-drive — is reclaimed on the lease alone).
         let rows: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
             "with due as materialized ( \
                  select run_id from runs.scheduled_runs \
                  where tenant_id = $1 \
                    and ((status = 'paused' and next_wake is not null and next_wake <= $2) \
-                     or (status = 'waking' and claimed_at < $3)) \
+                     or (status = 'waking' and claimed_at < $3 \
+                         and (next_wake is null or next_wake <= $2))) \
                  order by next_wake nulls last \
                  limit $4 \
                  for update skip locked) \
@@ -193,6 +218,79 @@ impl SchedulerStore for PgSchedulerStore {
         rows.into_iter()
             .map(|(id, g)| Ok((RunId(id), serde_json::from_value(g).map_err(store_err_ser)?)))
             .collect()
+    }
+
+    /// AG-3: one transaction — lock the `waking` row (`FOR UPDATE`), count this attempt, arm
+    /// `next_wake = retry_at(n)` and TAKE the previous attempt's recorded error. The row lock
+    /// makes the read-increment-write atomic against a concurrent `cancel`/`record_*`, and
+    /// `retry_at` (a plain Rust closure) is evaluated between the two statements with the
+    /// lock held, so the armed deadline is keyed off exactly the count it stores.
+    async fn begin_wake_attempt(
+        &self,
+        run: RunId,
+        retry_at: &(dyn Fn(u32) -> DateTime<Utc> + Send + Sync),
+    ) -> Result<Option<WakeAttempt>, OrchestratorError> {
+        let mut tx = self.pool.begin().await.map_err(store_err)?;
+        let row: Option<(i32, Option<String>)> = sqlx::query_as(
+            "select attempts, last_wake_error from runs.scheduled_runs \
+             where tenant_id = $1 and run_id = $2 and status = 'waking' for update",
+        )
+        .bind(self.tenant)
+        .bind(run.0)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(store_err)?;
+        let Some((attempts, last_error)) = row else {
+            // Unknown, or not `waking` (paused / terminal): not a wake. Nothing was written.
+            tx.rollback().await.map_err(store_err)?;
+            return Ok(None);
+        };
+        // The column is NOT NULL and only ever counted up from 0/1; a negative value can only be
+        // hand-written, and clamping it keeps the count monotonic rather than wrapping.
+        let attempt = u32::try_from(attempts).unwrap_or(0).saturating_add(1);
+        let stored = i32::try_from(attempt).unwrap_or(i32::MAX);
+        sqlx::query(
+            "update runs.scheduled_runs \
+                set attempts = $3, next_wake = $4, last_wake_error = null, updated_at = now() \
+             where tenant_id = $1 and run_id = $2",
+        )
+        .bind(self.tenant)
+        .bind(run.0)
+        .bind(stored)
+        .bind(retry_at(attempt))
+        .execute(&mut *tx)
+        .await
+        .map_err(store_err)?;
+        tx.commit().await.map_err(store_err)?;
+        Ok(Some(WakeAttempt {
+            attempt,
+            last_error,
+        }))
+    }
+
+    /// AG-3: a retryable drive failure — `waking` → `paused` at the driver's retry deadline, the
+    /// error kept both as `reason` and as the attempt's recorded error. `attempts` is NOT
+    /// touched (`begin_wake_attempt` already counted this attempt). Conditional on `waking`, so
+    /// a concurrent `cancel` wins and a terminal row is never resurrected.
+    async fn record_wake_failed(
+        &self,
+        run: RunId,
+        retry_at: DateTime<Utc>,
+        error: &str,
+    ) -> Result<(), OrchestratorError> {
+        sqlx::query(
+            "update runs.scheduled_runs set status = 'paused', next_wake = $3, claimed_at = null, \
+                    reason = $4, last_wake_error = $4, updated_at = now() \
+             where tenant_id = $1 and run_id = $2 and status = 'waking'",
+        )
+        .bind(self.tenant)
+        .bind(run.0)
+        .bind(retry_at)
+        .bind(error)
+        .execute(&self.pool)
+        .await
+        .map_err(store_err)?;
+        Ok(())
     }
 
     async fn status(&self, run: RunId) -> Result<Option<ScheduledRun>, OrchestratorError> {

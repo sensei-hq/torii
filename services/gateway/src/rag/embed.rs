@@ -2,7 +2,7 @@
 //!
 //! [`EngineEmbedder`] is the prod path: config-driven embedding via the sensei engine's `TextEmbed`
 //! capability over a named chain (model id + chain are operator config — no-hardcoded-ops).
-//! [`StubEmbedder`] is the deterministic, hermetic test path (no model, no network). [`validate_dim`]
+//! `StubEmbedder` (test-only) is the deterministic, hermetic test path (no model, no network). [`validate_dim`]
 //! is THE enforcement layer: the crate reads the model's output shape at runtime and performs no
 //! dimension check, so a mis-configured (non-1024-dim) model is caught here — fail-closed — rather
 //! than corrupting the `vector(1024)` index.

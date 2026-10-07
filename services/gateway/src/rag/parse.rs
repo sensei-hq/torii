@@ -99,12 +99,12 @@ pub enum ElementType {
     Prose,
     #[expect(
         dead_code,
-        reason = "reserved for the deferred layout-aware/OCR parser backends (docs/plans/C5-rag-backend-build-plan.md § Deferred); chunk.rs already maps them"
+        reason = "tables-as-cells and figure captions are emitted by the Docling/layout-aware parser (docs/specs/C5-rag-document-intelligence.md decision 4); v1's text parser never produces them; chunk.rs already maps them"
     )]
     Table,
     #[expect(
         dead_code,
-        reason = "reserved for the deferred layout-aware/OCR parser backends (docs/plans/C5-rag-backend-build-plan.md § Deferred); chunk.rs already maps them"
+        reason = "tables-as-cells and figure captions are emitted by the Docling/layout-aware parser (docs/specs/C5-rag-document-intelligence.md decision 4); v1's text parser never produces them; chunk.rs already maps them"
     )]
     Caption,
 }
@@ -138,7 +138,7 @@ pub struct ParseOpts {
     /// Selected parser backend id. v1 ships only `"default"` ([`DefaultParser`]).
     #[expect(
         dead_code,
-        reason = "backend dispatch seam — v1 has one parser, so nothing selects on it yet (docs/plans/C5-rag-backend-build-plan.md § Deferred)"
+        reason = "backend dispatch seam for operator-selectable parsers (docs/specs/C5-rag-document-intelligence.md decision 4) — v1 has one parser, so nothing selects on it yet"
     )]
     pub backend: String,
 }

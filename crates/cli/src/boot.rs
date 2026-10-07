@@ -1506,6 +1506,26 @@ mod tests {
         );
     }
 
+    /// AG-5: a bad drive policy is refused where it is USED — `heavy()` will not boot a driver
+    /// on it, naming the variable.
+    #[tokio::test]
+    async fn heavy_refuses_a_bad_drive_policy() {
+        for (var, bad) in [
+            (ENV_WAKE_LEASE, "0s"),
+            (ENV_MAP_CONCURRENCY, "0"),
+            (ENV_TRANSIENT_ATTEMPTS, "0"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (env, gw) = memory_env(dir.path(), IDLE_GATEWAY, &[(var, bad)]);
+            let err = match heavy(&env, Some(&gw), None).await {
+                Ok(_) => panic!("{var}={bad} must not boot a driver"),
+                Err(e) => e,
+            };
+            assert_eq!(err.code, crate::errors::EXIT_ERROR);
+            assert!(err.message.contains(var), "{}", err.message);
+        }
+    }
+
     /// A memory-backend `EnvConfig` and gateway-config file `heavy()` boots on with no
     /// database and no model: one agent bound to chain `c`, which the file defines.
     fn memory_heavy_fixture(dir: &Path) -> (EnvConfig, PathBuf) {

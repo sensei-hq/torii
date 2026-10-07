@@ -592,6 +592,27 @@ fn both_budget_token_flags_name_the_floor_their_parser_enforces() {
     }
 }
 
+/// AG-13 (#49): both money flags say where the limit really comes from on Postgres — the
+/// issuer's (`TORII_USER`'s) headroom under torii's caps, which `--budget-usd` may only lower and
+/// a raise may not exceed. Help that still described an operator-chosen cap would send an operator
+/// to a flag that now refuses what it used to accept.
+#[test]
+fn both_budget_usd_flags_name_the_issuers_headroom() {
+    for args in [
+        vec!["run", "submit", "--help"],
+        vec!["run", "wake", "--help"],
+    ] {
+        let out = torii().args(&args).output().expect("runs");
+        assert!(out.status.success(), "exit: {:?}", out.status);
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            text.contains("TORII_USER") && text.contains("headroom"),
+            "`{}` must say a money limit is bounded by TORII_USER's headroom:\n{text}",
+            args.join(" ")
+        );
+    }
+}
+
 /// The other side of the same sweep: `run agent --help` enumerated the waiting kinds as
 /// THREE ("The third waiting kind … Each of the three refuses the other two") in the very
 /// commit that added a fourth and a fourth refusal arm to this command.

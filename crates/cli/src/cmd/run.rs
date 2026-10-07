@@ -1480,6 +1480,17 @@ pub fn parse_budget_tokens(s: &str) -> Result<u64, String> {
     Ok(v)
 }
 
+/// AG-12: parse `--budget-usd` (whole or fractional US dollars) into integer micro-dollars,
+/// the unit `MoneyBudget` is denominated in.
+pub fn parse_budget_usd(_s: &str) -> Result<u64, String> {
+    Err(String::new())
+}
+
+/// AG-12: render integer micro-dollars as a dollar figure.
+pub fn fmt_usd(_micro: u64) -> String {
+    String::new()
+}
+
 /// Parse a retention window: `30d`, `12h`, `90m`, `45s`.
 ///
 /// A SIBLING of [`crate::cmd::worker::parse_interval`], deliberately, rather than an
@@ -1944,6 +1955,78 @@ pub(crate) mod tests {
             "negative is not a token count"
         );
         assert!(parse_budget_tokens("").is_err());
+    }
+
+    // ---- AG-12: `--budget-usd` on submit/wake, money spend in status -------------------
+
+    #[test]
+    fn parse_budget_usd_reads_dollars_exactly_into_micro_dollars() {
+        assert_eq!(parse_budget_usd("5"), Ok(5_000_000));
+        assert_eq!(parse_budget_usd("5."), Ok(5_000_000));
+        assert_eq!(parse_budget_usd("0.10"), Ok(100_000));
+        assert_eq!(parse_budget_usd(".5"), Ok(500_000));
+        assert_eq!(parse_budget_usd("12.345678"), Ok(12_345_678));
+        assert_eq!(
+            parse_budget_usd("0.000001"),
+            Ok(1),
+            "one micro-dollar is the smallest representable cap"
+        );
+        // The case a float parse gets wrong: 0.29 * 1e6 = 289999.99999999994 in f64, which
+        // truncates to 289999. Decimal parsing must not depend on binary rounding.
+        assert_eq!(parse_budget_usd("0.29"), Ok(290_000));
+        assert_eq!(parse_budget_usd("1.005"), Ok(1_005_000));
+        assert_eq!(
+            parse_budget_usd(" 20 "),
+            Ok(20_000_000),
+            "whitespace is trimmed"
+        );
+    }
+
+    #[test]
+    fn parse_budget_usd_rejects_what_is_not_a_plain_non_negative_dollar_amount() {
+        for bad in [
+            "", ".", "-1", "-0.5", "+5", "NaN", "nan", "inf", "-inf", "1e3", "5 usd", "$5",
+            "1,000", "0x10", "1.2.3",
+        ] {
+            let e = parse_budget_usd(bad).expect_err(bad);
+            assert!(e.contains("--budget-usd"), "{bad:?}: {e}");
+        }
+        let e = parse_budget_usd("-1").expect_err("negative");
+        assert!(e.contains("-1"), "must echo the offending value: {e}");
+    }
+
+    #[test]
+    fn parse_budget_usd_refuses_more_precision_than_a_micro_dollar_rather_than_rounding() {
+        let e = parse_budget_usd("0.0000001").expect_err("finer than one micro-dollar");
+        assert!(e.contains("--budget-usd"), "{e}");
+        assert!(
+            e.contains("6 decimal places") || e.contains("micro-dollar"),
+            "must say what the resolution is, so the operator can fix it: {e}"
+        );
+        assert!(
+            parse_budget_usd("1.0000000").is_err(),
+            "trailing zeros past 6 too"
+        );
+    }
+
+    #[test]
+    fn parse_budget_usd_refuses_zero_and_overflow() {
+        let e = parse_budget_usd("0").expect_err("a zero cap refuses every priced call");
+        assert!(e.contains("--budget-usd"), "{e}");
+        assert!(parse_budget_usd("0.000000").is_err());
+        let e = parse_budget_usd("18446744073710").expect_err("past u64::MAX micro-dollars");
+        assert!(e.contains("--budget-usd"), "{e}");
+    }
+
+    #[test]
+    fn fmt_usd_renders_micro_dollars_exactly() {
+        assert_eq!(fmt_usd(0), "$0.00");
+        assert_eq!(fmt_usd(1), "$0.000001");
+        assert_eq!(fmt_usd(100_000), "$0.10");
+        assert_eq!(fmt_usd(1_500_000), "$1.50");
+        assert_eq!(fmt_usd(12_345_678), "$12.345678");
+        assert_eq!(fmt_usd(290_000), "$0.29");
+        assert_eq!(fmt_usd(5_000_000), "$5.00");
     }
 
     /// A journal seeded with `RunStarted{budget}` plus two `EffectRecorded{usage}` — the

@@ -58,7 +58,7 @@ pub async fn retrieve(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.read").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     // no-hardcoded-ops: resolve the per-space RetrievalConfig from governance.settings over the fallback
@@ -97,7 +97,7 @@ pub async fn retrieval_config(
 ) -> Response {
     let (tenant, _actor) = match authorize(&state, &claims, "doc.read").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let cfg = crate::rag::resolve_retrieval_config(&state.pool, tenant, Some(space_id)).await;
     (StatusCode::OK, Json(cfg)).into_response()

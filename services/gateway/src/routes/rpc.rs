@@ -72,7 +72,7 @@ pub(crate) async fn authorize(
     state: &SharedState,
     claims: &Claims,
     capability: &str,
-) -> Result<(Uuid, Uuid), Response> {
+) -> Result<(Uuid, Uuid), Box<Response>> {
     let tenant = claims
         .tenant_id
         .ok_or_else(|| (StatusCode::FORBIDDEN, "no active tenant").into_response())?;
@@ -136,7 +136,7 @@ pub async fn budgets_upsert_node(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "budget.write").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     let id = body.id.unwrap_or_else(Uuid::new_v4);
@@ -217,7 +217,7 @@ pub async fn budgets_delete_node(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "budget.write").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     // Look up the node IN THE CALLER'S TENANT (no cross-tenant delete). A NULL parent
@@ -291,7 +291,7 @@ pub async fn budgets_request(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "budget.request").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     // Insert only if the node exists in the caller's tenant (else 404) — no
@@ -356,7 +356,7 @@ pub async fn apikeys_issue(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "apikey.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     // Bind to a service account (validated in-tenant) or, by default, the caller.
@@ -435,7 +435,7 @@ pub async fn apikeys_revoke(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "apikey.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     // The key must belong to the caller's tenant (else 404 — no cross-tenant revoke).
@@ -487,7 +487,7 @@ pub async fn budgets_approve_request(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "budget.write").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let write = sqlx::query(
         "with req as ( \
@@ -533,7 +533,7 @@ pub async fn budgets_deny_request(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "budget.write").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let write = sqlx::query(
         "update public.budget_requests set status='denied', resolved_by=$2, resolved_at=now() \
@@ -582,7 +582,7 @@ pub async fn rbac_assign_role(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "role.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     // #8 target-tenant guard: the target profile must be an ACTIVE member of the
@@ -701,7 +701,7 @@ pub async fn rbac_unassign_role(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "role.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     // target must be an ACTIVE member of the caller's tenant (else 404 — no
@@ -850,7 +850,7 @@ pub async fn rbac_create_role(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "role.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     let key = body.key.trim();
@@ -979,14 +979,17 @@ pub(crate) fn validate_feature_write(
 /// §D Phase 4: resolve a feature `slug` (the stable API key) to its `governance.features.id`
 /// (feature_policies is keyed by the uuid FK after the fold). `Ok(None)` = no such feature (the
 /// caller decides 400 vs no-op); `Err` = a DB error surfaced as a 500 response.
-async fn resolve_feature_id(state: &SharedState, slug: &str) -> Result<Option<Uuid>, Response> {
+async fn resolve_feature_id(
+    state: &SharedState,
+    slug: &str,
+) -> Result<Option<Uuid>, Box<Response>> {
     sqlx::query_scalar::<_, Uuid>("select id from governance.features where slug = $1")
         .bind(slug)
         .fetch_optional(&state.pool)
         .await
         .map_err(|e| {
             tracing::error!("resolve_feature_id: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response()
+            Box::new((StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response())
         })
 }
 
@@ -1002,7 +1005,7 @@ pub async fn governance_set_feature(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "feature.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if let Err(reason) = validate_feature_write(&body.scope_type, body.scope_id, &body.state) {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": reason }))).into_response();
@@ -1019,7 +1022,7 @@ pub async fn governance_set_feature(
             )
                 .into_response()
         }
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // A workspace-scope LOCK is broadest-wins — no narrower (space/role) override may be
     // written under it (it would be inert per the resolver, and silently accepting it is
@@ -1116,7 +1119,7 @@ pub async fn governance_clear_feature(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "feature.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if !matches!(body.scope_type.as_str(), "workspace" | "space" | "role") {
         return (
@@ -1131,7 +1134,7 @@ pub async fn governance_clear_feature(
         Ok(None) => {
             return (StatusCode::OK, Json(json!({ "ok": true, "cleared": 0 }))).into_response()
         }
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let deleted = sqlx::query(
         "delete from governance.feature_policies \
@@ -1180,7 +1183,7 @@ pub async fn governance_matrix(
 ) -> Response {
     let (tenant, _actor) = match authorize(&state, &claims, "feature.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // §D Phase 4: the full-matrix read spans ALL scopes (not just workspace), so it joins
     // governance.features directly to expose `slug` as feature_key over the feature_id fold —
@@ -1227,7 +1230,7 @@ pub async fn routing_set_step(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "chain.write").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let write = sqlx::query(
         "update catalog.chain_models \
@@ -1279,7 +1282,7 @@ pub async fn spaces_create(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "space.create").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let id = Uuid::new_v4();
     let write = sqlx::query(
@@ -1503,7 +1506,7 @@ pub async fn orgs_transfer_ownership(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "tenant.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     let (owner_role, admin_role): (Uuid, Uuid) = match sqlx::query_as(
@@ -1675,7 +1678,7 @@ pub async fn settings_set(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "tenant.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // §D Phase 4: workspace toggles live in governance.settings (scope='workspace', jsonb boolean
     // value) after the tenant_settings absorb. Upsert on the (tenant, scope, space_id, key) unique;
@@ -1718,7 +1721,7 @@ pub async fn mcp_set_enabled(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "mcp.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let visible: bool = sqlx::query_scalar(
         "select exists(select 1 from device.mcp_servers \
@@ -1778,7 +1781,7 @@ pub async fn mcp_set_tool_grant(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "mcp.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // Base table (NOT the effective view) on purpose: a per-role tool grant is keyed only by
     // role_id, so targeting a SHARED default role would leak the grant to every tenant. Tool
@@ -1868,7 +1871,7 @@ pub async fn devices_revoke(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "device.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let exists: bool = sqlx::query_scalar(
         "select exists(select 1 from device.devices where id = $1 and tenant_id = $2)",
@@ -1927,7 +1930,7 @@ pub async fn devices_set_sync_policy(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "device.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if let Err(reason) = crate::devices::validate_sync_policy(&body.sync_policy) {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": reason }))).into_response();
@@ -1978,7 +1981,7 @@ pub struct RevokeRouter {
 
 /// Resolve a router NAME to its id (routers are platform config, not tenant-scoped).
 /// 404 if unknown.
-async fn resolve_router_id(state: &SharedState, name: &str) -> Result<Uuid, Response> {
+async fn resolve_router_id(state: &SharedState, name: &str) -> Result<Uuid, Box<Response>> {
     sqlx::query_scalar::<_, Uuid>("select id from catalog.routers where name = $1")
         .bind(name)
         .fetch_optional(&state.pool)
@@ -1987,7 +1990,7 @@ async fn resolve_router_id(state: &SharedState, name: &str) -> Result<Uuid, Resp
             tracing::error!("resolve_router_id: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         })?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "router not found").into_response())
+        .ok_or_else(|| Box::new((StatusCode::NOT_FOUND, "router not found").into_response()))
 }
 
 /// Shared connect/rotate: both seal + upsert the tenant's active BYOK key for the
@@ -2000,11 +2003,11 @@ async fn connect_or_rotate(
 ) -> Response {
     let (tenant, actor) = match authorize(state, claims, "connection.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let router_id = match resolve_router_id(state, &body.router).await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     match state
         .tenant_keys
@@ -2058,11 +2061,11 @@ pub async fn connections_revoke(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "connection.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let router_id = match resolve_router_id(&state, &body.router).await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if let Err(e) = state
         .tenant_keys
@@ -2103,11 +2106,11 @@ pub async fn connections_oauth_connect(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "connection.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let router_id = match resolve_router_id(&state, &body.router).await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // v1 paste-token: a long-lived Anthropic `setup-token` (no refresh/expiry/scopes) — the
     // ToS-safe non-official-client path (DECISIONS §F3). vault 0.5.0 takes a single
@@ -2152,11 +2155,11 @@ pub async fn connections_oauth_revoke(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "connection.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let router_id = match resolve_router_id(&state, &body.router).await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if let Err(e) = state
         .tenant_keys
@@ -2204,7 +2207,7 @@ pub async fn documents_declassify(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.declassify").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if !DOC_CLASSIFICATIONS.contains(&body.classification.as_str()) {
         return (StatusCode::BAD_REQUEST, "invalid classification").into_response();
@@ -2266,7 +2269,7 @@ pub async fn retrieval_set_config(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "retrieval.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // Space must belong to the caller's tenant (else 404 — no cross-tenant config write, and
     // avoids tripping the settings→spaces composite FK).

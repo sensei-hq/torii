@@ -20,9 +20,11 @@ use orchestrator_store::{
     FilesystemConfigSource, InMemoryConfigStore, InMemoryContentStore, InMemoryContextStore,
     InMemoryJournal, InMemorySchedulerStore,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use torii_core::events::{DEFAULT_EVENT_BUFFER, RunEventSink, RunEvents};
+use torii_core::registry::RegistryReloader;
 
 pub const ENV_DATABASE_URL: &str = "DATABASE_URL";
 pub const ENV_FENCE_VERSION: &str = "TORII_FENCE_VERSION";
@@ -36,6 +38,12 @@ pub const ENV_TENANT: &str = "TORII_TENANT";
 pub const ENV_WAKE_MAX_ATTEMPTS: &str = "TORII_WAKE_MAX_ATTEMPTS";
 pub const ENV_WAKE_BASE_BACKOFF: &str = "TORII_WAKE_BASE_BACKOFF";
 pub const ENV_WAKE_MAX_BACKOFF: &str = "TORII_WAKE_MAX_BACKOFF";
+/// AG-5: the executor/scheduler seams the heavy tier tunes ([`DrivePolicy`]). Like
+/// `TORII_WAKE_*`, parsed here and checked only by [`require_drive_policy`], so only the two
+/// commands that drive read them.
+pub const ENV_WAKE_LEASE: &str = "TORII_WAKE_LEASE";
+pub const ENV_MAP_CONCURRENCY: &str = "TORII_MAP_CONCURRENCY";
+pub const ENV_TRANSIENT_ATTEMPTS: &str = "TORII_TRANSIENT_ATTEMPTS";
 
 /// The pool cap when `TORII_POOL_SIZE` is unset: one pool serves every store of a worker, so
 /// this is the worker's whole connection budget (`torii_core::connect`).
@@ -81,6 +89,61 @@ pub struct EnvConfig {
     /// `run status`, `run list-paused` or `run cancel` — the verbs an operator reaches for while
     /// fixing it.
     pub wake_retry: Result<WakeRetryPolicy, String>,
+    /// AG-5: the executor/scheduler seams (`TORII_WAKE_LEASE`, …). Checked only by
+    /// [`require_drive_policy`], for the same reason as `wake_retry`.
+    pub drive: Result<DrivePolicy, String>,
+}
+
+/// AG-5: how the heavy tier's `Executor` and `Scheduler` drive, beyond the wake-retry policy.
+/// Every field is set on every boot from an explicit torii default — the gateway's own
+/// defaults are private constants torii cannot name, so relying on them would leave the
+/// documented default one gateway bump away from silently changing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrivePolicy {
+    /// `Scheduler::with_lease`: how old a `waking` claim must be before `tick` treats its
+    /// worker as lost and reclaims the run. Default [`DEFAULT_WAKE_LEASE_SECS`].
+    pub wake_lease: chrono::Duration,
+    /// `Executor::with_concurrency`: the global ceiling on how many children of one `Map`
+    /// node are in flight at once (each `Map` asks for its own `concurrency`; the lower of the
+    /// two wins). Default [`DEFAULT_MAP_CONCURRENCY`].
+    pub map_concurrency: usize,
+    /// `Executor::with_max_transient_attempts`: total attempts a node gets at a model call the
+    /// gateway reports as retryable before the failure is terminal; `1` turns retry off.
+    /// Default [`DEFAULT_TRANSIENT_ATTEMPTS`] — ON, where the gateway's default is off (#34).
+    pub transient_attempts: u32,
+}
+
+/// The wake lease when `TORII_WAKE_LEASE` is unset — the gateway's own default (60s).
+pub const DEFAULT_WAKE_LEASE_SECS: i64 = 60;
+
+/// The `Map` fan-out ceiling when `TORII_MAP_CONCURRENCY` is unset — the gateway's own default.
+pub const DEFAULT_MAP_CONCURRENCY: usize = 8;
+
+/// A typo ceiling on `TORII_MAP_CONCURRENCY`, not a capacity policy (see [`MAX_POOL_SIZE`]):
+/// every in-flight child journals over the one `TORII_POOL_SIZE` pool, so a value far past it
+/// only queues children on connections.
+const MAX_MAP_CONCURRENCY: usize = 256;
+
+/// Transient-failure attempts when `TORII_TRANSIENT_ATTEMPTS` is unset. The gateway defaults to
+/// 1 (off) because enabling it retries essentially EVERY provider failure the gateway does not
+/// classify as needing a person — auth and credit exhaustion pause for an operator instead and
+/// never reach this path — which costs latency and, against a permanently broken provider, a
+/// few wasted calls. torii decides that trade for its operators (#34): a single provider 500
+/// failing a whole run is the worse default, and 3 attempts bounds the waste.
+pub const DEFAULT_TRANSIENT_ATTEMPTS: u32 = 3;
+
+/// A typo ceiling on `TORII_TRANSIENT_ATTEMPTS`. The gateway's backoff between attempts is 2s,
+/// doubling, capped at 60s, so 20 attempts already waits out a provider for ~15 minutes.
+const MAX_TRANSIENT_ATTEMPTS: u32 = 20;
+
+impl Default for DrivePolicy {
+    fn default() -> Self {
+        Self {
+            wake_lease: chrono::Duration::seconds(DEFAULT_WAKE_LEASE_SECS),
+            map_concurrency: DEFAULT_MAP_CONCURRENCY,
+            transient_attempts: DEFAULT_TRANSIENT_ATTEMPTS,
+        }
+    }
 }
 
 /// Manual, NOT derived: `#[derive(Debug)]` would put the plaintext database
@@ -102,6 +165,7 @@ impl std::fmt::Debug for EnvConfig {
             .field("fence_version", &self.fence_version)
             .field("pool_size", &self.pool_size)
             .field("wake_retry", &self.wake_retry)
+            .field("drive", &self.drive)
             .finish()
     }
 }
@@ -154,12 +218,79 @@ pub fn env_config_from(get: impl Fn(&str) -> Option<String>) -> Result<EnvConfig
         None => DEFAULT_POOL_SIZE,
     };
     let wake_retry = wake_retry_from(&non_empty);
+    let drive = drive_policy_from(&non_empty);
     Ok(EnvConfig {
         backend,
         fence_version,
         pool_size,
         wake_retry,
+        drive,
     })
+}
+
+/// AG-5: the `TORII_*` drive overrides on top of [`DrivePolicy::default`]. Each unset (or
+/// blank) variable keeps its default; a set one is parsed loudly, naming the variable and
+/// echoing the value. Durations take `worker serve --interval`'s units (`500ms`, `30s`, `15m`).
+fn drive_policy_from(non_empty: &impl Fn(&str) -> Option<String>) -> Result<DrivePolicy, String> {
+    let mut policy = DrivePolicy::default();
+    if let Some(raw) = non_empty(ENV_WAKE_LEASE) {
+        // `parse_interval` already refuses zero: a zero lease would treat every claim as
+        // abandoned the moment it was taken.
+        let d = crate::cmd::worker::parse_interval(&raw)
+            .map_err(|e| format!("{ENV_WAKE_LEASE}: {e}"))?;
+        policy.wake_lease = chrono::Duration::from_std(d)
+            .map_err(|_| format!("{ENV_WAKE_LEASE}: {:?} is out of range", raw.trim()))?;
+    }
+    if let Some(raw) = non_empty(ENV_MAP_CONCURRENCY) {
+        let s = raw.trim();
+        policy.map_concurrency = match s.parse::<usize>() {
+            Ok(0) => {
+                return Err(format!(
+                    "invalid {ENV_MAP_CONCURRENCY} {s:?}: a Map needs at least one child in \
+                     flight (1 runs them one at a time)"
+                ));
+            }
+            Ok(n) if n > MAX_MAP_CONCURRENCY => {
+                return Err(format!(
+                    "invalid {ENV_MAP_CONCURRENCY} {s:?}: exceeds the sanity ceiling of \
+                     {MAX_MAP_CONCURRENCY} (almost certainly a typo) — every in-flight child \
+                     journals over the {ENV_POOL_SIZE} pool"
+                ));
+            }
+            Ok(n) => n,
+            Err(_) => {
+                return Err(format!(
+                    "invalid {ENV_MAP_CONCURRENCY} {s:?}: {s:?} is not a positive whole number"
+                ));
+            }
+        };
+    }
+    if let Some(raw) = non_empty(ENV_TRANSIENT_ATTEMPTS) {
+        let s = raw.trim();
+        policy.transient_attempts = match s.parse::<u32>() {
+            // The gateway reads 0 as 1; an operator who wrote 0 may have meant "unlimited",
+            // which does not exist — so it is refused rather than silently read as "off".
+            Ok(0) => {
+                return Err(format!(
+                    "invalid {ENV_TRANSIENT_ATTEMPTS} {s:?}: a node needs at least one attempt \
+                     (1 turns retry off; there is no \"unlimited\")"
+                ));
+            }
+            Ok(n) if n > MAX_TRANSIENT_ATTEMPTS => {
+                return Err(format!(
+                    "invalid {ENV_TRANSIENT_ATTEMPTS} {s:?}: exceeds the sanity ceiling of \
+                     {MAX_TRANSIENT_ATTEMPTS} (almost certainly a typo)"
+                ));
+            }
+            Ok(n) => n,
+            Err(_) => {
+                return Err(format!(
+                    "invalid {ENV_TRANSIENT_ATTEMPTS} {s:?}: {s:?} is not a positive whole number"
+                ));
+            }
+        };
+    }
+    Ok(policy)
 }
 
 /// AG-3: the `TORII_WAKE_*` overrides on top of the gateway's [`WakeRetryPolicy`] default.
@@ -466,6 +597,12 @@ pub fn require_wake_retry(env: &EnvConfig) -> Result<WakeRetryPolicy, CliError> 
     env.wake_retry.clone().map_err(CliError::error)
 }
 
+/// AG-5: the heavy tier additionally requires a valid [`DrivePolicy`] (`TORII_WAKE_LEASE`, …,
+/// torii's explicit defaults when unset) — refused loudly, naming the variable and its value.
+pub fn require_drive_policy(env: &EnvConfig) -> Result<DrivePolicy, CliError> {
+    env.drive.clone().map_err(CliError::error)
+}
+
 /// Install a `tracing` subscriber reading `RUST_LOG` (default `info`). Writes to
 /// STDERR specifically — never stdout — so `--json` command output stays
 /// machine-parseable. `try_init` (not `init`) so a double call (e.g. a test, or
@@ -677,6 +814,23 @@ pub struct HeavyDeps {
     pub clock: Arc<dyn Clock>,
     /// AG-18: the run events the scheduler's drives report (torii-core's `RunEventSink`).
     pub events: RunEvents,
+    /// AG-5: the registry handle the executor pins each run from, following the tenant's
+    /// durable config — `worker serve` refreshes it before every tick.
+    pub registry: RegistryReloader,
+    /// The chains this boot's gateway serves. A reloaded registry is checked against them:
+    /// the catalog is read once, at boot, so a chain added there since is unknown here.
+    pub gateway_chains: HashMap<String, kernel::types::config::FallbackChainConfig>,
+}
+
+impl HeavyDeps {
+    /// What `worker serve` ticks: the scheduler, behind a registry refresh (AG-5).
+    pub fn ticker(&self) -> crate::cmd::worker::Reloading<'_> {
+        crate::cmd::worker::Reloading {
+            inner: &self.scheduler,
+            registry: &self.registry,
+            gateway_chains: &self.gateway_chains,
+        }
+    }
 }
 
 pub async fn heavy(
@@ -686,6 +840,7 @@ pub async fn heavy(
 ) -> Result<HeavyDeps, CliError> {
     let fence = require_fence(env)?.to_string();
     let wake_retry = require_wake_retry(env)?;
+    let drive = require_drive_policy(env)?;
     // ONE gateway-config source per backend (TM-8c), decided before any connection: the
     // catalog on Postgres (a file there would be a second source the API never sees), the
     // file on memory (there is no catalog).
@@ -715,9 +870,8 @@ pub async fn heavy(
         RegistryHandle::from_source(light.config_source.as_ref() as &dyn ConfigSource).await?;
     // `snapshot()`, not `.current()` + `.generation()` as two separate lock
     // acquisitions: those release the lock in between, which is exactly the torn
-    // -read shape SP-DATA-2 eliminated. Not reachable today (boot is sequential
-    // and nothing calls `reload()`), but it must not quietly plant one for
-    // whoever wires the deferred reload trigger.
+    // -read shape SP-DATA-2 eliminated — and since AG-5 `worker serve` does `reload()` this
+    // handle (`RegistryReloader`), so a torn pair is a real hazard, not a hypothetical one.
     let (registry, generation) = handle.snapshot();
     let agents_n = registry.agents().count();
     let skills_n = registry.skills().count();
@@ -742,6 +896,7 @@ pub async fn heavy(
     // is captured from the shared, Arc-backed registry BEFORE `build()` consumes the
     // builder, and checked right after.
     let configured_routers: Vec<String> = gw_config.routers.keys().cloned().collect();
+    let gateway_chains = gw_config.chains.clone();
     let builder = gateway::FacadeBuilder::new(gw_config);
     let registered = builder.registry().clone();
     let facade = builder.build().await;
@@ -757,9 +912,14 @@ pub async fn heavy(
     let (sink, events) = RunEventSink::bounded(DEFAULT_EVENT_BUFFER);
     let mut executor = Executor::new(gateway, light.journal.clone(), fence)
         .with_hooks(sink)
+        // AG-5: the global `Map` fan-out ceiling (TORII_MAP_CONCURRENCY, default 8).
+        .with_concurrency(drive.map_concurrency)
+        // AG-5: retry a transient provider failure (TORII_TRANSIENT_ATTEMPTS, default 3 — ON;
+        // see `DEFAULT_TRANSIENT_ATTEMPTS` for why torii overrides the gateway's off).
+        .with_max_transient_attempts(drive.transient_attempts)
         .with_content_store(light.content.clone())
         .with_context_store(context)
-        .with_registry_handle(handle)
+        .with_registry_handle(handle.clone())
         // A production binary defaults SECURE: s2 leaves the redactor off in the
         // library to stay byte-identical, but here it is unconditional and there is
         // deliberately no --no-redact flag.
@@ -830,18 +990,26 @@ pub async fn heavy(
     }
 
     // AG-3: the operator's wake-retry policy (TORII_WAKE_*, gateway defaults when unset).
+    // AG-5: and the lease after which a `waking` claim's worker counts as lost.
     let scheduler = Scheduler::new(
         light.scheduler_store.clone(),
         executor,
         light.journal.clone(),
         clock.clone(),
     )
-    .with_wake_retry(wake_retry);
+    .with_wake_retry(wake_retry)
+    .with_lease(drive.wake_lease);
+    // AG-5: the SAME handle the executor holds (clones share one lock), following the same
+    // store `config push` writes — so a reload is what the next drive pins.
+    let source: Arc<dyn ConfigSource> = light.config_source.clone();
+    let registry = RegistryReloader::new(handle, source);
     Ok(HeavyDeps {
         light,
         scheduler,
         clock,
         events,
+        registry,
+        gateway_chains,
     })
 }
 
@@ -928,6 +1096,7 @@ mod tests {
             fence_version: Some("v1".into()),
             pool_size: DEFAULT_POOL_SIZE,
             wake_retry: Ok(WakeRetryPolicy::default()),
+            drive: Ok(DrivePolicy::default()),
         };
         let err = match heavy(&env, Some(Path::new("/tmp/gateway.json")), None).await {
             Ok(_) => panic!("must refuse a file on the postgres backend"),
@@ -949,6 +1118,7 @@ mod tests {
             fence_version: Some("v1".into()),
             pool_size: DEFAULT_POOL_SIZE,
             wake_retry: Ok(WakeRetryPolicy::default()),
+            drive: Ok(DrivePolicy::default()),
         };
         let err = match heavy(&env, None, None).await {
             Ok(_) => panic!("must require a file on the memory backend"),
@@ -1118,6 +1288,105 @@ mod tests {
         );
     }
 
+    /// AG-5: unset, `TORII_WAKE_LEASE` is an explicit 60s; set, it takes `--interval` units; a
+    /// bad one PARSES as an environment (the light tier never reads it) and is refused by the
+    /// heavy tier, naming the variable and echoing the value.
+    #[test]
+    fn the_wake_lease_is_read_and_a_bad_one_is_refused_by_the_heavy_tier() {
+        let e = env_config_from(getter(&[(ENV_DATABASE_URL, "postgres://h/db")])).expect("ok");
+        assert_eq!(
+            require_drive_policy(&e).expect("default").wake_lease,
+            chrono::Duration::seconds(60)
+        );
+        let e = env_config_from(getter(&[
+            (ENV_DATABASE_URL, "postgres://h/db"),
+            (ENV_WAKE_LEASE, " 10m "),
+        ]))
+        .expect("ok");
+        assert_eq!(
+            require_drive_policy(&e).expect("read").wake_lease,
+            chrono::Duration::minutes(10)
+        );
+        for bad in ["0s", "10", "soon"] {
+            let e = env_config_from(getter(&[
+                (ENV_DATABASE_URL, "postgres://h/db"),
+                (ENV_WAKE_LEASE, bad),
+            ]))
+            .expect("a bad drive policy must not fail the environment the light tier reads");
+            let err = require_drive_policy(&e).expect_err("the heavy tier must refuse");
+            assert_eq!(err.code, crate::errors::EXIT_ERROR);
+            assert!(
+                err.message.contains(ENV_WAKE_LEASE) && err.message.contains(bad),
+                "{}",
+                err.message
+            );
+        }
+    }
+
+    /// AG-5: unset, `TORII_MAP_CONCURRENCY` is an explicit 8; zero, garbage and a typo-sized
+    /// value are refused by the heavy tier only, naming the variable and echoing the value.
+    #[test]
+    fn the_map_concurrency_is_read_and_a_bad_one_is_refused_by_the_heavy_tier() {
+        let e = env_config_from(getter(&[(ENV_DATABASE_URL, "postgres://h/db")])).expect("ok");
+        assert_eq!(
+            require_drive_policy(&e).expect("default").map_concurrency,
+            8
+        );
+        let e = env_config_from(getter(&[
+            (ENV_DATABASE_URL, "postgres://h/db"),
+            (ENV_MAP_CONCURRENCY, " 16 "),
+        ]))
+        .expect("ok");
+        assert_eq!(require_drive_policy(&e).expect("read").map_concurrency, 16);
+        for bad in ["0", "-1", "four", "100000"] {
+            let e = env_config_from(getter(&[
+                (ENV_DATABASE_URL, "postgres://h/db"),
+                (ENV_MAP_CONCURRENCY, bad),
+            ]))
+            .expect("a bad drive policy must not fail the environment the light tier reads");
+            let err = require_drive_policy(&e).expect_err("the heavy tier must refuse");
+            assert_eq!(err.code, crate::errors::EXIT_ERROR);
+            assert!(
+                err.message.contains(ENV_MAP_CONCURRENCY) && err.message.contains(bad),
+                "{}",
+                err.message
+            );
+        }
+    }
+
+    /// AG-5: unset, `TORII_TRANSIENT_ATTEMPTS` is 3 (retry ON); `1` is off and accepted; zero,
+    /// garbage and a typo-sized value are refused by the heavy tier only, naming the variable.
+    #[test]
+    fn the_transient_attempts_are_read_and_a_bad_one_is_refused_by_the_heavy_tier() {
+        let e = env_config_from(getter(&[(ENV_DATABASE_URL, "postgres://h/db")])).expect("ok");
+        assert_eq!(
+            require_drive_policy(&e)
+                .expect("default")
+                .transient_attempts,
+            3
+        );
+        let e = env_config_from(getter(&[
+            (ENV_DATABASE_URL, "postgres://h/db"),
+            (ENV_TRANSIENT_ATTEMPTS, " 1 "),
+        ]))
+        .expect("ok");
+        assert_eq!(require_drive_policy(&e).expect("off").transient_attempts, 1);
+        for bad in ["0", "-1", "three", "300"] {
+            let e = env_config_from(getter(&[
+                (ENV_DATABASE_URL, "postgres://h/db"),
+                (ENV_TRANSIENT_ATTEMPTS, bad),
+            ]))
+            .expect("a bad drive policy must not fail the environment the light tier reads");
+            let err = require_drive_policy(&e).expect_err("the heavy tier must refuse");
+            assert_eq!(err.code, crate::errors::EXIT_ERROR);
+            assert!(
+                err.message.contains(ENV_TRANSIENT_ATTEMPTS) && err.message.contains(bad),
+                "{}",
+                err.message
+            );
+        }
+    }
+
     /// The heavy tier's refusal of a bad `TORII_WAKE_*` set: the environment itself PARSES
     /// (the light tier never reads the policy), and [`require_wake_retry`] is what refuses.
     fn wake_err(pairs: &[(&str, &str)]) -> CliError {
@@ -1201,6 +1470,7 @@ mod tests {
                 max_attempts: 1,
                 ..WakeRetryPolicy::default()
             }),
+            drive: Ok(DrivePolicy::default()),
         };
         let d = match heavy(&env, Some(&gw), None).await {
             Ok(d) => d,
@@ -1259,6 +1529,26 @@ mod tests {
         );
     }
 
+    /// AG-5: a bad drive policy is refused where it is USED — `heavy()` will not boot a driver
+    /// on it, naming the variable.
+    #[tokio::test]
+    async fn heavy_refuses_a_bad_drive_policy() {
+        for (var, bad) in [
+            (ENV_WAKE_LEASE, "0s"),
+            (ENV_MAP_CONCURRENCY, "0"),
+            (ENV_TRANSIENT_ATTEMPTS, "0"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (env, gw) = memory_env(dir.path(), IDLE_GATEWAY, &[(var, bad)]);
+            let err = match heavy(&env, Some(&gw), None).await {
+                Ok(_) => panic!("{var}={bad} must not boot a driver"),
+                Err(e) => e,
+            };
+            assert_eq!(err.code, crate::errors::EXIT_ERROR);
+            assert!(err.message.contains(var), "{}", err.message);
+        }
+    }
+
     /// A memory-backend `EnvConfig` and gateway-config file `heavy()` boots on with no
     /// database and no model: one agent bound to chain `c`, which the file defines.
     fn memory_heavy_fixture(dir: &Path) -> (EnvConfig, PathBuf) {
@@ -1283,8 +1573,285 @@ mod tests {
             fence_version: Some("v1".into()),
             pool_size: DEFAULT_POOL_SIZE,
             wake_retry: Ok(WakeRetryPolicy::default()),
+            drive: Ok(DrivePolicy::default()),
         };
         (env, gw)
+    }
+
+    /// AG-5: a memory-backend boot whose environment goes through [`env_config_from`] — the
+    /// real parse path — so a test proves a `TORII_*` variable reaches what `heavy()` builds,
+    /// not just that it parses. `gateway_json` is the `--gateway-config` file's contents; the
+    /// registry is [`memory_heavy_fixture`]'s one agent on chain `c`.
+    fn memory_env(dir: &Path, gateway_json: &str, extra: &[(&str, &str)]) -> (EnvConfig, PathBuf) {
+        let (_, gw) = memory_heavy_fixture(dir);
+        std::fs::write(&gw, gateway_json).unwrap();
+        let reg = dir.join("registry").display().to_string();
+        let mut pairs: Vec<(String, String)> = vec![
+            (ENV_BACKEND.into(), "memory".into()),
+            (ENV_REGISTRY_DIR.into(), reg),
+            (ENV_FENCE_VERSION.into(), "v1".into()),
+        ];
+        pairs.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        let env = env_config_from(|k| {
+            pairs
+                .iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.clone())
+        })
+        .expect("the environment parses");
+        (env, gw)
+    }
+
+    /// The gateway config [`memory_heavy_fixture`] writes: an ollama router nobody calls, and
+    /// chain `c` with no models.
+    const IDLE_GATEWAY: &str = r#"{"routers":{"ollama":{"url":"http://127.0.0.1:11434"}},
+        "chains":{"c":{"id":"c","capability":"text_chat","models":[],"fallback_triggers":[]}}}"#;
+
+    async fn boot(env: &EnvConfig, gw: &Path) -> HeavyDeps {
+        match heavy(env, Some(gw), None).await {
+            Ok(d) => d,
+            Err(e) => panic!("heavy boots on the memory backend: {}", e.message),
+        }
+    }
+
+    /// A run whose worker was lost `age` ago: its `waking` claim is that old.
+    async fn abandoned_claim(d: &HeavyDeps, age: chrono::Duration) -> RunId {
+        let run = RunId(uuid::Uuid::new_v4());
+        d.light
+            .scheduler_store
+            .enqueue(run, &signal_graph(), chrono::Utc::now() - age)
+            .await
+            .expect("enqueue");
+        run
+    }
+
+    /// AG-5: `TORII_WAKE_LEASE` reaches the `Scheduler` — observed through `tick`, since the
+    /// scheduler does not expose it. A claim abandoned 5 minutes ago is stale under the 60s
+    /// default (reclaimed and driven) but still held under a 10-minute lease (left alone).
+    #[tokio::test]
+    async fn heavy_wires_the_wake_lease_into_the_scheduler() {
+        let dir = tempfile::tempdir().unwrap();
+        let (env, gw) = memory_env(dir.path(), IDLE_GATEWAY, &[]);
+        let d = boot(&env, &gw).await;
+        abandoned_claim(&d, chrono::Duration::minutes(5)).await;
+        assert_eq!(
+            d.scheduler.tick().await.expect("tick"),
+            1,
+            "precondition: under the default lease a 5-minute-old claim is stale"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let (env, gw) = memory_env(dir.path(), IDLE_GATEWAY, &[("TORII_WAKE_LEASE", "10m")]);
+        let d = boot(&env, &gw).await;
+        abandoned_claim(&d, chrono::Duration::minutes(5)).await;
+        assert_eq!(
+            d.scheduler.tick().await.expect("tick"),
+            0,
+            "TORII_WAKE_LEASE=10m must reach the scheduler: a 5-minute-old claim is still held"
+        );
+    }
+
+    /// A fake model provider speaking the OpenAI wire (`/v1/chat/completions`, which the
+    /// gateway's `ollama` adapter calls). Every call is held for `hold`, then answered with
+    /// `status` — a canned completion on 200, an opaque provider error otherwise. It counts
+    /// calls and the most it ever had in flight at once.
+    struct FakeProvider {
+        url: String,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        max_in_flight: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl FakeProvider {
+        async fn start(status: u16, hold: std::time::Duration) -> Self {
+            use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+            #[derive(Clone)]
+            struct St {
+                status: u16,
+                hold: std::time::Duration,
+                calls: Arc<AtomicUsize>,
+                in_flight: Arc<AtomicUsize>,
+                max_in_flight: Arc<AtomicUsize>,
+            }
+            async fn chat(
+                axum::extract::State(st): axum::extract::State<St>,
+            ) -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+                st.calls.fetch_add(1, SeqCst);
+                let now = st.in_flight.fetch_add(1, SeqCst) + 1;
+                st.max_in_flight.fetch_max(now, SeqCst);
+                tokio::time::sleep(st.hold).await;
+                st.in_flight.fetch_sub(1, SeqCst);
+                let code = axum::http::StatusCode::from_u16(st.status).unwrap();
+                if !code.is_success() {
+                    let body = serde_json::json!({"error": {"message": "upstream blip"}});
+                    return (code, axum::Json(body));
+                }
+                let body = serde_json::json!({
+                    "id": "fake", "object": "chat.completion", "created": 0, "model": "m",
+                    "choices": [{"index": 0, "finish_reason": "stop",
+                                 "message": {"role": "assistant", "content": "ok"}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+                });
+                (code, axum::Json(body))
+            }
+            let st = St {
+                status,
+                hold,
+                calls: Arc::new(AtomicUsize::new(0)),
+                in_flight: Arc::new(AtomicUsize::new(0)),
+                max_in_flight: Arc::new(AtomicUsize::new(0)),
+            };
+            let (calls, max_in_flight) = (st.calls.clone(), st.max_in_flight.clone());
+            let app = axum::Router::new()
+                .route("/v1/chat/completions", axum::routing::post(chat))
+                .with_state(st);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            Self {
+                url,
+                calls,
+                max_in_flight,
+            }
+        }
+
+        /// A gateway config whose chain `c` is one model served by this provider.
+        fn gateway_json(&self) -> String {
+            serde_json::json!({
+                "routers": {"ollama": {"url": self.url}},
+                "models": {"m": {"id": "m", "provider": "ollama", "capabilities": ["text_chat"],
+                                 "context_window": 8192, "max_output_tokens": 1024}},
+                "chains": {"c": {"id": "c", "capability": "text_chat",
+                                 "models": [{"model": "m", "router": "ollama", "priority": 1}],
+                                 "fallback_triggers": []}}
+            })
+            .to_string()
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn max_in_flight(&self) -> usize {
+            self.max_in_flight.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    fn graph_of(id: &str, kind: orchestrator_core::NodeKind) -> orchestrator_core::Graph {
+        orchestrator_core::Graph {
+            nodes: vec![orchestrator_core::Node {
+                id: orchestrator_core::NodeId(id.into()),
+                kind,
+                deps: vec![],
+            }],
+        }
+    }
+
+    /// A `Map` of `items` model calls on chain `c`, asking for all of them at once.
+    fn wide_map(items: usize) -> orchestrator_core::Graph {
+        graph_of(
+            "fan",
+            orchestrator_core::NodeKind::Map {
+                body: orchestrator_core::MapBody::ModelCall { chain: "c".into() },
+                over: (0..items)
+                    .map(|i| serde_json::json!({"prompt": format!("item {i}")}))
+                    .collect(),
+                concurrency: items,
+                aggregation: orchestrator_core::Aggregation::FailFast,
+            },
+        )
+    }
+
+    /// `run submit`'s inline drive. Its `Outcome` is not returned: a run that drove to `failed`
+    /// is an `Err` there, and every caller asserts on the run's recorded status instead.
+    async fn submit_graph(d: &HeavyDeps, graph: orchestrator_core::Graph) -> RunId {
+        let run = RunId(uuid::Uuid::new_v4());
+        let _ = crate::cmd::run::submit(
+            &d.scheduler,
+            run,
+            graph,
+            orchestrator_core::RunBudget::default(),
+            || {},
+        )
+        .await;
+        run
+    }
+
+    /// AG-5: `TORII_MAP_CONCURRENCY` reaches the executor — observed at the provider. A `Map`
+    /// asking for 6 calls at once gets at most 2 in flight under a cap of 2.
+    #[tokio::test]
+    async fn heavy_wires_the_map_concurrency_cap_into_the_executor() {
+        let provider = FakeProvider::start(200, std::time::Duration::from_millis(150)).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (env, gw) = memory_env(
+            dir.path(),
+            &provider.gateway_json(),
+            &[("TORII_MAP_CONCURRENCY", "2")],
+        );
+        let d = boot(&env, &gw).await;
+        let run = submit_graph(&d, wide_map(6)).await;
+        assert_eq!(
+            d.scheduler.status(run).await.unwrap().expect("row").status,
+            orchestrator_core::RunStatus::Completed,
+            "precondition: every call was answered"
+        );
+        assert_eq!(provider.calls(), 6, "precondition: one call per item");
+        assert_eq!(
+            provider.max_in_flight(),
+            2,
+            "TORII_MAP_CONCURRENCY=2 must cap the fan-out at the provider"
+        );
+    }
+
+    /// One model call on chain `c`.
+    fn model_call() -> orchestrator_core::Graph {
+        graph_of(
+            "ask",
+            orchestrator_core::NodeKind::ModelCall {
+                chain: "c".into(),
+                payload: serde_json::json!({"prompt": "hello"}),
+            },
+        )
+    }
+
+    /// AG-5: transient-failure retry is ON by default in torii (3 attempts) — one provider 500
+    /// pauses the run on a backoff instead of failing it — and `TORII_TRANSIENT_ATTEMPTS=1`
+    /// turns it off, so the same 500 is terminal.
+    #[tokio::test]
+    async fn heavy_retries_a_transient_provider_failure_by_default() {
+        let provider = FakeProvider::start(500, std::time::Duration::ZERO).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (env, gw) = memory_env(dir.path(), &provider.gateway_json(), &[]);
+        let d = boot(&env, &gw).await;
+        let run = submit_graph(&d, model_call()).await;
+        let st = d.scheduler.status(run).await.unwrap().expect("row");
+        assert_eq!(provider.calls(), 1, "precondition: the provider was called");
+        assert_eq!(
+            st.status,
+            orchestrator_core::RunStatus::Paused,
+            "by default one transient 500 must pause for a retry, not fail the run: {:?}",
+            st.reason
+        );
+        assert!(
+            st.reason
+                .as_deref()
+                .is_some_and(|r| r.contains("attempt 1 of 3")),
+            "{:?}",
+            st.reason
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let (env, gw) = memory_env(
+            dir.path(),
+            &provider.gateway_json(),
+            &[("TORII_TRANSIENT_ATTEMPTS", "1")],
+        );
+        let d = boot(&env, &gw).await;
+        let run = submit_graph(&d, model_call()).await;
+        assert_eq!(
+            d.scheduler.status(run).await.unwrap().expect("row").status,
+            orchestrator_core::RunStatus::Failed,
+            "TORII_TRANSIENT_ATTEMPTS=1 turns retry off"
+        );
     }
 
     fn signal_graph() -> orchestrator_core::Graph {
@@ -1738,6 +2305,7 @@ mod tests {
             fence_version: Some(fence.to_string()),
             pool_size: DEFAULT_POOL_SIZE,
             wake_retry: Ok(WakeRetryPolicy::default()),
+            drive: Ok(DrivePolicy::default()),
         }
     }
 
@@ -1829,6 +2397,94 @@ mod tests {
         assert!(
             deps.scheduler.executor().has_planner_selector(),
             "heavy() built an executor with NO planner selector",
+        );
+    }
+
+    /// **AG-5 — a running worker picks up a `config push` without restarting.** The worker
+    /// boots at generation 1; an operator pushes generation 2 with the real `config push`;
+    /// `run submit` (a fresh process, so booted at generation 2) submits a run that waits on a
+    /// signal; the operator answers it; and the SAME worker drives it. A worker frozen at
+    /// generation 1 refuses that run at the config fence and files it `failed`.
+    #[cfg_attr(
+        not(have_database_url),
+        ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+    )]
+    #[tokio::test]
+    async fn a_running_worker_picks_up_a_config_push_without_restarting() {
+        let Some(url) = crate::test_guard::db_url() else {
+            return;
+        };
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        t.stores()
+            .config
+            .store_and_bump(&probe_agent("torii-reload-before", "chat"))
+            .await
+            .expect("seed generation 1");
+        let env = tenant_env(&url, t.id, "torii-reload-probe-fence");
+        let worker = heavy(&env, None, None).await.expect("the worker boots");
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("agents")).unwrap();
+        std::fs::write(
+            dir.path().join("agents/after.md"),
+            "---\nname: torii-reload-after\narea: test\nkind: test\nchain: chat\ntools: []\nskills: []\n---\nAfter.\n",
+        )
+        .unwrap();
+        let operator = light(&env).await.expect("light boots");
+        let out = crate::cmd::config::push(
+            operator.config_source.as_ref(),
+            operator.scheduler_store.as_ref(),
+            dir.path(),
+            operator.gateway_config.as_deref(),
+            true,
+            &mut |_| true,
+        )
+        .await
+        .expect("push");
+        assert_eq!(out.code, crate::errors::EXIT_OK, "{}", out.text);
+
+        let submitter = heavy(&env, None, None).await.expect("run submit boots");
+        let run = RunId(uuid::Uuid::new_v4());
+        crate::cmd::run::submit(
+            &submitter.scheduler,
+            run,
+            signal_graph(),
+            orchestrator_core::RunBudget::default(),
+            || {},
+        )
+        .await
+        .expect("submit pauses on the signal");
+        drop(submitter);
+        let out = crate::cmd::run::signal(
+            operator.scheduler_store.as_ref(),
+            operator.journal.as_ref(),
+            run,
+            orchestrator_core::NodeId("gate".into()),
+            serde_json::json!({"decision": "approved"}),
+            chrono::Utc::now(),
+        )
+        .await
+        .expect("signal");
+        assert_eq!(out.code, crate::errors::EXIT_OK, "{}", out.text);
+
+        let (_tx, shutdown) = tokio::sync::watch::channel(0u64);
+        crate::cmd::worker::serve(
+            &worker.ticker(),
+            crate::cmd::worker::ServeOpts {
+                interval: std::time::Duration::from_millis(10),
+                once: true,
+            },
+            shutdown,
+        )
+        .await
+        .expect("serve --once");
+        let st = worker.scheduler.status(run).await.unwrap().expect("row");
+        drop(t);
+        assert_eq!(
+            st.status,
+            orchestrator_core::RunStatus::Completed,
+            "the worker must drive a run submitted under the pushed generation: {:?}",
+            st.reason
         );
     }
 

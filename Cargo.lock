@@ -7712,6 +7712,7 @@ name = "torii-cli"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "chrono",
  "clap",
  "sensei-gateway",

@@ -445,7 +445,7 @@ async fn admit_takes_the_headroom_and_an_explicit_limit_may_only_lower_it() {
         ),
         "{err}"
     );
-    assert!(err.to_string().contains("$4.000000"), "{err}");
+    assert!(err.to_string().contains("headroom of $4.00 "), "{err}");
     let written: i64 = sqlx::query_scalar(
         "select count(*) from runs.run_charges where tenant_id = $1 and run_id = $2",
     )

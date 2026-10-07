@@ -152,10 +152,222 @@ impl RunEventSink {
     pub fn dropped(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
+
+    /// Hand one event to the consumer WITHOUT waiting for it. A full or closed channel drops
+    /// the event; the warning is rate-limited to the 1st, 2nd, 4th, 8th… drop so a stalled
+    /// consumer cannot turn the drive into a logging loop.
+    fn emit(&self, run: RunId, kind: RunEventKind) {
+        let reason = match self.tx.try_send(RunEvent { run: run.0, kind }) {
+            Ok(()) => return,
+            Err(mpsc::error::TrySendError::Full(_)) => "the consumer is behind (channel full)",
+            Err(mpsc::error::TrySendError::Closed(_)) => "no consumer (channel closed)",
+        };
+        let dropped = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+        if dropped.is_power_of_two() {
+            tracing::warn!(dropped, run = %run.0, "run event dropped: {reason}");
+        }
+    }
 }
 
 #[async_trait::async_trait]
-impl OrchestratorHooks for RunEventSink {}
+impl OrchestratorHooks for RunEventSink {
+    async fn on_signal_awaited(&self, run: RunId, node: &NodeId, deadline: Option<DateTime<Utc>>) {
+        self.emit(
+            run,
+            RunEventKind::SignalAwaited {
+                node: node.0.clone(),
+                deadline,
+            },
+        );
+    }
+
+    async fn on_signal_received(&self, run: RunId, node: &NodeId, payload: &serde_json::Value) {
+        self.emit(
+            run,
+            RunEventKind::SignalReceived {
+                node: node.0.clone(),
+                payload: payload.clone(),
+            },
+        );
+    }
+
+    async fn on_gate_awaited(
+        &self,
+        run: RunId,
+        node: &NodeId,
+        deadline: Option<DateTime<Utc>>,
+        options: &[GateOption],
+    ) {
+        self.emit(
+            run,
+            RunEventKind::GateAwaited {
+                node: node.0.clone(),
+                deadline,
+                options: options
+                    .iter()
+                    .map(|o| GateChoice {
+                        name: o.name.clone(),
+                        fails: matches!(o.outcome, GateOutcome::Fail),
+                    })
+                    .collect(),
+            },
+        );
+    }
+
+    async fn on_gate_decided(
+        &self,
+        run: RunId,
+        node: &NodeId,
+        option: &str,
+        actor: &str,
+        note: Option<&str>,
+    ) {
+        self.emit(
+            run,
+            RunEventKind::GateDecided {
+                node: node.0.clone(),
+                option: option.to_string(),
+                actor: actor.to_string(),
+                note: note.map(str::to_string),
+            },
+        );
+    }
+
+    async fn on_agent_awaited(
+        &self,
+        run: RunId,
+        node: &NodeId,
+        deadline: Option<DateTime<Utc>>,
+        prompt: &str,
+    ) {
+        self.emit(
+            run,
+            RunEventKind::AgentAwaited {
+                node: node.0.clone(),
+                deadline,
+                prompt: prompt.to_string(),
+            },
+        );
+    }
+
+    async fn on_agent_answered(&self, run: RunId, node: &NodeId, text: &str, actor: &str) {
+        self.emit(
+            run,
+            RunEventKind::AgentAnswered {
+                node: node.0.clone(),
+                text: text.to_string(),
+                actor: actor.to_string(),
+            },
+        );
+    }
+
+    async fn on_loop_gate_awaited(
+        &self,
+        run: RunId,
+        node: &NodeId,
+        deadline: Option<DateTime<Utc>>,
+        prompt: &str,
+        menu: &[LoopGateOption],
+    ) {
+        self.emit(
+            run,
+            RunEventKind::LoopGateAwaited {
+                node: node.0.clone(),
+                deadline,
+                prompt: prompt.to_string(),
+                menu: menu
+                    .iter()
+                    .map(|o| LoopGateChoice {
+                        name: o.name.clone(),
+                        stops: o.stops,
+                    })
+                    .collect(),
+            },
+        );
+    }
+
+    async fn on_loop_gate_decided(&self, run: RunId, node: &NodeId, option: &str, actor: &str) {
+        self.emit(
+            run,
+            RunEventKind::LoopGateDecided {
+                node: node.0.clone(),
+                option: option.to_string(),
+                actor: actor.to_string(),
+            },
+        );
+    }
+
+    async fn on_loop_gate_settled(&self, run: RunId, node: &NodeId, option: &str) {
+        self.emit(
+            run,
+            RunEventKind::LoopGateSettled {
+                node: node.0.clone(),
+                option: option.to_string(),
+            },
+        );
+    }
+
+    async fn on_tool_confirm_awaited(
+        &self,
+        run: RunId,
+        node: &NodeId,
+        effect_id: &EffectId,
+        tool: &str,
+        arguments: &str,
+        deadline: Option<DateTime<Utc>>,
+    ) {
+        self.emit(
+            run,
+            RunEventKind::ToolConfirmAwaited {
+                node: node.0.clone(),
+                call: effect_id.0.clone(),
+                tool: tool.to_string(),
+                arguments: arguments.to_string(),
+                deadline,
+            },
+        );
+    }
+
+    async fn on_tool_confirm_decided(
+        &self,
+        run: RunId,
+        node: &NodeId,
+        effect_id: &EffectId,
+        approved: bool,
+        actor: &str,
+        note: Option<&str>,
+    ) {
+        self.emit(
+            run,
+            RunEventKind::ToolConfirmDecided {
+                node: node.0.clone(),
+                call: effect_id.0.clone(),
+                approved,
+                actor: actor.to_string(),
+                note: note.map(str::to_string),
+            },
+        );
+    }
+
+    async fn on_agent_escalated(
+        &self,
+        run: RunId,
+        node: &NodeId,
+        from: &str,
+        to: &str,
+        deadline: Option<DateTime<Utc>>,
+    ) {
+        self.emit(
+            run,
+            RunEventKind::AgentEscalated {
+                node: node.0.clone(),
+                from: from.to_string(),
+                to: to.to_string(),
+                deadline,
+            },
+        );
+    }
+}
 
 #[cfg(test)]
 mod tests {

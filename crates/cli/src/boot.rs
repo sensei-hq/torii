@@ -71,9 +71,23 @@ pub enum Backend {
     },
     /// Every store in this process's memory — no database at all. For development and
     /// tests: nothing survives the process, so a run submitted here can be observed or
-    /// woken only by the same process. The registry is seeded at boot from
+    /// woken only by the same process — which the `torii` binary never is: its `run submit`
+    /// exits once the drive returns, so a pause it reaches is one nothing can resume, and it
+    /// exits 2 on one ([`Backend::store_lifetime`]). The registry is seeded at boot from
     /// `TORII_REGISTRY_DIR` (the same `agents/ skills/ tools/` layout `config push` reads).
     Memory { registry_dir: Option<PathBuf> },
+}
+
+impl Backend {
+    /// Whether a run this backend stores outlives the process that drove it — what a `run
+    /// submit` that pauses exits (see [`crate::cmd::run::StoreLifetime`]): on memory nothing
+    /// can resume any pause, so none is reported as success.
+    pub fn store_lifetime(&self) -> crate::cmd::run::StoreLifetime {
+        match self {
+            Backend::Postgres { .. } => crate::cmd::run::StoreLifetime::Durable,
+            Backend::Memory { .. } => crate::cmd::run::StoreLifetime::Process,
+        }
+    }
 }
 
 /// The validated environment. `fence_version` and `wake_retry` are only required by the heavy
@@ -136,9 +150,10 @@ pub const DEFAULT_TRANSIENT_ATTEMPTS: u32 = 3;
 /// Transient-failure attempts when `TORII_TRANSIENT_ATTEMPTS` is unset on the MEMORY backend:
 /// retry off. A retry is a durable pause woken later by a worker, and on memory nothing outlives
 /// the process — no later `worker serve` can see the run — so a pause there is one no process
-/// can finish, and `run submit` would print `paused` and exit 0 on a model call that never
-/// succeeded. Off, the same provider 500 fails the run and `run submit` exits 1, which is what a
-/// CI step gating on the exit code needs. An explicit `TORII_TRANSIENT_ATTEMPTS` still applies.
+/// can finish: `run submit` would print `paused` and exit 2 ([`Backend::store_lifetime`]). Off,
+/// the same provider 500 fails the run and `run submit` exits 1 naming the failure — the more
+/// useful answer. An explicit `TORII_TRANSIENT_ATTEMPTS` still applies, and a retry it causes is
+/// a pause like any other there: exit 2.
 pub const DEFAULT_MEMORY_TRANSIENT_ATTEMPTS: u32 = 1;
 
 /// A typo ceiling on `TORII_TRANSIENT_ATTEMPTS`. The gateway's backoff between attempts is 2s,
@@ -1829,6 +1844,7 @@ mod tests {
             run,
             graph,
             orchestrator_core::RunBudget::default(),
+            crate::cmd::run::StoreLifetime::Process,
             || {},
         )
         .await;
@@ -2024,6 +2040,7 @@ mod tests {
             run,
             signal_graph(),
             orchestrator_core::RunBudget::default(),
+            env.backend.store_lifetime(),
             || {},
         )
         .await
@@ -2056,6 +2073,7 @@ mod tests {
             run,
             signal_graph(),
             orchestrator_core::RunBudget::default(),
+            env.backend.store_lifetime(),
             || {},
         )
         .await
@@ -2586,6 +2604,7 @@ mod tests {
             run,
             signal_graph(),
             orchestrator_core::RunBudget::default(),
+            env.backend.store_lifetime(),
             || {},
         )
         .await

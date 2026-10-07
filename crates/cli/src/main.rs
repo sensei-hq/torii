@@ -24,7 +24,8 @@ use torii::{boot, cmd};
                   Exit codes: 0 ok, 1 error (including a submitted run that actually executed \
                   and failed), 2 not-found, precondition-not-met, or a result that is complete \
                   enough to print but not the unqualified success you asked for (`run \
-                  list-paused` with a run whose journal could not be folded). Exit 1 puts a \
+                  list-paused` with a run whose journal could not be folded; a `run submit` \
+                  that pauses on TORII_BACKEND=memory, where nothing can resume it). Exit 1 puts a \
                   message on stderr and nothing on stdout; exit 2 always still prints its \
                   result. Note exit 2 is also clap's own usage-error code (a missing \
                   subcommand, an unknown flag), so it is not unique to a business-logic \
@@ -56,7 +57,9 @@ enum Command {
 
 #[derive(Subcommand)]
 enum RunAction {
-    /// Submit a graph and drive it (blocks until it pauses or finishes)
+    /// Submit a graph and drive it (blocks until it pauses or finishes). A pause exits 0 on
+    /// Postgres, where a worker or an answer finishes it, and 2 on TORII_BACKEND=memory, where
+    /// nothing can resume it
     Submit {
         #[arg(long)]
         graph: PathBuf,
@@ -744,9 +747,16 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 // must still be able to find the run. `submit` calls this AFTER its
                 // duplicate pre-check, so a rejected submit no longer announces an
                 // effect that never happened.
-                let out = cmd::run::submit(&scheduler, run, g, budget, || {
-                    println!("submitted: {}", run.0)
-                })
+                // A pause exits 0 only where another process can resume it (AG-5): never on
+                // the memory backend, whose stores die with this process.
+                let out = cmd::run::submit(
+                    &scheduler,
+                    run,
+                    g,
+                    budget,
+                    env.backend.store_lifetime(),
+                    || println!("submitted: {}", run.0),
+                )
                 .await;
                 // Closes the event channel, so the log drains everything the drive reported.
                 drop(scheduler);

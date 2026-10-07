@@ -744,6 +744,102 @@ pub(crate) fn escalations(
     current
 }
 
+/// AG-15: where one confirm-before-run tool call stands, folded from the journal.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ToolConfirmState {
+    /// Asked, and nothing has settled it: a decision appended now WILL be read.
+    Pending,
+    /// A human already decided it (LAST decision, as the executor folds it).
+    Decided { approved: bool, actor: String },
+    /// The executor already recorded the call's outcome — an expiry's `not_confirmed`, or
+    /// the approved tool's own result. Nothing re-reads a decision for it.
+    Recorded,
+    /// The node it belongs to terminated (or the whole run completed) without settling it.
+    NodeTerminal(SignalState),
+}
+
+/// One `ToolConfirmAwaited` as the journal recorded it (FIRST record wins, like every
+/// waiting record), with its folded [`ToolConfirmState`].
+#[derive(Debug, Clone)]
+pub(crate) struct ToolConfirmAsk {
+    pub node: NodeId,
+    pub effect_id: orchestrator_core::EffectId,
+    pub tool: String,
+    pub arguments: String,
+    pub deadline: Option<DateTime<Utc>>,
+    pub state: ToolConfirmState,
+}
+
+/// AG-15: every confirm-before-run call this run has asked about, in journal order, each
+/// with where it stands. ONE fold, shared by the listing (which shows the `Pending` ones) and
+/// by `run tool approve|reject` (which refuses every other state, naming it).
+pub(crate) fn tool_confirm_asks(events: &[(Seq, JournalEvent)]) -> Vec<ToolConfirmAsk> {
+    use orchestrator_core::EffectId;
+    let mut asks: Vec<ToolConfirmAsk> = Vec::new();
+    let mut decided: HashMap<EffectId, (bool, String)> = HashMap::new();
+    let mut recorded: std::collections::HashSet<EffectId> = Default::default();
+    let mut terminal: HashMap<NodeId, SignalState> = HashMap::new();
+    let mut run_completed = false;
+    for (_, e) in events {
+        match e {
+            JournalEvent::ToolConfirmAwaited {
+                node,
+                effect_id,
+                tool,
+                arguments,
+                deadline,
+                ..
+            } if !asks.iter().any(|a| &a.effect_id == effect_id) => asks.push(ToolConfirmAsk {
+                node: node.clone(),
+                effect_id: effect_id.clone(),
+                tool: tool.clone(),
+                arguments: arguments.clone(),
+                deadline: *deadline,
+                state: ToolConfirmState::Pending,
+            }),
+            JournalEvent::ToolConfirmDecided {
+                effect_id,
+                approved,
+                actor,
+                ..
+            } => {
+                decided.insert(effect_id.clone(), (*approved, actor.clone()));
+            }
+            JournalEvent::EffectRecorded { effect_id, .. } => {
+                recorded.insert(effect_id.clone());
+            }
+            JournalEvent::NodeCompleted { node } => {
+                terminal.insert(node.clone(), SignalState::Completed);
+            }
+            JournalEvent::NodeFailed { node, .. } => {
+                terminal.insert(node.clone(), SignalState::Failed);
+            }
+            JournalEvent::NodeSkipped { node } => {
+                terminal.insert(node.clone(), SignalState::Skipped);
+            }
+            JournalEvent::RunCompleted => run_completed = true,
+            _ => {}
+        }
+    }
+    for a in &mut asks {
+        a.state = if recorded.contains(&a.effect_id) {
+            ToolConfirmState::Recorded
+        } else if let Some((approved, actor)) = decided.get(&a.effect_id) {
+            ToolConfirmState::Decided {
+                approved: *approved,
+                actor: actor.clone(),
+            }
+        } else if let Some(t) = terminal.get(&a.node) {
+            ToolConfirmState::NodeTerminal(t.clone())
+        } else if run_completed {
+            ToolConfirmState::NodeTerminal(SignalState::Completed)
+        } else {
+            ToolConfirmState::Pending
+        };
+    }
+    asks
+}
+
 /// One node's [`SignalState`], folded from `events`.
 pub fn signal_state(events: &[(Seq, JournalEvent)], node: &NodeId) -> SignalState {
     signal_state_at(events, node).state
@@ -899,11 +995,32 @@ fn awaiting_nodes(events: &[(Seq, JournalEvent)]) -> Vec<render::AwaitingNode> {
                     deadline,
                     options,
                     question,
+                    tool_confirm: None,
                 })
             }
             _ => None,
         })
         .collect();
+    // AG-15: each pending confirm-before-run CALL is its own row — keyed by the call, not the
+    // node, because one agent node can ask about several. The arguments are what the human
+    // approves, so they are shown, REDACTED here once for every sink (as a question is).
+    out.extend(
+        tool_confirm_asks(events)
+            .into_iter()
+            .filter(|a| a.state == ToolConfirmState::Pending)
+            .map(|a| render::AwaitingNode {
+                node: a.node,
+                deadline: a.deadline,
+                options: None,
+                question: None,
+                escalated_to: None,
+                tool_confirm: Some(render::ToolConfirmCall {
+                    effect_id: a.effect_id.0,
+                    tool: a.tool,
+                    arguments: render::redact_arguments(&a.arguments),
+                }),
+            }),
+    );
     out.sort_by(|a, b| a.node.0.cmp(&b.node.0));
     out
 }

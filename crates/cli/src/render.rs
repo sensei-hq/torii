@@ -256,12 +256,31 @@ fn visible_len(redacted: &str) -> usize {
 /// what this sentence used to describe), and the reader here is the trusted human being
 /// asked to do the work.
 pub(crate) fn redact_question(s: &str) -> String {
+    redact_withholding(s, WITHHELD_QUESTION)
+}
+
+/// AG-15: scrub a confirm-before-run call's ARGUMENTS for display — the same narrowed
+/// transform a question takes, and for the same reason: they are what the human is asked to
+/// approve, so withholding them on an ordinary-prose false positive would leave the operator
+/// approving a call they cannot see. The executor already redacted them before the
+/// `ToolConfirmAwaited` append; this is the second pass a question also gets.
+pub(crate) fn redact_arguments(s: &str) -> String {
+    redact_withholding(s, WITHHELD_ARGUMENTS)
+}
+
+/// [`redact_question`]'s transform with the literal that replaces a withheld value — each
+/// caller names the field it withheld, so an operator is never told about the wrong one.
+fn redact_withholding(s: &str, withheld: &str) -> String {
     let redacted = redact_once(s);
     if visible_len(&redact_once(&strip_control(s))) < visible_len(&redacted) {
-        return WITHHELD_QUESTION.to_string();
+        return withheld.to_string();
     }
     redacted
 }
+
+/// What withheld call ARGUMENTS render as — see [`WITHHELD_QUESTION`] for why each field
+/// names itself.
+const WITHHELD_ARGUMENTS: &str = "[REDACTED: arguments withheld]";
 
 /// Rendered reasons are capped so one unbounded provider message can't wreck the
 /// table's column alignment or scroll an operator's terminal off-screen.
@@ -457,6 +476,39 @@ pub struct AwaitingNode {
     /// Skipped when absent, for the byte-identity reason the fields above record.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub escalated_to: Option<String>,
+    /// AG-15: `Some` ⇒ this row is not a node-level ask at all but ONE confirm-before-run
+    /// tool CALL of an agent node, waiting for `torii run tool approve|reject <run> --call
+    /// <effect_id>`. One node can have several, each its own row; `options` and `question`
+    /// are then both `None`, so a script must test this key FIRST — the "neither ⇒
+    /// `run signal`" rule above predates it, and `run signal` refuses such a node.
+    ///
+    /// Skipped when absent, for the byte-identity reason the fields above record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_confirm: Option<ToolConfirmCall>,
+}
+
+/// AG-15: the call a confirm-before-run row is asking about — the `effect_id` to quote with
+/// `--call`, the tool, and the arguments the human is approving (ALREADY REDACTED, like a
+/// question; the display-only collapse and cap are applied by [`awaiting_section`]).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ToolConfirmCall {
+    pub effect_id: String,
+    pub tool: String,
+    pub arguments: String,
+}
+
+/// The cap for a call's rendered ARGUMENTS — JSON a model wrote, bounded upstream only by
+/// `MAX_HUMAN_TEXT_BYTES`. `--json` carries them whole.
+const ARGS_MAX: usize = 200;
+
+/// The `tool:` cell for one pending confirm-before-run call.
+fn tool_confirm_cell(c: &ToolConfirmCall) -> String {
+    format!(
+        "tool: {} call {} args \"{}\"",
+        cap_chars(&one_line(&c.tool), NODE_MAX),
+        cap_chars(&one_line(&c.effect_id), NODE_MAX),
+        cap_chars(&one_line(&c.arguments), ARGS_MAX)
+    )
 }
 
 /// A node id is author- (or planner-) supplied free text, so it gets the same
@@ -696,6 +748,15 @@ pub fn awaiting_section(rows: &[(orchestrator_core::RunId, Awaiting)]) -> String
              `torii run agent answer <run> --node <node> --text <text>`\n",
         );
     }
+    let any_tool = rows
+        .iter()
+        .any(|(_, a)| matches!(a, Ok(nodes) if nodes.iter().any(|n| n.tool_confirm.is_some())));
+    if any_tool {
+        s.push_str(
+            "                   a `tool:` row is one tool call awaiting approval — \
+             `torii run tool approve <run> --call <call>` (or `reject`)\n",
+        );
+    }
     for (run, a) in rows {
         match a {
             Ok(nodes) => {
@@ -724,6 +785,12 @@ pub fn awaiting_section(rows: &[(orchestrator_core::RunId, Awaiting)]) -> String
                     // Both journals were rendered as a kind the refusals disagreed with
                     // before those two fixes.
                     let cell = match (&a.options, &a.question) {
+                        // A pending tool CALL first: it carries neither a menu nor a
+                        // question, so without this arm it would fall to `signal` — the
+                        // one verb that refuses it.
+                        _ if a.tool_confirm.is_some() => {
+                            tool_confirm_cell(a.tool_confirm.as_ref().expect("checked"))
+                        }
                         (Some(opts), Some(q)) => loop_gate_cell(opts, q),
                         (Some(opts), None) => cap_chars(
                             &format!(

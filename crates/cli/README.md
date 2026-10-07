@@ -19,11 +19,14 @@ toolkit does not yet do something, it says so rather than describing an intentio
 |---|---|
 | **torii's database** | The orchestrator's registry (`registry.*`) and run state (`runs.*`) live there, per tenant, beside the catalog. Apply the schema with `dbd` from `database/` (see `database/README.md`), RLS policies included. |
 | **`DATABASE_URL`** | Environment only. There is deliberately no flag: a flag would leak the password into `ps`. |
-| **`TORII_TENANT`** | The tenant every command acts for — its id or its slug. Required on the Postgres backend: every run, journal and registry belongs to exactly one tenant, and another tenant's are invisible. |
+| **`TORII_TENANT`** | The tenant every command acts for — its id or its slug. A slug can never look like an id (the database refuses a UUID-shaped slug, and org create turns a UUID-shaped name into an `org-`-prefixed slug), so an id always names its own tenant. Required on the Postgres backend: every run, journal and registry belongs to exactly one tenant, and another tenant's are invisible. |
 | **`TORII_FENCE_VERSION`** | Needed by `run submit` and `worker serve`. Set it **explicitly** (e.g. `v1`) and keep a fleet agreed on it — it is recorded in every run and checked on resume, so deriving it from a build version would strand every paused run on a routine deploy. |
 | **`TORII_POOL_SIZE`** | Optional. Defaults are fine to start. |
 | **`TORII_WAKE_MAX_ATTEMPTS`**, **`TORII_WAKE_BASE_BACKOFF`**, **`TORII_WAKE_MAX_BACKOFF`** | Optional (defaults `5`, `30s`, `60m`). How a wake that keeps failing is retried: a retryable drive error (a journal or store backend fault) or a worker lost mid-drive re-schedules the run after a backoff that doubles from the base up to the ceiling; the attempt past the cap is never driven — the run is filed `failed`, naming the count and the last error. A successful drive resets the count. Backoffs take `--interval`'s units (`500ms`, `30s`, `15m`); `0` attempts and a base above the ceiling are refused. Read only by the two commands that drive (`worker serve` and `run submit`), so keep a fleet agreed on them; a bad value fails those two, loudly, and no other command reads it (`run status`, `run list-paused`, `run cancel` and the answering verbs still work while you fix it). |
-| **`TORII_BACKEND`** | Optional: `postgres` (the default — everything above applies) or `memory`. `memory` keeps every store in the process — no database, no `DATABASE_URL` — for development and CI. Nothing survives the process, so a run it submits can only be observed or woken by that same process. |
+| **`TORII_TRANSIENT_ATTEMPTS`** | Optional (default `3` on Postgres, `1` on `TORII_BACKEND=memory`). Total attempts a model call gets when the provider fails in a way the gateway reports as retryable (a provider 500, say) before the node fails. Between attempts the run **pauses** on a backoff (2s, doubling, capped at 60s) and a worker re-attempts it on that wake — so on Postgres a `run submit` whose call hits one prints `paused`, and `worker serve` finishes it. On memory nothing outlives the process, so no worker could ever wake that pause: retry is off there unless this is set, and the same 500 fails the run (`run submit` exits `1`); set, a retry is a pause like any other there (exit `2`, below). `1` turns retry off (the gateway's own default); `0` is refused (there is no "unlimited"), as is anything past `20`. Auth and credit failures never reach this path: they pause for a person instead. Like `TORII_WAKE_*` — and the two below — read only by `run submit` and `worker serve`, where a bad value fails loudly, naming the variable. |
+| **`TORII_MAP_CONCURRENCY`** | Optional (default `8`). The ceiling on how many children of one `Map` node are in flight at once; each `Map` asks for its own `concurrency` and the lower of the two wins. Every in-flight child journals over the one `TORII_POOL_SIZE` pool, so a value far past it only queues children on connections. `0` and anything past `256` are refused. |
+| **`TORII_WAKE_LEASE`** | Optional (default `60s`). How old a `waking` claim must be before a worker treats the worker that took it as lost and reclaims the run (each reclaim is a counted wake attempt — see `TORII_WAKE_MAX_ATTEMPTS`). Exclusion does not depend on it: a run being driven is locked, so a short lease cannot double-drive. `--interval`'s units; `0` is refused. |
+| **`TORII_BACKEND`** | Optional: `postgres` (the default — everything above applies) or `memory`. `memory` keeps every store in the process — no database, no `DATABASE_URL` — for development and CI. Nothing survives the process, so a run it submits can only be observed or woken by that same process — and `run submit` exits once its drive returns, so **any pause there is one nothing can resume**: a timed one (a provider 429 that gates every candidate, a transient retry) because no later `worker serve` can see the run, and a human one (a signal, a gate, a human-backed agent, a tool confirmation, a budget cap) because no later `run signal`/`gate`/`agent`/`tool`/`wake` can either. `run submit` still prints `paused: …`, adds `nothing can resume it`, and exits `2`, never `0` — so a CI step gating on the exit code passes only a run that finished. Run a graph there that completes or fails on its own. (On Postgres a pause exits `0`: a worker or an answer finishes it.) |
 | **`TORII_REGISTRY_DIR`** | With `TORII_BACKEND=memory`: the registry directory (the `agents/ skills/ tools/` layout `config push` reads) loaded at boot, since there is no database to push to. |
 | **A gateway config** | On Postgres: **torii's catalog** — routers, models and chains, read by the same `torii_core::load_gateway_config` the API routes with. Nothing to pass; a `--gateway-config` there is refused. With `TORII_BACKEND=memory` only: `--gateway-config <file>` (JSON), required by `run submit` and `worker serve`. |
 
@@ -125,11 +128,53 @@ not). `torii run list-paused` before pushing.
 
 A worker serves **one tenant** (`TORII_TENANT`): its sweeps claim only that tenant's due runs.
 
+**A running worker follows `config push`.** Before every tick `worker serve` checks the tenant's
+durable config generation and, when a push has moved it, reloads the registry — no restart. The next
+drive runs on the pushed registry; a drive already in flight finishes on the generation it pinned.
+A registry that fails to load is logged and the last good one stays live. What a worker does **not**
+reload is the gateway config: torii's catalog (routers, models, chains) is read once, at boot, so a
+pushed registry that names a chain added to the catalog since is logged as an error naming the
+chain — restart the worker to pick the catalog up.
+
+## Reading the live config back
+
+```sh
+torii config show              # the live registry as JSON, with the generation it is at
+torii config pull ./registry   # write it as the directory `config push` reads
+```
+
+**`config show`** prints `{"generation": N, "registry": {"agents": […], "skills": […], "tools":
+[…], "chain_bindings": […]}}` — the registry and its generation from ONE snapshot, so a push
+landing mid-read can never pair one with the other. Agents, skills and tools are sorted by name and
+chain bindings by `(area, kind)`; each agent carries its `grants`.
+
+**`config pull <dir>`** writes the layout above: `agents/*.md` and `skills/*.md` (frontmatter +
+body, every key `push` reads — AG-15's included), `tools/*.json`, and `chains.json` and
+`grants.json` in the root (always both). **A pull followed by a `config push` of the result is a
+no-op** — `no changes`, no generation bump, no paused run touched. File names come from entity
+names made safe (characters outside `A-Z a-z 0-9 - _ .` become `_`, a leading `.` gains a `_`,
+and names equal but for case get `-2`, `-3` …); `push` reads only the extension, never the name.
+
+- A non-empty `<dir>` is refused — exit 2, nothing written. `--force` removes the files a push
+  reads there (`agents/*.md`, `skills/*.md`, `tools/*.json`, `chains.json`, `grants.json`)
+  before writing and leaves everything else alone, so a stale agent from an earlier pull cannot
+  come back as an addition.
+- Every file is parsed back with `push`'s own reader before the first write. A value the
+  frontmatter format cannot carry — a line break in a name, a comma or `=` inside a list item, a
+  leading or trailing space, a value shaped like `[a list]`, a sub-second timeout, a body
+  opening with a blank line — is refused naming the entity and the field (exit 1, nothing
+  written), rather than pulled as something the next push would silently change. A registry
+  authored through `push` never contains one.
+
+Both read `TORII_TENANT`'s registry only; another tenant's never appears.
+
 ## Observing and intervening
 
 ```sh
 torii run status <id>            # one run's schedule record (+ token/money spend, wake attempts,
                                  #   pending tool confirmations and escalations)
+torii run results <id>           # what the run produced: each node's state and output
+                                 #   (--node <id> for one, whole; --json)
 torii run list-paused            # everything awaiting a wake, and what each run waits on
 torii run signal <...>           # deliver a decision to an AwaitSignal node
 torii run gate <...>             # decide a HumanGate or a Loop's human gate
@@ -140,6 +185,19 @@ torii run wake <id>              # queue a paused run for the next worker tick
 torii run cancel <id>            # cancel a non-terminal run so it is never woken
 torii run prune --older-than <>  # delete terminal run records
 ```
+
+**Results.** `run results <id>` prints one row per node — `completed`, `failed` (with the error
+it stopped on, the one `run status` names), `retrying` (its last attempt failed transiently and
+the run is paused for the retry; with that notice) or `skipped` — where its output is stored, and
+the output itself, capped to one line;
+`--node <id>` prints one node's output whole, `--json` the lot. The outputs are the executor's own
+round checkpoint — the outputs the drive itself produced — so a human-answered node (a signal, a
+gate, a human-backed agent) has its output too. One over the executor's 4096-byte threshold lives in
+the tenant's content store (`cas <digest> <size>B`) and is read back from there. Outputs and errors
+are redacted. Exit `0` is a completed run whose outputs all read back; a run not yet completed
+still prints what it has produced so far (as of its last checkpoint) at exit `2`, as does an output
+the content store cannot return. Another tenant's run is exactly an unknown run: exit `2`, `no such
+run`, `null` under `--json`. Light tier: no gateway config, no credentials.
 
 **Budgets.** `run submit --budget-tokens N` caps a run's tokens and `--budget-usd D` its money
 (whole micro-dollars: at most 6 decimal places, refused rather than rounded); either, both or
@@ -157,7 +215,9 @@ holder (`agent (escalated to <agent>):`) and that hop's deadline, and is answere
 answer` as before. `--as` on every verb is attribution, not authentication.
 
 Exit codes: `0` ok · `1` error, including a run that executed and failed · `2` not-found,
-precondition-not-met, or a result printable but not the unqualified success you asked for. Exit 1
+precondition-not-met, or a result printable but not the unqualified success you asked for (among
+them a `run submit` that pauses on `TORII_BACKEND=memory`, where nothing can resume it; on
+Postgres that pause is `0`). Exit 1
 writes to stderr and nothing to stdout; exit 2 still prints its result. Note `2` is also clap's
 usage-error code, so a script keying off it should check stderr too.
 
@@ -176,8 +236,8 @@ Stated because finding them by experiment is worse.
 
 - **No registry content ships.** There are no built-in agents, skills or tools — you author all of
   them. `torii worker serve` refuses to boot against a registry with zero agents.
-- **No `config init`, `config pull` or `config diff`.** `version` and `push` are the whole config
-  surface today.
+- **No `config init` and no dry-run diff.** `push` prints its diff as it applies (and asks before
+  removing anything), but nothing shows the diff without offering to write it.
 - **With nobody marked, two planner agents resolve by name order.** Mark one `area: planning`
   agent `default_planner: true` and it is chosen; leave every agent unmarked and the selector
   still takes the first by name.

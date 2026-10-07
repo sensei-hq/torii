@@ -54,6 +54,10 @@ fn fixtures(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf, s
     (reg, gw, graph)
 }
 
+/// The run reaches its pause with no database — and because the answer (`run signal`) could only
+/// come from another process, which sees an empty memory store, that pause is stranded: `run
+/// submit` prints it but exits 2, never 0. (On Postgres the same pause exits 0 — a later `run
+/// signal` and `worker serve` finish it; `tests/postgres_backend.rs` pins that.)
 #[test]
 fn run_submit_on_the_memory_backend_needs_no_database() {
     let dir = tempfile::tempdir().unwrap();
@@ -70,16 +74,18 @@ fn run_submit_on_the_memory_backend_needs_no_database() {
         .expect("spawn torii");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        out.status.success(),
-        "exit {:?}\nstdout: {stdout}\nstderr: {stderr}",
-        out.status.code()
-    );
     assert!(stdout.contains("submitted: "), "{stdout}");
     assert!(
         stdout.contains("paused: ") && stdout.contains("at node gate"),
-        "the run reached its durable pause on the memory backend: {stdout}"
+        "the run reached its pause on the memory backend: {stdout}\nstderr: {stderr}"
     );
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a human-in-the-loop pause on memory is one no other process can answer: not exit 0\n\
+         stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(stdout.contains(STRANDED), "{stdout}");
 }
 
 #[test]
@@ -176,5 +182,223 @@ fn a_bad_wake_policy_fails_only_the_commands_that_drive() {
     assert!(
         !String::from_utf8_lossy(&out.stdout).contains("submitted"),
         "refused BEFORE anything is submitted"
+    );
+}
+
+/// AG-6 (#35): `config show` prints the live registry as JSON with its generation, and
+/// `config pull` writes the directory `config push` (and `TORII_REGISTRY_DIR`) reads — so a
+/// memory backend booted from the pulled directory shows the same registry.
+#[test]
+fn config_show_and_pull_on_the_memory_backend_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let (reg, _, _) = fixtures(dir.path());
+    let show = |registry: &std::path::Path| {
+        let out = torii()
+            .env("TORII_BACKEND", "memory")
+            .env("TORII_REGISTRY_DIR", registry)
+            .args(["config", "show"])
+            .output()
+            .expect("spawn torii");
+        assert!(
+            out.status.success(),
+            "exit {:?}\nstderr: {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap_or_else(|e| {
+            panic!(
+                "config show prints JSON ({e}): {}",
+                String::from_utf8_lossy(&out.stdout)
+            )
+        })
+    };
+    let shown = show(&reg);
+    assert_eq!(shown["generation"], 1, "{shown}");
+    assert_eq!(
+        shown["registry"]["agents"][0]["name"], "researcher",
+        "{shown}"
+    );
+
+    let pulled = dir.path().join("pulled");
+    let pull = |force: bool| {
+        let mut c = torii();
+        c.env("TORII_BACKEND", "memory")
+            .env("TORII_REGISTRY_DIR", &reg)
+            .args(["config", "pull"])
+            .arg(&pulled);
+        if force {
+            c.arg("--force");
+        }
+        c.output().expect("spawn torii")
+    };
+    let out = pull(false);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "exit {:?}\nstderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("pulled config v1") && stdout.contains("1 agent"),
+        "{stdout}"
+    );
+    assert!(pulled.join("agents/researcher.md").is_file());
+
+    // A second pull into the now non-empty directory is refused, and says how to proceed.
+    // Exit 2 prints its result on stdout, like `config push`'s refusal.
+    let out = pull(false);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(2), "{stdout}");
+    assert!(
+        stdout.contains("not empty") && stdout.contains("--force"),
+        "{stdout}"
+    );
+    let out = pull(true);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert_eq!(
+        show(&pulled)["registry"],
+        shown["registry"],
+        "the pulled directory boots as the same registry"
+    );
+}
+
+/// A provider speaking the OpenAI wire that fails every call with `status` — a 500 the gateway
+/// classifies as retryable, a 429 as a rate limit that gates the endpoint. Returns its base URL
+/// and its call count.
+async fn failing_provider(
+    status: axum::http::StatusCode,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let app = axum::Router::new().route(
+        "/v1/chat/completions",
+        axum::routing::post(move || {
+            let counted = counted.clone();
+            async move {
+                counted.fetch_add(1, SeqCst);
+                (
+                    status,
+                    axum::Json(serde_json::json!({"error": {"message": "upstream blip"}})),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (url, calls)
+}
+
+/// `run submit` on the memory backend of a one-node graph — a model call `ask` on chain `c`,
+/// whose one model is served by the provider at `url` — with `TORII_TRANSIENT_ATTEMPTS` unset.
+/// Returns the exit code, stdout and stderr.
+fn submit_a_model_call_on_memory(url: &str) -> (Option<i32>, String, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let (reg, gw, _) = fixtures(dir.path());
+    std::fs::write(
+        &gw,
+        serde_json::json!({
+            "routers": {"ollama": {"url": url}},
+            "models": {"m": {"id": "m", "provider": "ollama", "capabilities": ["text_chat"],
+                             "context_window": 8192, "max_output_tokens": 1024}},
+            "chains": {"c": {"id": "c", "capability": "text_chat",
+                             "models": [{"model": "m", "router": "ollama", "priority": 1}],
+                             "fallback_triggers": []}}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let graph = dir.path().join("ask.json");
+    let g = Graph {
+        nodes: vec![Node {
+            id: NodeId("ask".into()),
+            kind: NodeKind::ModelCall {
+                chain: "c".into(),
+                payload: serde_json::json!({"prompt": "hello"}),
+            },
+            deps: vec![],
+        }],
+    };
+    std::fs::write(&graph, serde_json::to_string(&g).unwrap()).unwrap();
+
+    let out = torii()
+        .env_remove("TORII_TRANSIENT_ATTEMPTS")
+        .env("TORII_BACKEND", "memory")
+        .env("TORII_REGISTRY_DIR", &reg)
+        .env("TORII_FENCE_VERSION", "v1")
+        .args(["run", "submit", "--graph"])
+        .arg(&graph)
+        .arg("--gateway-config")
+        .arg(&gw)
+        .output()
+        .expect("spawn torii");
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// AG-5 on the memory backend: nothing outlives the process, so a run paused on a transient
+/// retry can never be woken — no later `worker serve` can see it. With `TORII_TRANSIENT_ATTEMPTS`
+/// unset, `run submit` must therefore fail a provider 500 (exit non-zero), not print `paused`
+/// and exit 0 on a model call that never succeeded.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_provider_500_fails_run_submit_on_the_memory_backend_by_default() {
+    let (url, calls) = failing_provider(axum::http::StatusCode::INTERNAL_SERVER_ERROR).await;
+    let (code, stdout, stderr) = submit_a_model_call_on_memory(&url);
+    assert!(
+        calls.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "precondition: the provider was called\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert_ne!(
+        code,
+        Some(0),
+        "a memory-backend run paused on a retry nothing can wake must not exit 0\n\
+         stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("failed: ") && stderr.contains("at node ask"),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+}
+
+/// The words `run submit` prints beside a memory-backend pause: nothing can resume the run.
+const STRANDED: &str = "nothing can resume it";
+
+/// A 429 is not a transient retry: the gateway locks the endpoint and, with every candidate
+/// gated, the walk ends in a TIMED pause (~60s) that a later wake would retry. On the memory
+/// backend no later process can see the run, so that pause is stranded too: `run submit` must
+/// not exit 0 on it. It exits 2 — a result printable, not the success asked for — still
+/// printing the pause, and saying nothing can resume it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_provider_429_does_not_exit_0_from_run_submit_on_the_memory_backend() {
+    let (url, calls) = failing_provider(axum::http::StatusCode::TOO_MANY_REQUESTS).await;
+    let (code, stdout, stderr) = submit_a_model_call_on_memory(&url);
+    assert!(
+        calls.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "precondition: the provider was called\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("paused: ") && stdout.contains("at node ask"),
+        "precondition: the 429 paused the run\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert_eq!(
+        code,
+        Some(2),
+        "a memory-backend pause nothing can wake must not exit 0\nstdout: {stdout}\n\
+         stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains(STRANDED) && stdout.contains("memory backend"),
+        "stdout: {stdout}\nstderr: {stderr}"
     );
 }

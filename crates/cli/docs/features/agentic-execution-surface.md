@@ -126,6 +126,24 @@ resumed. This is correct behaviour — it prevents a silent wrong-config resume 
 answer is disclosure and consent, never a weaker fence. **This is the most dangerous action in the
 product and the UI's primary safety obligation.**
 
+**A push reaches running workers without a restart** (AG-5, torii#34). `worker serve` checks the
+durable generation before every tick and reloads the registry when a push has moved it; the next
+drive runs on the pushed registry, while a drive already in flight finishes on the generation it
+pinned. Before this, a long-running worker kept its boot generation and failed every run submitted
+after a push at the fence. The gateway catalog is NOT reloaded — a worker reads it once, at boot —
+so a push that depends on a chain added to the catalog since needs a worker restart, and the
+worker logs exactly that.
+
+**A transient provider failure pauses, not fails** (AG-5). torii boots every driver with
+transient retry ON at 3 attempts (`TORII_TRANSIENT_ATTEMPTS`; the gateway's own default is off): a
+provider 500 pauses the run on a short backoff and a worker re-attempts it. The memory backend is
+the exception — unset, it keeps retry off: nothing that could wake a pause there outlives the
+process. More generally, **on memory no pause can be resumed** — not a timed one (retry, a 429
+that gates every candidate) and not a human one (signal, gate, agent answer, tool
+confirmation, budget cap), since every waker is another process and sees an empty store — so
+`run submit` prints the pause there at exit 2, never 0. On Postgres a pause is exit 0. A run view should show that pause as "retrying (attempt n of N)" rather than as a stall —
+`run_results` marks the node `retrying` for exactly that.
+
 **Effect class decides replay semantics.** `Pure` is memoized and never re-executed; `Mutation`
 gets two-phase commit and an idempotency key. Choosing it wrongly is a correctness bug, not a
 preference, so it must be presented as consequential.
@@ -133,6 +151,11 @@ preference, so it must be presented as consequential.
 **A declared tool needs an executable counterpart.** A schema the runtime cannot serve is a tool
 the model will call and fail on — a burned turn. The UI should show which declared tools are
 actually backed.
+
+**A tenant is named by its id or its slug, and the two cannot collide.** Every command acts for
+one tenant (`TORII_TENANT`), given either way. A slug is never UUID-shaped — the database refuses
+one (`tenants_slug_not_uuid`), and an org named after an id gets an `org-`-prefixed slug — so an
+id always means its own tenant. A tenant picker can accept either without disambiguating.
 
 **A human-backed agent resolves no chain.** `backed_by: Human` changes the semantics: a person
 answers, there is no model call, and the chain rules do not apply. The form must change shape.
@@ -146,8 +169,9 @@ Each entry is the goal, then the props a component would take.
 ### 5.1 Registry overview
 The operator's home. Shows the four collections with counts, the durable config generation, and
 whether the working set differs from what is deployed. It exists to make "what is live, and what
-would change if I pushed" answerable at a glance — today that requires reading `config version`
-and diffing by hand.
+would change if I pushed" answerable at a glance. `torii config show` (AG-6) backs the first half
+— the live registry and its generation as JSON, from one snapshot; the second half still needs a
+diff that does not offer to write (`config push` prints its diff only as it applies).
 
 ```
 { generation, entities: { agents, skills, tools, bindings }[],
@@ -231,6 +255,13 @@ error string.
   plan?: PlannedGraph, budget: { spent, cap } | null, fence: string }
 ```
 
+The per-node outputs half of this screen is backed: `torii_core::results::run_results` returns
+`{ run, status, as_of, nodes: { node, state: completed|failed|retrying|skipped, stored:
+inline|cas{digest, size}, output, unresolved, error }[] }` (`torii run results --json` prints
+exactly that). A node's `error` is its LAST failure — under transient retry the earlier ones are
+"retrying" notices — so a failed run's node names the same error `run status` does; a node whose
+last attempt failed transiently and whose run is paused for the retry is `retrying`, not `failed`.
+
 ### 6.3 Plan review
 Inspect a plan the planner produced before or during execution — nodes, their agents, dependencies,
 and the feasibility verdict. This is where a human judges whether the machine understood the goal.
@@ -268,10 +299,10 @@ Honest gaps between these screens and the engine, so nobody designs against a fi
 
 | screen | gap |
 |---|---|
-| all of seiki | **The read path EXISTS; only the CLI exposure is missing.** `PostgresConfigSource::load()` returns a whole `RegistryConfig`, `load_versioned()` returns it with its generation, and **`torii` already calls `load_versioned()` inside `push`** to compute the diff. What does not exist is a `config pull`/`show` subcommand to hand that structured data to a UI. A first draft of this table called it a structural blocker — that was wrong, and the correction shrinks the work from a slice to a subcommand. |
+| all of seiki | **Closed by AG-6 (torii#35).** `torii config show` prints the live registry and its generation as JSON from ONE `load_versioned` snapshot, and `torii config pull <dir>` writes it as the `agents/ skills/ tools/ chains.json grants.json` directory `config push` reads — a pull followed by a push of it is a no-op, per tenant, proven at the binary on Postgres. Both live in `torii_core::registry_dir`, so the API can serve the same read without a second implementation. What remains for an editor is a dry-run diff (push prints its diff only as it applies). |
 | 5.6 push review | The paused-run count is available, but per-run detail for the warning list needs `list_paused`, which exists — this one is close. |
 | 6.1 submit | `plannerPreview` has no backing. Nothing exposes "which planner would be selected for this goal" without running the expand. |
-| 6.2 timeline | The journal is durable and complete, but there is no read API shaped for a timeline view. |
+| 6.2 timeline | The journal is durable and complete, but there is no read API shaped for a timeline view. What a run PRODUCED is readable: `torii run results <id>` (AG-4, torii#33) returns each node's state and output — the executor's round checkpoint, with CAS refs resolved through the tenant's content store — from `torii_core::results::run_results`, the read the API will share. The ordered event timeline is still missing. |
 | 6.3 plan review | Plans are journaled; approving or rejecting one interactively is not a mechanism that exists. |
 | 6.4 interventions | Best-supported screen — `list-paused`, `signal`, `gate`, `agent`, `wake`, `cancel` all exist as commands. |
 | planner quality | No longer a code gap: the five discovery tools are composed per run (gateway v0.11.0). What remains is content — no shipped planner agent declares them, and no shipped `tools/*.json` defines their schemas (see the absent default content below). |
@@ -280,8 +311,7 @@ Honest gaps between these screens and the engine, so nobody designs against a fi
 blocker is the **absent default content**, without which a fresh install cannot plan at all —
 including a planner agent that declares the discovery tools, which have been wired since gateway
 v0.11.0 but do nothing for an agent that does not declare them.
-Exposing the durable config for reading is a subcommand over machinery that already runs on every
-push.
+Reading the durable config back out is done: `config show` / `config pull` (AG-6).
 
 ---
 
@@ -294,5 +324,6 @@ push.
    cannot.
 3. **What content ships by default?** Still open, and it gates the registry work: without a
    shipped planner agent, a fresh install cannot plan at all.
-4. **Expose the durable config for reading?** A `config pull`/`show` over the existing
-   `load_versioned()`. Small, and it unblocks every seiki editing screen.
+4. ~~**Expose the durable config for reading?**~~ Decided and built (AG-6, torii#35):
+   `torii config show` (JSON + generation, one snapshot) and `torii config pull <dir>` (the
+   directory `config push` reads; pull-then-push is a no-op), over `torii_core::registry_dir`.

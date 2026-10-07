@@ -5,6 +5,7 @@
 //! "where a tenant's runs live".
 
 pub mod config;
+pub mod defaults;
 pub mod events;
 pub mod registry;
 pub mod registry_dir;

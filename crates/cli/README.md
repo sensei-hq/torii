@@ -214,6 +214,17 @@ or already settled is refused before anything is written. An escalated question 
 holder (`agent (escalated to <agent>):`) and that hop's deadline, and is answered with `run agent
 answer` as before. `--as` on every verb is attribution, not authentication.
 
+**When an answer half-lands.** `run signal`, `run gate decide`, `run agent answer` and `run tool
+approve|reject` journal the answer first, then queue the wake, then read both back. A fault after
+the answer is journaled never prints a bare error — the answer is durable either way — and the
+first word says how far it got (exit `2` for both):
+
+- `not queued: …` — the wake itself failed. The answer is on the journal but nothing will read it
+  until the run is woken: run `torii run wake <id>`.
+- `wake sent: …` — the wake went through and only reading the outcome back failed, so the run is
+  probably queued already (or a worker has picked it up). Check `torii run status <id>`; do not
+  wake it again on the strength of this message.
+
 Exit codes: `0` ok · `1` error, including a run that executed and failed · `2` not-found,
 precondition-not-met, or a result printable but not the unqualified success you asked for (among
 them a `run submit` that pauses on `TORII_BACKEND=memory`, where nothing can resume it; on

@@ -282,6 +282,13 @@ difference between a system that pauses safely and one a human can unblock.
   onSignal, onGate, onAnswer, onCancel, onWake }
 ```
 
+An answer can half-land, and the screen must say which half. Every answering verb journals the
+answer, then queues the wake, then reads both back; a fault after the journal write is reported,
+never raised, because the answer is already durable. `not queued` means the wake failed — offer
+`onWake`. `wake sent` means the wake went through and only the read-back failed — the run is
+probably queued or already being driven, so show it as delivered-pending and send the user to the
+run's status, not to wake it again (torii#55).
+
 ### 6.5 Budget and spend
 Token spend per run and against a cap, with the pause-on-exhaustion state surfaced. A budgeted run
 pauses durably when it hits its cap and can be resumed with a raised one — that is a workflow, and

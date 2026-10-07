@@ -713,12 +713,23 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 workspace_root,
             } => {
                 let boot::HeavyDeps {
-                    scheduler, events, ..
+                    scheduler,
+                    events,
+                    registry,
+                    gateway_chains,
+                    ..
                 } = boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
                 let log = boot::log_run_events(events);
                 let shutdown = shutdown_signal()?;
+                // AG-5: refresh the registry before every tick, so a `config push` reaches this
+                // worker without a restart (`HeavyDeps::ticker`, unrolled: `events` moved out).
+                let ticker = cmd::worker::Reloading {
+                    inner: &scheduler,
+                    registry: &registry,
+                    gateway_chains: &gateway_chains,
+                };
                 let out = cmd::worker::serve(
-                    &scheduler,
+                    &ticker,
                     cmd::worker::ServeOpts { interval, once },
                     shutdown,
                 )

@@ -19,6 +19,84 @@ impl Ticker for orchestrator::Scheduler {
     }
 }
 
+/// AG-5: `worker serve`'s ticker — refresh the registry from the tenant's durable config, then
+/// tick. A long-running worker therefore follows `config push` without a restart: the reload
+/// swaps the handle the executor pins each drive from, so the NEXT drive runs on the pushed
+/// generation, while a drive already in flight keeps the generation it pinned (ticks are
+/// sequential, so none is in flight here anyway).
+///
+/// A failed refresh never stops the tick: the last good registry stays live, the failure is
+/// logged, and the next tick tries again. A store fault behind it surfaces through the tick
+/// itself, which owns the worker's failure accounting.
+pub struct Reloading<'a> {
+    pub inner: &'a dyn Ticker,
+    pub registry: &'a torii_core::registry::RegistryReloader,
+    /// The chains the worker's gateway serves (read once, at boot).
+    pub gateway_chains:
+        &'a std::collections::HashMap<String, kernel::types::config::FallbackChainConfig>,
+}
+
+#[async_trait::async_trait]
+impl Ticker for Reloading<'_> {
+    async fn tick(&self) -> Result<usize, OrchestratorError> {
+        match self.registry.refresh().await {
+            Ok(None) => {}
+            Ok(Some((registry, generation))) => {
+                tracing::info!(
+                    generation,
+                    agents = registry.agents().count(),
+                    skills = registry.skills().count(),
+                    tools = registry.tools().count(),
+                    "registry reloaded"
+                );
+                if let Some(problem) = reload_problem(&registry, self.gateway_chains) {
+                    tracing::error!(generation, "{problem}");
+                }
+            }
+            Err(e) => tracing::error!(
+                error = %e,
+                generation = self.registry.handle().generation(),
+                "registry reload failed; keeping the last good registry"
+            ),
+        }
+        self.inner.tick().await
+    }
+}
+
+/// What is wrong with a registry a worker just reloaded, if anything — the checks boot makes,
+/// as a diagnosis rather than a refusal: the push already landed, so refusing it here would
+/// only leave this worker fencing out every run submitted under it.
+pub fn reload_problem(
+    registry: &orchestrator_core::Registry,
+    gateway_chains: &std::collections::HashMap<String, kernel::types::config::FallbackChainConfig>,
+) -> Option<String> {
+    if registry.agents().count() == 0 {
+        return Some(
+            "the reloaded registry has zero agents: every run this worker drives will fail \
+             until a registry with agents is pushed"
+                .to_string(),
+        );
+    }
+    let missing = crate::boot::unresolved_chain_refs(
+        registry.agents(),
+        registry.chain_bindings(),
+        gateway_chains,
+    );
+    if missing.is_empty() {
+        return None;
+    }
+    let list = missing
+        .iter()
+        .map(|(who, chain)| format!("{who} → chain {chain:?}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Some(format!(
+        "the reloaded registry references chains this worker's gateway config does not define: \
+         {list}. Every run reaching one will fail with no candidates. The catalog is read once, \
+         at boot — restart the worker to pick up chains added since."
+    ))
+}
+
 pub const MAX_CONSECUTIVE_FAILURES: u32 = 5;
 
 pub struct ServeOpts {

@@ -136,9 +136,10 @@ worker logs exactly that.
 
 **A transient provider failure pauses, not fails** (AG-5). torii boots every driver with
 transient retry ON at 3 attempts (`TORII_TRANSIENT_ATTEMPTS`; the gateway's own default is off): a
-provider 500 pauses the run on a short backoff and a worker re-attempts it. A run view should
-show that pause as "retrying (attempt n of N)" rather than as a stall — `run_results` marks the
-node `retrying` for exactly that.
+provider 500 pauses the run on a short backoff and a worker re-attempts it. The memory backend is
+the exception — unset, it keeps retry off: nothing that could wake a pause there outlives the
+process. A run view should show that pause as "retrying (attempt n of N)" rather than as a stall —
+`run_results` marks the node `retrying` for exactly that.
 
 **Effect class decides replay semantics.** `Pure` is memoized and never re-executed; `Mutation`
 gets two-phase commit and an idempotency key. Choosing it wrongly is a correctness bug, not a

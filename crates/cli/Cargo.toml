@@ -40,6 +40,10 @@ uuid = { version = "1", features = ["v4", "serde"] }
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 tempfile = "3"
+# AG-5: a fake OpenAI-wire provider for the boot tests that drive a real model call through the
+# gateway `heavy()` builds (fan-out concurrency, transient-failure retry). Already in the lock
+# via torii-tools.
+axum = { version = "0.8", features = ["json"] }
 # The cross-process e2e needs the same gateway/clock doubles the executor's own tests
 # use (a gated gateway to force a durable pause, a recording one to count re-spend).
 orchestrator = { package = "sensei-orchestrator", git = "https://github.com/sensei-hq/gateway", tag = "v0.11.0", features = ["test-support"] }

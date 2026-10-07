@@ -126,6 +126,19 @@ resumed. This is correct behaviour — it prevents a silent wrong-config resume 
 answer is disclosure and consent, never a weaker fence. **This is the most dangerous action in the
 product and the UI's primary safety obligation.**
 
+**A push reaches running workers without a restart** (AG-5, torii#34). `worker serve` checks the
+durable generation before every tick and reloads the registry when a push has moved it; the next
+drive runs on the pushed registry, while a drive already in flight finishes on the generation it
+pinned. Before this, a long-running worker kept its boot generation and failed every run submitted
+after a push at the fence. The gateway catalog is NOT reloaded — a worker reads it once, at boot —
+so a push that depends on a chain added to the catalog since needs a worker restart, and the
+worker logs exactly that.
+
+**A transient provider failure pauses, not fails** (AG-5). torii boots every driver with
+transient retry ON at 3 attempts (`TORII_TRANSIENT_ATTEMPTS`; the gateway's own default is off): a
+provider 500 pauses the run on a short backoff and a worker re-attempts it. A run view should
+show that pause as "retrying (attempt n of N)" rather than as a stall.
+
 **Effect class decides replay semantics.** `Pure` is memoized and never re-executed; `Mutation`
 gets two-phase commit and an idempotency key. Choosing it wrongly is a correctness bug, not a
 preference, so it must be presented as consequential.

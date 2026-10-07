@@ -6,6 +6,7 @@
 
 pub mod config;
 pub mod events;
+pub mod registry;
 pub mod registry_dir;
 pub mod results;
 pub mod stores;

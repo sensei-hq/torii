@@ -1322,6 +1322,10 @@ mod tests {
                 skills: vec![],
                 system_prompt: "probe".to_string(),
                 backed_by: orchestrator_core::AgentBacking::Model,
+                tool_limits: Default::default(),
+                confirm_tools: vec![],
+                confirm_timeout: None,
+                escalate_to: None,
             }],
             ..Default::default()
         }

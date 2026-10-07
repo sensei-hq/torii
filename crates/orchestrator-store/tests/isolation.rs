@@ -16,6 +16,7 @@ fn started() -> JournalEvent {
     JournalEvent::RunStarted {
         version: "v1".into(),
         budget: None,
+        money_budget: None,
     }
 }
 

@@ -22,6 +22,7 @@ fn started() -> JournalEvent {
     JournalEvent::RunStarted {
         version: "v1".into(),
         budget: None,
+        money_budget: None,
     }
 }
 
@@ -386,6 +387,10 @@ async fn agents_and_tools_round_trip_through_jsonb_including_nested_fields() {
         skills: vec!["concise".into()],
         system_prompt: "be careful".into(),
         backed_by: AgentBacking::Model,
+        tool_limits: HashMap::new(),
+        confirm_tools: vec![],
+        confirm_timeout: None,
+        escalate_to: None,
     };
     let input_schema = serde_json::json!({"type":"object","properties":{"q":{"type":"string"}}});
     let tool = ToolSpec {
@@ -464,6 +469,10 @@ async fn a_publish_replaces_every_registry_table_not_just_skills() {
             skills: vec![],
             system_prompt: String::new(),
             backed_by: AgentBacking::Model,
+            tool_limits: HashMap::new(),
+            confirm_tools: vec![],
+            confirm_timeout: None,
+            escalate_to: None,
         }],
         skills: vec![skill("gone-skill")],
         tools: vec![cfg_tool("gone-tool")],

@@ -190,6 +190,10 @@ mod tests {
             skills: vec![],
             system_prompt: "you are an agent".into(),
             backed_by: AgentBacking::Model,
+            tool_limits: Default::default(),
+            confirm_tools: vec![],
+            confirm_timeout: None,
+            escalate_to: None,
         }
     }
 

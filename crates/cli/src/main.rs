@@ -734,15 +734,29 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                     CliError::error(format!("{} is not a valid graph: {e}", graph.display()))
                 })?;
                 let boot::HeavyDeps {
-                    scheduler, events, ..
+                    scheduler,
+                    events,
+                    registry,
+                    gateway_pricing,
+                    gateway_source,
+                    ..
                 } = boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
-                let log = boot::log_run_events(events);
                 let budget = orchestrator_core::RunBudget {
                     tokens: budget_tokens
                         .map(|total_tokens| orchestrator_core::TokenBudget { total_tokens }),
                     money: budget_usd
                         .map(|total_micro_usd| orchestrator_core::MoneyBudget { total_micro_usd }),
                 };
+                // #55: a money cap the gateway could not meter is refused here, before
+                // anything is submitted — against the registry this run would pin.
+                cmd::run::require_priced_for_money_cap(
+                    &budget,
+                    &g,
+                    &registry.handle().snapshot().0,
+                    &gateway_pricing,
+                    &gateway_source,
+                )?;
+                let log = boot::log_run_events(events);
                 // Print the id BEFORE driving: an operator who loses the terminal
                 // must still be able to find the run. `submit` calls this AFTER its
                 // duplicate pre-check, so a rejected submit no longer announces an

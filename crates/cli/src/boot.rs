@@ -850,6 +850,11 @@ pub struct HeavyDeps {
     /// The chains this boot's gateway serves. A reloaded registry is checked against them:
     /// the catalog is read once, at boot, so a chain added there since is unknown here.
     pub gateway_chains: HashMap<String, kernel::types::config::FallbackChainConfig>,
+    /// #55: the chains and models (no routers, so no credentials) this boot's gateway prices
+    /// with, and where they came from — what `run submit --budget-usd` checks a graph against
+    /// before submitting it (`torii_core::pricing`).
+    pub gateway_pricing: kernel::types::config::GatewayConfig,
+    pub gateway_source: String,
 }
 
 impl HeavyDeps {
@@ -871,6 +876,7 @@ impl HeavyDeps {
             events,
             registry,
             gateway_chains,
+            ..
         } = self;
         drop((light, clock));
         let log = log_run_events(events);
@@ -951,6 +957,11 @@ pub async fn heavy(
     // builder, and checked right after.
     let configured_routers: Vec<String> = gw_config.routers.keys().cloned().collect();
     let gateway_chains = gw_config.chains.clone();
+    let gateway_pricing = kernel::types::config::GatewayConfig {
+        chains: gw_config.chains.clone(),
+        models: gw_config.models.clone(),
+        ..Default::default()
+    };
     let builder = gateway::FacadeBuilder::new(gw_config);
     let registered = builder.registry().clone();
     let facade = builder.build().await;
@@ -1064,6 +1075,8 @@ pub async fn heavy(
         events,
         registry,
         gateway_chains,
+        gateway_pricing,
+        gateway_source: gw_source,
     })
 }
 

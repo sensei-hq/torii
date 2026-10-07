@@ -688,9 +688,14 @@ fn signal_states(events: &[(Seq, JournalEvent)]) -> HashMap<NodeId, SignalStateA
             _ => {}
         }
     }
+    // AG-15: an escalated question's CURRENT deadline is its last hop's. The `AgentAwaited`
+    // one stays first-wins above (the executor never moves it either) — it is simply no
+    // longer the deadline anything waits on.
+    let escalated = escalations(events);
     awaited
         .into_iter()
         .map(|(node, deadline)| {
+            let deadline = escalated.get(&node).map_or(deadline, |(_, d)| *d);
             let at = match terminal.get(&node) {
                 Some((seq, state)) => SignalStateAt {
                     state: state.clone(),
@@ -713,6 +718,30 @@ fn signal_states(events: &[(Seq, JournalEvent)]) -> HashMap<NodeId, SignalStateA
             (node, at)
         })
         .collect()
+}
+
+/// AG-15: every escalated human-backed `Agent` node's CURRENT holder and deadline — the
+/// `to` and `deadline` of its last `AgentEscalated` hop.
+///
+/// Hops fold FIRST-wins per target, exactly as the executor's fold does: a duplicated hop to
+/// an agent already in the node's chain moves nothing (the executor never appends one, but a
+/// journal torii did not write may). So the current hop is the last DISTINCT target in
+/// journal order, with the deadline its first row recorded.
+pub(crate) fn escalations(
+    events: &[(Seq, JournalEvent)],
+) -> HashMap<NodeId, (String, Option<DateTime<Utc>>)> {
+    let mut seen: HashMap<NodeId, std::collections::HashSet<String>> = HashMap::new();
+    let mut current = HashMap::new();
+    for (_, e) in events {
+        if let JournalEvent::AgentEscalated {
+            node, to, deadline, ..
+        } = e
+            && seen.entry(node.clone()).or_default().insert(to.clone())
+        {
+            current.insert(node.clone(), (to.clone(), *deadline));
+        }
+    }
+    current
 }
 
 /// One node's [`SignalState`], folded from `events`.
@@ -813,6 +842,7 @@ fn awaiting_nodes(events: &[(Seq, JournalEvent)]) -> Vec<render::AwaitingNode> {
             acc
         });
 
+    let escalated = escalations(events);
     let mut out: Vec<render::AwaitingNode> = signal_states(events)
         .into_iter()
         .filter_map(|(node, st)| match st.state {
@@ -864,6 +894,7 @@ fn awaiting_nodes(events: &[(Seq, JournalEvent)]) -> Vec<render::AwaitingNode> {
                     None => (None, questions.get(&node).cloned()),
                 };
                 Some(render::AwaitingNode {
+                    escalated_to: escalated.get(&node).map(|(to, _)| to.clone()),
                     node,
                     deadline,
                     options,

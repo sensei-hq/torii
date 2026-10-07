@@ -324,10 +324,16 @@ pub async fn decide(
     if let Err(e) = store.force_wake(run, now).await {
         return Ok(unread("the wake", &e));
     }
+    // A re-read fault comes AFTER `force_wake` committed: the wake was sent, so `unread`'s
+    // "not queued" would be false (#55) — `wake_sent_unread` says so and points at `run status`.
+    let durable = format!("call {shown} is {verdict} and journaled durably (seq {appended})");
+    let reread = |what: &str, e: &dyn std::fmt::Display| {
+        crate::cmd::wake_sent_unread(&durable, run, what, e)
+    };
     let after = match store.status(run).await {
         Ok(Some(s)) => s,
-        Ok(None) => return Ok(unread("the status re-read", &"the run vanished")),
-        Err(e) => return Ok(unread("the status re-read", &e)),
+        Ok(None) => return Ok(reread("the status re-read", &"the run vanished")),
+        Err(e) => return Ok(reread("the status re-read", &e)),
     };
     let rewritten = if actor != one_lined {
         format!(" (--as contained secret-shaped text and was recorded as {actor})")

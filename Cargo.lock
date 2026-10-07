@@ -7735,9 +7735,11 @@ name = "torii-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "sensei-gateway",
  "sensei-orchestrator-core",
+ "serde",
  "serde_json",
  "sqlx",
  "tokio",

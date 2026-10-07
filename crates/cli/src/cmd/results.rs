@@ -1,20 +1,204 @@
 //! AG-4 (torii#33): `torii run results <id>` — a run's node outputs.
 //!
-//! The data comes from `torii_core::results` (shared with the API); this module only renders it.
+//! The data — the schedule row, the executor's output checkpoint, the journal's failures and the
+//! CAS refs resolved — comes from `torii_core::results`, which the API shares; this module only
+//! renders it, with the same display discipline `run status` gives free text.
 
 use crate::cmd::Outcome;
-use crate::errors::CliError;
-use orchestrator_core::{ContentStore, ExecutionJournal, NodeId, RunId, SchedulerStore};
+use crate::errors::{CliError, EXIT_OK, EXIT_PRECONDITION};
+use crate::render;
+use orchestrator_core::{ContentStore, ExecutionJournal, NodeId, RunId, RunStatus, SchedulerStore};
+use torii_core::results::{NodeResult, NodeState, RunResults, Stored};
 
+/// How much of one output the TABLE shows. The table is a scan of the run; `--node` prints an
+/// output whole.
+const OUTPUT_CELL_MAX: usize = 160;
+
+/// How many hex characters of a CAS digest the table shows — enough to tell blobs apart at a
+/// glance; `--json` carries the whole digest.
+const DIGEST_SHOWN: usize = 12;
+
+/// `torii run results <id> [--node <id>] [--json]`.
+///
+/// Exit 0 only for the unqualified success: a COMPLETED run whose every shown output resolved.
+/// A run that has not completed still prints what it has produced so far, and a CAS ref that
+/// could not be read back still prints its row, both at exit 2 — the documented "printable but
+/// not what you asked for". An unknown run — including another tenant's, which the
+/// tenant-scoped stores make indistinguishable from one that never existed — and an unknown
+/// `--node` are exit 2 with `null` under `--json`, as `run status` does.
 pub async fn results(
-    _store: &dyn SchedulerStore,
-    _journal: &dyn ExecutionJournal,
-    _content: &dyn ContentStore,
-    _run: RunId,
-    _node: Option<&NodeId>,
-    _json: bool,
+    store: &dyn SchedulerStore,
+    journal: &dyn ExecutionJournal,
+    content: &dyn ContentStore,
+    run: RunId,
+    node: Option<&NodeId>,
+    json: bool,
 ) -> Result<Outcome, CliError> {
-    Ok(Outcome::ok(""))
+    let Some(results) = torii_core::results::run_results(store, journal, content, run).await?
+    else {
+        return Ok(Outcome::precondition(if json {
+            "null".to_string()
+        } else {
+            format!("no such run: {}", run.0)
+        }));
+    };
+    let results = redacted(results);
+    let complete = results.status == RunStatus::Completed;
+
+    if let Some(wanted) = node {
+        let Some(row) = results.nodes.iter().find(|r| &r.node == wanted) else {
+            return Ok(Outcome::precondition(if json {
+                "null".to_string()
+            } else {
+                format!(
+                    "run {} has no result for node {}",
+                    run.0,
+                    render::one_line(&wanted.0)
+                )
+            }));
+        };
+        let code = exit_code(complete, std::slice::from_ref(row));
+        let text = if json {
+            to_json(row)?
+        } else {
+            node_text(&results, row)?
+        };
+        return Ok(Outcome { text, code });
+    }
+
+    let code = exit_code(complete, &results.nodes);
+    let text = if json {
+        to_json(&results)?
+    } else {
+        table(&results)
+    };
+    Ok(Outcome { text, code })
+}
+
+fn exit_code(complete: bool, rows: &[NodeResult]) -> i32 {
+    if complete && rows.iter().all(|r| r.unresolved.is_none()) {
+        EXIT_OK
+    } else {
+        EXIT_PRECONDITION
+    }
+}
+
+/// The free text in a result — a node's failure and a CAS read fault — through the same redaction
+/// `run status --json` gives a pause reason, for BOTH outputs. The OUTPUTS are already redacted
+/// by `torii_core`.
+fn redacted(mut r: RunResults) -> RunResults {
+    for n in &mut r.nodes {
+        n.error = n.error.as_deref().map(render::redact_reason);
+        n.unresolved = n.unresolved.as_deref().map(render::redact_reason);
+    }
+    r
+}
+
+fn to_json<T: serde::Serialize>(v: &T) -> Result<String, CliError> {
+    serde_json::to_string_pretty(v).map_err(|e| CliError::error(e.to_string()))
+}
+
+fn header(r: &RunResults) -> String {
+    let mut s = format!("run {}: {}\n", r.run.0, r.status.as_str());
+    if r.status != RunStatus::Completed {
+        s.push_str("not completed: these are its outputs as of its last checkpoint\n");
+    }
+    if r.as_of.is_none() {
+        s.push_str("no output checkpoint recorded yet\n");
+    }
+    s
+}
+
+fn state_str(s: NodeState) -> &'static str {
+    match s {
+        NodeState::Completed => "completed",
+        NodeState::Failed => "failed",
+        NodeState::Skipped => "skipped",
+    }
+}
+
+fn stored_cell(s: &Option<Stored>) -> String {
+    match s {
+        None => "—".to_string(),
+        Some(Stored::Inline) => "inline".to_string(),
+        Some(Stored::Cas { digest, size }) => {
+            let short: String = digest.chars().take(DIGEST_SHOWN).collect();
+            format!("cas {short} {size}B")
+        }
+    }
+}
+
+/// What a row says in place of (or about) its output. JSON-serialized outputs cannot carry a raw
+/// control character — serde escapes them — and the error and fault text go through
+/// [`render::safe_reason`] (redact, one line, capped), so no cell can forge a row.
+fn output_cell(r: &NodeResult) -> String {
+    if let Some(e) = &r.error {
+        return format!("error: {}", render::safe_reason(e));
+    }
+    if let Some(e) = &r.unresolved {
+        return format!("unresolved: {}", render::safe_reason(e));
+    }
+    match &r.output {
+        Some(v) => render::cap_chars(&render::one_line(&v.to_string()), OUTPUT_CELL_MAX),
+        None => "—".to_string(),
+    }
+}
+
+fn table(r: &RunResults) -> String {
+    let mut s = header(r);
+    let nodes: Vec<String> = r
+        .nodes
+        .iter()
+        .map(|n| render::one_line(&n.node.0))
+        .collect();
+    let stored: Vec<String> = r.nodes.iter().map(|n| stored_cell(&n.stored)).collect();
+    let nw = nodes
+        .iter()
+        .map(|n| n.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(4);
+    let sw = stored
+        .iter()
+        .map(|c| c.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(6);
+    s.push_str(&format!(
+        "{:<nw$}  {:<9}  {:<sw$}  OUTPUT\n",
+        "NODE", "STATE", "STORED"
+    ));
+    for ((row, node), stored) in r.nodes.iter().zip(&nodes).zip(&stored) {
+        s.push_str(&format!(
+            "{node:<nw$}  {:<9}  {stored:<sw$}  {}\n",
+            state_str(row.state),
+            output_cell(row)
+        ));
+    }
+    s
+}
+
+/// One node, whole: its row's facts, then the full output pretty-printed (serde escapes every
+/// control character in it, so it is safe to put on a terminal uncapped).
+fn node_text(r: &RunResults, row: &NodeResult) -> Result<String, CliError> {
+    let mut s = header(r);
+    s.push_str(&format!(
+        "node {}  {}  {}\n",
+        render::one_line(&row.node.0),
+        state_str(row.state),
+        stored_cell(&row.stored)
+    ));
+    if let Some(e) = &row.error {
+        s.push_str(&format!("error: {}\n", render::safe_reason(e)));
+    }
+    if let Some(e) = &row.unresolved {
+        s.push_str(&format!("unresolved: {}\n", render::safe_reason(e)));
+    }
+    if let Some(v) = &row.output {
+        s.push_str(&to_json(v)?);
+        s.push('\n');
+    }
+    Ok(s)
 }
 
 #[cfg(test)]

@@ -138,7 +138,10 @@ worker logs exactly that.
 transient retry ON at 3 attempts (`TORII_TRANSIENT_ATTEMPTS`; the gateway's own default is off): a
 provider 500 pauses the run on a short backoff and a worker re-attempts it. The memory backend is
 the exception — unset, it keeps retry off: nothing that could wake a pause there outlives the
-process. A run view should show that pause as "retrying (attempt n of N)" rather than as a stall —
+process. More generally, **on memory no pause can be resumed** — not a timed one (retry, a 429
+that gates every candidate, a wake backoff) and not a human one (signal, gate, agent answer, tool
+confirmation, budget cap), since every waker is another process and sees an empty store — so
+`run submit` prints the pause there at exit 2, never 0. On Postgres a pause is exit 0. A run view should show that pause as "retrying (attempt n of N)" rather than as a stall —
 `run_results` marks the node `retrying` for exactly that.
 
 **Effect class decides replay semantics.** `Pure` is memoized and never re-executed; `Mutation`

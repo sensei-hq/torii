@@ -17,7 +17,8 @@ use torii::{boot, cmd};
     about = "Operator control plane for the sensei orchestrator",
     long_about = "Observe and intervene on runs, drive due wakes, and manage durable config.\n\n\
                   DATABASE_URL and TORII_TENANT (a tenant id or slug) must be set — env only, \
-                  a flag would leak the password into `ps`. The gateway config is torii's \
+                  a flag would leak the password into `ps` — by every command but `config init \
+                  --dir`, which only writes the built-in defaults to a directory. The gateway config is torii's \
                   catalog. `run submit` and `worker serve` additionally need \
                   TORII_FENCE_VERSION; with TORII_BACKEND=memory (no database) they take \
                   --gateway-config instead.\n\n\
@@ -385,6 +386,34 @@ enum ConfigAction {
         #[arg(long)]
         force: bool,
     },
+    /// Start from the built-in defaults: a planner (with the discovery tools), role agents,
+    /// keyword-gated skills and chain bindings onto the seeded catalog
+    ///
+    /// `--dir <d>` writes them into a directory for you to edit and then `config push` — no
+    /// database needed. A missing directory is created; a non-empty one is refused (exit 2,
+    /// nothing written) unless --force, which replaces only the files a push reads there.
+    ///
+    /// `--push` pushes them as they ship, exactly as `config push` would a directory holding
+    /// them: replace-all, checked against torii's catalog, and asking before it removes
+    /// anything or advances the generation under paused runs (--yes skips both prompts).
+    #[command(group(
+        clap::ArgGroup::new("destination").required(true).multiple(false).args(["dir", "push"])
+    ))]
+    Init {
+        /// Write the defaults into this directory
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+        /// Push the defaults straight to the durable config
+        #[arg(long)]
+        push: bool,
+        /// With --dir: write into a non-empty directory, replacing the files a push reads
+        /// there (agents/*.md, skills/*.md, tools/*.json, chains.json, grants.json)
+        #[arg(long, requires = "dir")]
+        force: bool,
+        /// With --push: apply without confirmation even when entities are removed
+        #[arg(long, requires = "push")]
+        yes: bool,
+    },
     /// Replace the durable config from a directory and advance the generation
     Push {
         dir: PathBuf,
@@ -501,6 +530,20 @@ fn ensure_newline(s: &str) -> String {
 }
 
 async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
+    // A command that touches no store is answered BEFORE the environment is read: `env_config`
+    // refuses a missing DATABASE_URL / TORII_TENANT, and `config init --dir` is a local file
+    // operation over defaults compiled into the binary (SP-REG-1 D9).
+    if let Command::Config {
+        action:
+            ConfigAction::Init {
+                dir: Some(dir),
+                force,
+                ..
+            },
+    } = &cli.command
+    {
+        return cmd::config::init_dir(dir, *force);
+    }
     let env = boot::env_config()?;
     match cli.command {
         Command::Run { action } => match action {
@@ -787,6 +830,29 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 ConfigAction::Show => cmd::config::show(d.config_source.as_ref()).await,
                 ConfigAction::Pull { dir, force } => {
                     cmd::config::pull(d.config_source.as_ref(), &dir, force).await
+                }
+                ConfigAction::Init { dir: Some(_), .. } => {
+                    unreachable!("`config init --dir` is answered before the environment is read")
+                }
+                ConfigAction::Init { dir: None, yes, .. } => {
+                    let mut confirm = |text: &str| {
+                        cmd::config::interactive_confirm(
+                            text,
+                            &mut std::io::stdin().lock(),
+                            &mut std::io::stderr(),
+                        )
+                    };
+                    // The backend's own gateway config — torii's catalog on Postgres; none on
+                    // memory, which takes no --gateway-config here — exactly as `push` without
+                    // the flag.
+                    cmd::config::init_push(
+                        d.config_source.as_ref(),
+                        d.scheduler_store.as_ref(),
+                        d.gateway_config.as_deref(),
+                        yes,
+                        &mut confirm,
+                    )
+                    .await
                 }
                 ConfigAction::Push {
                     dir,

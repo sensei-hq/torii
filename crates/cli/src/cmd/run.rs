@@ -1574,20 +1574,25 @@ pub async fn signal(
     }
 
     // ---- The effect actually achieved, read back rather than assumed ------------------
-    // A fault on either READ is less damaging than the wake fault above — the wake may
-    // well have applied — but it is still a durable row the operator has not been told
-    // about, so it takes the same shape rather than a bare `?`.
+    // A fault on either READ comes AFTER `force_wake` committed, so the run may well be
+    // queued (or already claimed): `unread`'s "not queued — run `torii run wake`" would be
+    // false here (#55). It is still a durable row the operator must be told about, so it is
+    // a report rather than a bare `?` — "wake sent", pointing at `run status`.
     //
     // The row is never deleted by any shipped store, so `None` would mean a hypothetical
     // future retention/purge raced us, not a reachable path today.
+    let durable = format!("{shown}'s answer is journaled durably (seq {appended})");
+    let reread = |what: &str, e: &dyn std::fmt::Display| {
+        crate::cmd::wake_sent_unread(&durable, run, what, e)
+    };
     let after = match store.status(run).await {
         Ok(Some(s)) => s,
-        Ok(None) => return Ok(unread("the status re-read", &"the run vanished mid-signal")),
-        Err(e) => return Ok(unread("the status re-read", &e)),
+        Ok(None) => return Ok(reread("the status re-read", &"the run vanished mid-signal")),
+        Err(e) => return Ok(reread("the status re-read", &e)),
     };
     let after_events = match journal.load(run).await {
         Ok(evs) => evs,
-        Err(e) => return Ok(unread("the journal re-read", &e)),
+        Err(e) => return Ok(reread("the journal re-read", &e)),
     };
     // The node is terminal by now, or it is not. If it is, "not delivered" is FALSE — the
     // row is already durable — and the honest question is whether anything READ it. The

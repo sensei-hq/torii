@@ -104,6 +104,26 @@ enum RunAction {
         #[arg(long)]
         json: bool,
     },
+    /// Show a run's node outputs — what it produced, not its schedule
+    ///
+    /// One row per node: its state (completed, failed, skipped), where its output is stored
+    /// (`inline`, or `cas <digest> <size>B` when it was big enough for the content store, in
+    /// which case it is read back from there), and the output itself — capped to one line here;
+    /// `--node <id>` prints one node's output whole. A failed node shows its error instead.
+    /// Outputs and errors are redacted, as `run status` redacts a reason.
+    ///
+    /// Exit 0 for a completed run whose outputs all read back. A run that has not completed
+    /// still prints what it has produced so far (as of its last round checkpoint) at exit 2,
+    /// and so does a run with an output the content store could not return. An unknown run or
+    /// node is exit 2 (`null` under --json).
+    Results {
+        run_id: String,
+        /// One node's result, its output printed whole.
+        #[arg(long)]
+        node: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// List every run awaiting a wake, and any node awaiting a signal
     ///
     /// One journal is folded per PAUSED run, to name the nodes awaiting a signal. A run
@@ -481,6 +501,23 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                     d.wake_attempts.as_ref(),
                     d.journal.as_ref(),
                     run,
+                    json,
+                )
+                .await
+            }
+            RunAction::Results { run_id, node, json } => {
+                // Parse BEFORE connecting, as `status` does.
+                let run = parse_run_id(&run_id)?;
+                // LIGHT tier: the scheduler store, the journal and the CAS — no gateway config,
+                // no model credentials.
+                let d = boot::light(&env).await?;
+                let node = node.map(orchestrator_core::NodeId);
+                cmd::results::results(
+                    d.scheduler_store.as_ref(),
+                    d.journal.as_ref(),
+                    d.content.as_ref(),
+                    run,
+                    node.as_ref(),
                     json,
                 )
                 .await

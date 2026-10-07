@@ -583,6 +583,9 @@ pub struct LightDeps {
     pub gateway_config: Option<Arc<dyn GatewayConfigSource>>,
     /// AG-3: the scheduler's per-run wake-attempt counter, for `run status`.
     pub wake_attempts: Arc<dyn WakeAttemptCounts>,
+    /// AG-4: the tenant's CAS, so `run results` can resolve an output stored as a ref. The SAME
+    /// store the heavy tier hands the executor — a ref the executor wrote is readable here.
+    pub content: Arc<dyn ContentStore>,
 }
 
 /// AG-3: torii's Postgres scheduler keeps the counter in `runs.scheduled_runs.attempts`.
@@ -593,11 +596,10 @@ impl WakeAttemptCounts for torii_core::stores::PgSchedulerStore {
     }
 }
 
-/// Every store one backend provides — the light tier's three plus the heavy tier's CAS and
-/// blackboard — built in ONE place, so no tier names a backend type (TM-5).
+/// Every store one backend provides — the light tier's (the CAS among them, for `run results`)
+/// plus the heavy tier's blackboard — built in ONE place, so no tier names a backend type (TM-5).
 struct Stores {
     light: LightDeps,
-    content: Arc<dyn ContentStore>,
     context: Arc<dyn ContextStore>,
 }
 
@@ -626,8 +628,8 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                     config_source: Arc::new(stores.config),
                     gateway_config: Some(Arc::new(CatalogGatewayConfigSource::new(pool))),
                     wake_attempts: scheduler,
+                    content: Arc::new(stores.content),
                 },
-                content: Arc::new(stores.content),
                 context: Arc::new(stores.context),
             })
         }
@@ -650,9 +652,9 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                     config_source: Arc::new(config),
                     gateway_config: None,
                     wake_attempts: Arc::new(NoWakeAttemptCounts),
+                    content: content.clone(),
                 },
-                context: Arc::new(InMemoryContextStore::new(content.clone())),
-                content,
+                context: Arc::new(InMemoryContextStore::new(content)),
             })
         }
     }
@@ -698,11 +700,7 @@ pub async fn heavy(
     // Every store from ONE backend (TM-5): for Postgres, one shared pool; for memory, this
     // process's heap. The journal the Executor writes is the SAME one the Scheduler reads, so
     // `tick`'s pause-deadline read sees what `run` wrote.
-    let Stores {
-        light,
-        content,
-        context,
-    } = open_stores(env).await?;
+    let Stores { light, context } = open_stores(env).await?;
     let (gw_config, gw_source) = match (file_config, &file, &light.gateway_config) {
         (Some(cfg), Some(f), _) => (cfg, f.describe()),
         (_, _, Some(catalog)) => (catalog.load().await?, catalog.describe()),
@@ -759,7 +757,7 @@ pub async fn heavy(
     let (sink, events) = RunEventSink::bounded(DEFAULT_EVENT_BUFFER);
     let mut executor = Executor::new(gateway, light.journal.clone(), fence)
         .with_hooks(sink)
-        .with_content_store(content)
+        .with_content_store(light.content.clone())
         .with_context_store(context)
         .with_registry_handle(handle)
         // A production binary defaults SECURE: s2 leaves the redactor off in the

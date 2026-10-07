@@ -227,7 +227,6 @@ async fn main() -> anyhow::Result<()> {
         gateway,
         jwks: RwLock::new(jwks),
         tenant_keys,
-        embedder,
         object_store,
         ingestor,
         retriever,

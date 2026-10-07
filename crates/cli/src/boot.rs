@@ -892,6 +892,20 @@ pub async fn heavy(
     gateway_config_file: Option<&Path>,
     workspace_root: Option<&Path>,
 ) -> Result<HeavyDeps, CliError> {
+    heavy_with(env, gateway_config_file, workspace_root, |gw| gw).await
+}
+
+/// [`heavy`], with `adjust` applied to the gateway config once it is loaded — the identity in
+/// production. A test seam: on Postgres the gateway config is always torii's catalog, whose
+/// routers point at real providers, and a drive that needs a model answer (AG-9's
+/// `config init` → planning run) re-points the catalog's routers at a local fake while keeping
+/// every chain and model exactly as seeded.
+pub(crate) async fn heavy_with(
+    env: &EnvConfig,
+    gateway_config_file: Option<&Path>,
+    workspace_root: Option<&Path>,
+    adjust: impl FnOnce(kernel::types::config::GatewayConfig) -> kernel::types::config::GatewayConfig,
+) -> Result<HeavyDeps, CliError> {
     let fence = require_fence(env)?.to_string();
     let wake_retry = require_wake_retry(env)?;
     let drive = require_drive_policy(env)?;
@@ -917,6 +931,7 @@ pub async fn heavy(
             unreachable!("gateway_config_file_for returns a file exactly when there is no catalog")
         }
     };
+    let gw_config = adjust(gw_config);
 
     // One atomic (config, generation) read — the fence generation must match the
     // config it was computed from.
@@ -2730,5 +2745,201 @@ mod tests {
             "heavy() must share ONE pool (~1 backend connection), saw {after}"
         );
         drop(deps);
+    }
+
+    /// A fake model provider on the OpenAI wire that plays the default PLANNER through one
+    /// discovery round-trip: offered `list_agents` and not yet answered, it calls it; given the
+    /// tool's answer, it returns `plan` and keeps the answer; asked anything else (a planned
+    /// step), it answers in prose. Returns its base URL, every tool answer it was handed, and
+    /// its call count.
+    async fn planning_provider(
+        plan: serde_json::Value,
+    ) -> (
+        String,
+        Arc<std::sync::Mutex<Vec<String>>>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        #[derive(Clone)]
+        struct St {
+            plan: String,
+            tool_answers: Arc<std::sync::Mutex<Vec<String>>>,
+            calls: Arc<AtomicUsize>,
+        }
+        fn reply(message: serde_json::Value, finish: &str) -> axum::Json<serde_json::Value> {
+            axum::Json(serde_json::json!({
+                "id": "fake", "object": "chat.completion", "created": 0, "model": "m",
+                "choices": [{"index": 0, "finish_reason": finish, "message": message}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}
+            }))
+        }
+        async fn chat(
+            axum::extract::State(st): axum::extract::State<St>,
+            axum::Json(req): axum::Json<serde_json::Value>,
+        ) -> axum::Json<serde_json::Value> {
+            st.calls.fetch_add(1, SeqCst);
+            let offered = req["tools"]
+                .as_array()
+                .is_some_and(|ts| ts.iter().any(|t| t["function"]["name"] == "list_agents"));
+            let answered: Vec<String> = req["messages"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|m| m["role"] == "tool")
+                .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+                .collect();
+            if offered && answered.is_empty() {
+                return reply(
+                    serde_json::json!({"role": "assistant", "content": null, "tool_calls": [{
+                        "id": "call_1", "type": "function",
+                        "function": {"name": "list_agents", "arguments": "{}"}}]}),
+                    "tool_calls",
+                );
+            }
+            if offered {
+                st.tool_answers.lock().unwrap().extend(answered);
+                return reply(
+                    serde_json::json!({"role": "assistant", "content": st.plan}),
+                    "stop",
+                );
+            }
+            reply(
+                serde_json::json!({"role": "assistant",
+                                   "content": "The report says revenue rose 4%."}),
+                "stop",
+            )
+        }
+        let st = St {
+            plan: plan.to_string(),
+            tool_answers: Arc::new(std::sync::Mutex::new(Vec::new())),
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (answers, calls) = (st.tool_answers.clone(), st.calls.clone());
+        let app = axum::Router::new()
+            .route("/v1/chat/completions", axum::routing::post(chat))
+            .with_state(st);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (url, answers, calls)
+    }
+
+    /// **AG-9 (#46) done-when.** On a FRESH tenant, `config init --push` (the real command
+    /// function, checked against torii's real catalog) followed by `run submit` of a planning
+    /// graph — one `Expand` whose planner is `Select` — produces a plan, with no hand-written
+    /// registry. The binary's own boot (`heavy`) drives it; the only substitution is the
+    /// catalog's router URLs, re-pointed at a local fake, so the chains and models are exactly
+    /// the seeded ones. Submitted under a money cap, so every model on the chains the defaults
+    /// bind must be priced (an explicit zero for the local one).
+    #[cfg_attr(
+        not(have_database_url),
+        ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+    )]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn config_init_then_a_planning_run_produces_a_plan_on_a_fresh_tenant() {
+        let Some(url) = crate::test_guard::db_url() else {
+            return;
+        };
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let stores = t.stores();
+        let catalog = CatalogGatewayConfigSource::new(t.pool.clone());
+        let pushed = crate::cmd::config::init_push(
+            &stores.config,
+            &stores.scheduler,
+            Some(&catalog),
+            false,
+            &mut |text: &str| panic!("a fresh tenant's first push asks nothing: {text}"),
+        )
+        .await
+        .expect("config init --push");
+        assert!(
+            pushed.text.contains("pushed: config now at v1"),
+            "{}",
+            pushed.text
+        );
+
+        let plan = serde_json::json!({
+            "graph": {"nodes": [{"id": "summary", "deps": [],
+                "kind": {"Agent": {"agent": "writer",
+                                    "input": {"task": "Summarize the report in one line"}}}}]},
+            "node_plans": {"summary": {"label": "Summarize the report"}}
+        });
+        let (fake, tool_answers, calls) = planning_provider(plan).await;
+        let env = tenant_env(&url, t.id, "torii-ag9-init-plan-fence");
+        let d = heavy_with(&env, None, None, |mut gw| {
+            for r in gw.routers.values_mut() {
+                r.url = fake.clone();
+            }
+            gw
+        })
+        .await
+        .unwrap_or_else(|e| panic!("heavy boots on the defaults: {}", e.message));
+
+        let run = RunId(uuid::Uuid::new_v4());
+        let graph = graph_of(
+            "goal",
+            orchestrator_core::NodeKind::Expand {
+                input: serde_json::json!({"goal": "Summarize the quarterly report"}),
+                planner: orchestrator_core::PlannerRef::Select,
+            },
+        );
+        let budget = orchestrator_core::RunBudget {
+            tokens: None,
+            money: Some(orchestrator_core::MoneyBudget {
+                total_micro_usd: 1_000_000,
+            }),
+        };
+        let _ = crate::cmd::run::submit(
+            &d.scheduler,
+            run,
+            graph,
+            budget,
+            crate::cmd::run::StoreLifetime::Process,
+            || {},
+        )
+        .await;
+        let st = d.scheduler.status(run).await.unwrap().expect("row");
+        let events: Vec<_> = d
+            .light
+            .journal
+            .load(run)
+            .await
+            .expect("journal")
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
+        assert_eq!(
+            st.status,
+            orchestrator_core::RunStatus::Completed,
+            "{:?}\n{events:#?}",
+            st.reason
+        );
+        assert!(
+            events.iter().any(|e| matches!(e,
+                orchestrator_core::JournalEvent::PlannerSelected { agent, .. }
+                    if agent.0 == "planner")),
+            "Select picked the shipped default planner: {events:#?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e,
+                orchestrator_core::JournalEvent::PlanExpanded { subgraph, .. }
+                    if subgraph.nodes.iter().any(|n| n.id.0 == "summary"))),
+            "the planner's plan was expanded: {events:#?}"
+        );
+        let answers = tool_answers.lock().unwrap().join("\n");
+        for agent in ["planner", "researcher", "reviewer", "writer"] {
+            assert!(
+                answers.contains(agent),
+                "list_agents — declared by the shipped planner, specced by the shipped \
+                 tools/list_agents.json — answered from the registry: {answers}"
+            );
+        }
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "planner: list_agents, then the plan; then the planned step"
+        );
+        drop(d);
+        drop(t);
     }
 }

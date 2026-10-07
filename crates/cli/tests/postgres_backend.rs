@@ -16,6 +16,7 @@ fn torii() -> Command {
         "TORII_FENCE_VERSION",
         "TORII_BACKEND",
         "TORII_REGISTRY_DIR",
+        "TORII_USER",
     ] {
         c.env_remove(k);
     }
@@ -23,10 +24,15 @@ fn torii() -> Command {
 }
 
 /// A tenant of the test's own, removed on drop (also when the test panicked).
+///
+/// AG-13: it has an org root with an UNCAPPED budget node and one user in it — the issuer every
+/// `torii()` of this tenant runs as (`TORII_USER`) — so a submit is charged and never limited.
 struct Tenant {
     url: String,
     id: uuid::Uuid,
     slug: String,
+    root: uuid::Uuid,
+    user: uuid::Uuid,
 }
 
 impl Tenant {
@@ -42,18 +48,103 @@ impl Tenant {
         .execute(&pool)
         .await
         .expect("create the test tenant");
-        Tenant {
+        let mut t = Tenant {
             url: url.to_string(),
             id,
             slug,
+            root: uuid::Uuid::new_v4(),
+            user: uuid::Uuid::nil(),
+        };
+        sqlx::query(
+            "insert into core.unit_levels (tenant_id, level, label) \
+             select $1, l, 'L' || l from generate_series(0, 4) l",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("the test tenant's unit levels");
+        for q in [
+            "insert into core.org_units (tenant_id, id, parent_id, level, name) \
+             values ($1, $2, null, 0, 'Org')",
+            "insert into governance.nodes (tenant_id, id, org_unit_id, modified_by) \
+             values ($1, $2, $2, 'torii-bin')",
+        ] {
+            sqlx::query(q)
+                .bind(id)
+                .bind(t.root)
+                .execute(&pool)
+                .await
+                .expect("the test tenant's org root");
         }
+        t.user = t.member(t.root).await;
+        t
     }
 
-    /// `torii` for this tenant — by SLUG, the way an operator names it.
+    /// A new user of this tenant, a member of `unit`.
+    async fn member(&self, unit: uuid::Uuid) -> uuid::Uuid {
+        let pool = torii_core::connect(&self.url, 1).await.expect("connect");
+        let user = uuid::Uuid::new_v4();
+        sqlx::query("insert into core.profiles (id, display_name) values ($1, 'torii-bin')")
+            .bind(user)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "insert into core.memberships (profile_id, tenant_id, assigned_by) \
+             values ($1, $2, 'torii-bin')",
+        )
+        .bind(user)
+        .bind(self.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into core.unit_members (tenant_id, unit_id, profile_id) values ($1, $2, $3)",
+        )
+        .bind(self.id)
+        .bind(unit)
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+        user
+    }
+
+    /// A `hard`-capped team under the root, with `spent` already spent, and a new user in it.
+    async fn capped_member(&self, cap: &str, spent: &str) -> uuid::Uuid {
+        let pool = torii_core::connect(&self.url, 1).await.expect("connect");
+        let team = uuid::Uuid::new_v4();
+        sqlx::query(
+            "insert into core.org_units (tenant_id, id, parent_id, level, name) \
+             values ($1, $2, $3, 2, 'Capped Team')",
+        )
+        .bind(self.id)
+        .bind(team)
+        .bind(self.root)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into governance.nodes \
+               (tenant_id, id, org_unit_id, cap_amount, enforcement, spent_amount, modified_by) \
+             values ($1, $2, $2, $3::numeric, 'hard', $4::numeric, 'torii-bin')",
+        )
+        .bind(self.id)
+        .bind(team)
+        .bind(cap)
+        .bind(spent)
+        .execute(&pool)
+        .await
+        .unwrap();
+        self.member(team).await
+    }
+
+    /// `torii` for this tenant — by SLUG, the way an operator names it — as its user.
     fn torii(&self) -> Command {
         let mut c = torii();
         c.env("DATABASE_URL", &self.url)
-            .env("TORII_TENANT", &self.slug);
+            .env("TORII_TENANT", &self.slug)
+            .env("TORII_USER", self.user.to_string());
         c
     }
 
@@ -78,6 +169,14 @@ impl Drop for Tenant {
             rt.block_on(async move {
                 use sqlx::Connection;
                 if let Ok(mut c) = sqlx::PgConnection::connect(&url).await {
+                    // Its users first: a membership holds the tenant (`on delete restrict`).
+                    let _ = sqlx::query(
+                        "delete from core.profiles where id in \
+                           (select profile_id from core.memberships where tenant_id = $1)",
+                    )
+                    .bind(id)
+                    .execute(&mut c)
+                    .await;
                     let _ = sqlx::query("delete from core.tenants where id = $1")
                         .bind(id)
                         .execute(&mut c)
@@ -870,4 +969,126 @@ async fn a_long_running_worker_serve_follows_a_config_push_without_restarting() 
          worker log:\n{}",
         worker.log()
     );
+}
+
+/// One `AwaitSignal` node: the run pauses for a person and spends nothing.
+fn signal_graph(dir: &std::path::Path) -> std::path::PathBuf {
+    let graph = dir.join("signal-graph.json");
+    let g = Graph {
+        nodes: vec![Node {
+            id: NodeId("gate".into()),
+            kind: NodeKind::AwaitSignal { timeout: None },
+            deps: vec![],
+        }],
+    };
+    std::fs::write(&graph, serde_json::to_string(&g).unwrap()).unwrap();
+    graph
+}
+
+/// AG-13 (#49) at the binary: on Postgres a run is submitted AS `TORII_USER`, its money limit is
+/// that user's headroom (here a $3 team with $0.50 spent: $2.50), `--budget-usd` may only lower
+/// it, and a raise through `run wake --budget-usd` is checked against the same caps. Each refusal
+/// writes nothing.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn a_postgres_run_is_limited_to_its_issuers_headroom_and_a_raise_past_it_is_refused() {
+    let Some(url) = db_url() else { return };
+    let t = Tenant::new(&url).await;
+    let dir = tempfile::tempdir().unwrap();
+    ok(&t
+        .torii()
+        .args(["config", "push", "--yes"])
+        .arg(registry(dir.path(), "chat"))
+        .output()
+        .expect("spawn"));
+    let graph = signal_graph(dir.path());
+    let capped = t.capped_member("3", "0.5").await.to_string();
+    let submit = |run: &str, extra: &[&str]| {
+        t.torii()
+            .env("TORII_FENCE_VERSION", "v1")
+            .env("TORII_USER", &capped)
+            .args(["run", "submit", "--run-id", run, "--graph"])
+            .arg(&graph)
+            .args(extra)
+            .output()
+            .expect("spawn")
+    };
+    let status = |run: &str| {
+        t.torii()
+            .args(["run", "status", run])
+            .output()
+            .expect("spawn")
+    };
+
+    // The headroom is the limit.
+    let run = uuid::Uuid::new_v4().to_string();
+    ok(&submit(&run, &[]));
+    let shown = ok(&status(&run));
+    assert!(
+        shown.contains("money spent: $0.00 / budget: $2.50"),
+        "the run's limit is its issuer's headroom:\n{shown}"
+    );
+
+    // An explicit limit below it is the limit.
+    let lower = uuid::Uuid::new_v4().to_string();
+    ok(&submit(&lower, &["--budget-usd", "1"]));
+    assert!(
+        ok(&status(&lower)).contains("budget: $1.00"),
+        "--budget-usd lowers the limit"
+    );
+
+    // Above it: refused, naming the headroom, and nothing is submitted.
+    let over = uuid::Uuid::new_v4().to_string();
+    let out = submit(&over, &["--budget-usd", "3"]);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(
+        text.contains("exceeds the headroom of $2.50") && text.contains("Capped Team"),
+        "{text}"
+    );
+    assert!(!text.contains("submitted: "), "{text}");
+    assert_eq!(status(&over).status.code(), Some(2), "no run was created");
+
+    // No TORII_USER on Postgres: refused before anything is written.
+    let anon = uuid::Uuid::new_v4().to_string();
+    let out = torii()
+        .env("DATABASE_URL", &t.url)
+        .env("TORII_TENANT", &t.slug)
+        .env("TORII_FENCE_VERSION", "v1")
+        .args(["run", "submit", "--run-id", &anon, "--graph"])
+        .arg(&graph)
+        .output()
+        .expect("spawn");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("TORII_USER"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(status(&anon).status.code(), Some(2), "no run was created");
+
+    // A raise goes through the same check: past the headroom is refused and nothing moves …
+    let out = t
+        .torii()
+        .args(["run", "wake", &lower, "--budget-usd", "2.51"])
+        .output()
+        .expect("spawn");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(text.contains("exceeds the headroom of $2.50"), "{text}");
+    assert!(ok(&status(&lower)).contains("budget: $1.00"), "unmoved");
+    // … within it, the cap moves.
+    ok(&t
+        .torii()
+        .args(["run", "wake", &lower, "--budget-usd", "2.5"])
+        .output()
+        .expect("spawn"));
+    assert!(ok(&status(&lower)).contains("budget: $2.50"));
 }

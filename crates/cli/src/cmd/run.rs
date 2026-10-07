@@ -69,6 +69,18 @@ pub async fn status(
             let budgeted = budgeted_turns(&events);
             let spend_advice = spend_unrecorded_advice(&r);
             let wake_attempts = reportable_wake_attempts(&r, attempts.wake_attempts(run).await?);
+            // AG-15: what a human must act on that `list-paused` alone used to surface —
+            // pending confirm-before-run calls, and escalated questions with their CURRENT
+            // holder and deadline. The listing's own fold, filtered, so the two cannot differ.
+            let waiting = awaiting_nodes(&events);
+            let tool_confirms: Vec<&render::AwaitingNode> = waiting
+                .iter()
+                .filter(|n| n.tool_confirm.is_some())
+                .collect();
+            let escalated: Vec<&render::AwaitingNode> = waiting
+                .iter()
+                .filter(|n| n.escalated_to.is_some())
+                .collect();
 
             if json {
                 let base = render::json(&[r]).map_err(|e| CliError::error(e.to_string()))?;
@@ -84,6 +96,8 @@ pub async fn status(
                     && budgeted.is_empty()
                     && spend_advice.is_none()
                     && wake_attempts.is_none()
+                    && tool_confirms.is_empty()
+                    && escalated.is_empty()
                 {
                     return Ok(Outcome::ok(base));
                 }
@@ -109,6 +123,24 @@ pub async fn status(
                 }
                 if let Some(n) = wake_attempts {
                     rows[0]["wake_attempts"] = serde_json::json!(n);
+                }
+                if !tool_confirms.is_empty() {
+                    rows[0]["tool_confirms"] = serde_json::to_value(&tool_confirms)
+                        .map_err(|e| CliError::error(e.to_string()))?;
+                }
+                if !escalated.is_empty() {
+                    rows[0]["escalations"] = serde_json::Value::Array(
+                        escalated
+                            .iter()
+                            .map(|n| {
+                                serde_json::json!({
+                                    "node": n.node,
+                                    "escalated_to": n.escalated_to,
+                                    "deadline": n.deadline,
+                                })
+                            })
+                            .collect(),
+                    );
                 }
                 Ok(Outcome::ok(
                     serde_json::to_string_pretty(&rows)
@@ -149,6 +181,12 @@ pub async fn status(
                     text.push_str(&format!(
                         "wake attempts: {n} consecutive since the last successful drive\n"
                     ));
+                }
+                for n in &tool_confirms {
+                    text.push_str(&render::tool_confirm_line(run, n));
+                }
+                for n in &escalated {
+                    text.push_str(&render::escalation_line(n));
                 }
                 Ok(Outcome::ok(text))
             }

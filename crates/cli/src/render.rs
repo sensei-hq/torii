@@ -501,6 +501,46 @@ pub struct ToolConfirmCall {
 /// `MAX_HUMAN_TEXT_BYTES`. `--json` carries them whole.
 const ARGS_MAX: usize = 200;
 
+/// `run status`'s line for one pending confirm-before-run call (a row [`AwaitingNode`] whose
+/// `tool_confirm` is `Some`), naming the exact command that answers it.
+pub fn tool_confirm_line(run: orchestrator_core::RunId, n: &AwaitingNode) -> String {
+    let Some(c) = &n.tool_confirm else {
+        return String::new();
+    };
+    let call = cap_chars(&one_line(&c.effect_id), NODE_MAX);
+    format!(
+        "tool confirmation pending: node {}, {}, {} — answer with `torii run tool approve {} \
+         --call {call}` (or `reject`)\n",
+        cap_chars(&one_line(&n.node.0), NODE_MAX),
+        tool_confirm_cell(c),
+        deadline_cell(n.deadline),
+        run.0,
+    )
+}
+
+/// `run status`'s line for one escalated question: who holds it now, until when.
+pub fn escalation_line(n: &AwaitingNode) -> String {
+    format!(
+        "escalated: node {} now waits on {}, {}\n",
+        cap_chars(&one_line(&n.node.0), NODE_MAX),
+        cap_chars(
+            &one_line(n.escalated_to.as_deref().unwrap_or_default()),
+            NODE_MAX
+        ),
+        deadline_cell(n.deadline),
+    )
+}
+
+/// The deadline cell every awaiting row ends with.
+fn deadline_cell(deadline: Option<DateTime<Utc>>) -> String {
+    match deadline {
+        Some(d) => format!("deadline {}", fmt_wake(Some(d))),
+        // Says what it MEANS, not just that the field is empty: this run is never
+        // auto-woken and will wait until a human acts.
+        None => "no deadline — waits until signalled".to_string(),
+    }
+}
+
 /// The `tool:` cell for one pending confirm-before-run call.
 fn tool_confirm_cell(c: &ToolConfirmCall) -> String {
     format!(
@@ -841,12 +881,7 @@ pub fn awaiting_section(rows: &[(orchestrator_core::RunId, Awaiting)]) -> String
                         run.0,
                         cap_chars(&one_line(&a.node.0), NODE_MAX),
                         cell,
-                        match a.deadline {
-                            Some(d) => format!("deadline {}", fmt_wake(Some(d))),
-                            // Says what it MEANS, not just that the field is empty: this
-                            // run is never auto-woken and will wait until a human acts.
-                            None => "no deadline — waits until signalled".to_string(),
-                        }
+                        deadline_cell(a.deadline)
                     ));
                 }
             }

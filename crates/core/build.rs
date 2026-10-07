@@ -4,6 +4,9 @@
 //! `crates/torii/build.rs`, which carries the full reasoning.
 fn main() {
     println!("cargo::rerun-if-env-changed=DATABASE_URL");
+    // AG-9: `defaults/` is compiled in by `include_dir!`, which cannot tell cargo to track it on
+    // stable — without this an edited default would ship stale until something else rebuilt.
+    println!("cargo::rerun-if-changed=defaults");
     println!("cargo::rustc-check-cfg=cfg(have_database_url)");
     if std::env::var("DATABASE_URL").is_ok_and(|v| !v.trim().is_empty()) {
         println!("cargo::rustc-cfg=have_database_url");

@@ -871,3 +871,62 @@ async fn a_long_running_worker_serve_follows_a_config_push_without_restarting() 
         worker.log()
     );
 }
+
+/// AG-9 (#46): `config init --push` seeds a fresh tenant with the shipped registry through the
+/// same path as `config push` — checked against torii's catalog, generation 1, and a second
+/// one is `no changes`. `init --dir` followed by `config push` of that directory lands the
+/// identical registry on another tenant, so the two routes cannot diverge.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn config_init_push_seeds_a_fresh_tenant_exactly_as_init_dir_then_push_does() {
+    let Some(url) = db_url() else { return };
+    let (a, b) = (Tenant::new(&url).await, Tenant::new(&url).await);
+
+    let pushed = ok(&a
+        .torii()
+        .args(["config", "init", "--push"])
+        .output()
+        .expect("spawn"));
+    assert!(pushed.contains("pushed: config now at v1"), "{pushed}");
+    assert_eq!(a.generation().await, Some(1));
+    assert_eq!(b.generation().await, Some(0), "another tenant is untouched");
+    let again = ok(&a
+        .torii()
+        .args(["config", "init", "--push"])
+        .output()
+        .expect("spawn"));
+    assert!(again.contains("no changes"), "{again}");
+    assert_eq!(a.generation().await, Some(1));
+
+    let dir = tempfile::tempdir().unwrap();
+    let reg = dir.path().join("registry");
+    ok(&a
+        .torii()
+        .args(["config", "init", "--dir"])
+        .arg(&reg)
+        .output()
+        .expect("spawn"));
+    ok(&b
+        .torii()
+        .args(["config", "push"])
+        .arg(&reg)
+        .output()
+        .expect("spawn"));
+
+    let show = |t: &Tenant| {
+        let out = ok(&t.torii().args(["config", "show"]).output().expect("spawn"));
+        serde_json::from_str::<serde_json::Value>(&out).expect("json")["registry"].clone()
+    };
+    let (shown_a, shown_b) = (show(&a), show(&b));
+    assert_eq!(shown_a, shown_b);
+    let planner = shown_a["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["area"] == "planning")
+        .expect("a planner was seeded");
+    assert_eq!(planner["default_planner"], true, "{planner}");
+}

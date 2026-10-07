@@ -159,6 +159,13 @@ usage-error code, so a script keying off it should check stderr too.
 
 Logs go to **stderr** via `RUST_LOG` (default `info`), never stdout, so `--json` output stays clean.
 
+`run submit` and `worker serve` also log every human-in-the-loop moment their drives report — a
+node starts waiting (signal, gate, agent question, loop gate, tool confirmation), a decision is
+honoured, a question is escalated — as one line per event at target `torii::run_event`, the event's
+JSON in `event` (e.g. `{"run":"…","type":"signal_received","node":"gate","payload":{…}}`). It is
+best-effort: a drive never waits on the log, and an event the log cannot keep up with is dropped
+and counted in a warning. `RUST_LOG=torii::run_event=info` shows only these.
+
 ## Known gaps
 
 Stated because finding them by experiment is worse.

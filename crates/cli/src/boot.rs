@@ -109,7 +109,8 @@ pub struct DrivePolicy {
     pub map_concurrency: usize,
     /// `Executor::with_max_transient_attempts`: total attempts a node gets at a model call the
     /// gateway reports as retryable before the failure is terminal; `1` turns retry off.
-    /// Default [`DEFAULT_TRANSIENT_ATTEMPTS`] — ON, where the gateway's default is off (#34).
+    /// Default [`DEFAULT_TRANSIENT_ATTEMPTS`] — ON, where the gateway's default is off (#34) —
+    /// except on the memory backend, [`DEFAULT_MEMORY_TRANSIENT_ATTEMPTS`] (off).
     pub transient_attempts: u32,
 }
 
@@ -131,6 +132,14 @@ const MAX_MAP_CONCURRENCY: usize = 256;
 /// few wasted calls. torii decides that trade for its operators (#34): a single provider 500
 /// failing a whole run is the worse default, and 3 attempts bounds the waste.
 pub const DEFAULT_TRANSIENT_ATTEMPTS: u32 = 3;
+
+/// Transient-failure attempts when `TORII_TRANSIENT_ATTEMPTS` is unset on the MEMORY backend:
+/// retry off. A retry is a durable pause woken later by a worker, and on memory nothing outlives
+/// the process — no later `worker serve` can see the run — so a pause there is one no process
+/// can finish, and `run submit` would print `paused` and exit 0 on a model call that never
+/// succeeded. Off, the same provider 500 fails the run and `run submit` exits 1, which is what a
+/// CI step gating on the exit code needs. An explicit `TORII_TRANSIENT_ATTEMPTS` still applies.
+pub const DEFAULT_MEMORY_TRANSIENT_ATTEMPTS: u32 = 1;
 
 /// A typo ceiling on `TORII_TRANSIENT_ATTEMPTS`. The gateway's backoff between attempts is 2s,
 /// doubling, capped at 60s, so 20 attempts already waits out a provider for ~15 minutes.
@@ -218,7 +227,7 @@ pub fn env_config_from(get: impl Fn(&str) -> Option<String>) -> Result<EnvConfig
         None => DEFAULT_POOL_SIZE,
     };
     let wake_retry = wake_retry_from(&non_empty);
-    let drive = drive_policy_from(&non_empty);
+    let drive = drive_policy_from(&non_empty, &backend);
     Ok(EnvConfig {
         backend,
         fence_version,
@@ -231,8 +240,14 @@ pub fn env_config_from(get: impl Fn(&str) -> Option<String>) -> Result<EnvConfig
 /// AG-5: the `TORII_*` drive overrides on top of [`DrivePolicy::default`]. Each unset (or
 /// blank) variable keeps its default; a set one is parsed loudly, naming the variable and
 /// echoing the value. Durations take `worker serve --interval`'s units (`500ms`, `30s`, `15m`).
-fn drive_policy_from(non_empty: &impl Fn(&str) -> Option<String>) -> Result<DrivePolicy, String> {
+fn drive_policy_from(
+    non_empty: &impl Fn(&str) -> Option<String>,
+    backend: &Backend,
+) -> Result<DrivePolicy, String> {
     let mut policy = DrivePolicy::default();
+    if matches!(backend, Backend::Memory { .. }) {
+        policy.transient_attempts = DEFAULT_MEMORY_TRANSIENT_ATTEMPTS;
+    }
     if let Some(raw) = non_empty(ENV_WAKE_LEASE) {
         // `parse_interval` already refuses zero: a zero lease would treat every claim as
         // abandoned the moment it was taken.
@@ -1354,14 +1369,34 @@ mod tests {
         }
     }
 
-    /// AG-5: unset, `TORII_TRANSIENT_ATTEMPTS` is 3 (retry ON); `1` is off and accepted; zero,
-    /// garbage and a typo-sized value are refused by the heavy tier only, naming the variable.
+    /// AG-5: unset, `TORII_TRANSIENT_ATTEMPTS` is 3 (retry ON) on Postgres and 1 (off) on the
+    /// memory backend, whose pauses nothing can wake; set, it applies on either; `1` is off and
+    /// accepted; zero, garbage and a typo-sized value are refused by the heavy tier only, naming
+    /// the variable.
     #[test]
     fn the_transient_attempts_are_read_and_a_bad_one_is_refused_by_the_heavy_tier() {
         let e = env_config_from(getter(&[(ENV_DATABASE_URL, "postgres://h/db")])).expect("ok");
         assert_eq!(
             require_drive_policy(&e)
                 .expect("default")
+                .transient_attempts,
+            3
+        );
+        let e = env_config_from(getter(&[(ENV_BACKEND, "memory")])).expect("ok");
+        assert_eq!(
+            require_drive_policy(&e)
+                .expect("memory default")
+                .transient_attempts,
+            1
+        );
+        let e = env_config_from(getter(&[
+            (ENV_BACKEND, "memory"),
+            (ENV_TRANSIENT_ATTEMPTS, "3"),
+        ]))
+        .expect("ok");
+        assert_eq!(
+            require_drive_policy(&e)
+                .expect("memory, set")
                 .transient_attempts,
             3
         );
@@ -1813,14 +1848,19 @@ mod tests {
         )
     }
 
-    /// AG-5: transient-failure retry is ON by default in torii (3 attempts) — one provider 500
-    /// pauses the run on a backoff instead of failing it — and `TORII_TRANSIENT_ATTEMPTS=1`
-    /// turns it off, so the same 500 is terminal.
+    /// AG-5: transient-failure retry at 3 attempts — torii's default on Postgres — pauses the run
+    /// on one provider 500 instead of failing it. On the memory backend, where nothing could ever
+    /// wake that pause, an unset `TORII_TRANSIENT_ATTEMPTS` is 1 (off), so the same 500 fails the
+    /// run; `TORII_TRANSIENT_ATTEMPTS=1` on Postgres is the same as that.
     #[tokio::test]
-    async fn heavy_retries_a_transient_provider_failure_by_default() {
+    async fn heavy_wires_the_transient_attempts_into_the_executor() {
         let provider = FakeProvider::start(500, std::time::Duration::ZERO).await;
         let dir = tempfile::tempdir().unwrap();
-        let (env, gw) = memory_env(dir.path(), &provider.gateway_json(), &[]);
+        let (env, gw) = memory_env(
+            dir.path(),
+            &provider.gateway_json(),
+            &[("TORII_TRANSIENT_ATTEMPTS", "3")],
+        );
         let d = boot(&env, &gw).await;
         let run = submit_graph(&d, model_call()).await;
         let st = d.scheduler.status(run).await.unwrap().expect("row");
@@ -1828,7 +1868,7 @@ mod tests {
         assert_eq!(
             st.status,
             orchestrator_core::RunStatus::Paused,
-            "by default one transient 500 must pause for a retry, not fail the run: {:?}",
+            "at 3 attempts one transient 500 must pause for a retry, not fail the run: {:?}",
             st.reason
         );
         assert!(
@@ -1840,17 +1880,13 @@ mod tests {
         );
 
         let dir = tempfile::tempdir().unwrap();
-        let (env, gw) = memory_env(
-            dir.path(),
-            &provider.gateway_json(),
-            &[("TORII_TRANSIENT_ATTEMPTS", "1")],
-        );
+        let (env, gw) = memory_env(dir.path(), &provider.gateway_json(), &[]);
         let d = boot(&env, &gw).await;
         let run = submit_graph(&d, model_call()).await;
         assert_eq!(
             d.scheduler.status(run).await.unwrap().expect("row").status,
             orchestrator_core::RunStatus::Failed,
-            "TORII_TRANSIENT_ATTEMPTS=1 turns retry off"
+            "unset on the memory backend, retry is off: a pause there could never be woken"
         );
     }
 

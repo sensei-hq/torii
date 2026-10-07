@@ -740,7 +740,14 @@ pub async fn heavy(
     let gateway = Arc::new(facade.gateway);
 
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    // AG-18: hooks on EVERY drive. This executor is the only one the binary builds, and both
+    // drivers (`worker serve`, `run submit`'s inline drive) take it from here — the light-tier
+    // verbs (`signal`, `gate`, `agent`, `tool`, `wake`) only append and `force_wake`, they
+    // never drive. A drive WITHOUT hooks that honoured a decision would leave no
+    // `DecisionHookFired` marker, so the next hooked drive would report that decision late.
+    let (sink, events) = RunEventSink::bounded(DEFAULT_EVENT_BUFFER);
     let mut executor = Executor::new(gateway, light.journal.clone(), fence)
+        .with_hooks(sink)
         .with_content_store(content)
         .with_context_store(context)
         .with_registry_handle(handle)
@@ -821,13 +828,34 @@ pub async fn heavy(
         clock.clone(),
     )
     .with_wake_retry(env.wake_retry.clone());
-    let (_sink, events) = RunEventSink::bounded(DEFAULT_EVENT_BUFFER);
     Ok(HeavyDeps {
         light,
         scheduler,
         clock,
         events,
     })
+}
+
+/// AG-18: the CLI's consumer of [`HeavyDeps::events`] — every run event as one structured log
+/// line (target `torii::run_event`, the event's JSON in `event`), on stderr with the rest of
+/// the log. It drains as fast as the log writes, so the drive's bounded channel stays empty;
+/// the API's SSE stream (torii#51) is a second consumer of the same `RunEvent`s.
+pub fn log_run_events(mut events: RunEvents) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(e) = events.recv().await {
+            match serde_json::to_string(&e) {
+                Ok(json) => tracing::info!(target: "torii::run_event", event = %json, "run event"),
+                Err(err) => tracing::warn!(run = %e.run, "run event not serializable: {err}"),
+            }
+        }
+    })
+}
+
+/// Let [`log_run_events`] finish once the drives are done: the caller drops the `Scheduler`
+/// (closing the channel) first, then this waits — bounded, so a sender still alive somewhere
+/// can delay the exit by at most two seconds, never hang it.
+pub async fn flush_run_events(log: tokio::task::JoinHandle<()>) {
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), log).await;
 }
 
 #[cfg(test)]

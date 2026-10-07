@@ -681,8 +681,10 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 let g: Graph = serde_json::from_str(&raw).map_err(|e| {
                     CliError::error(format!("{} is not a valid graph: {e}", graph.display()))
                 })?;
-                let d =
-                    boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
+                let boot::HeavyDeps {
+                    scheduler, events, ..
+                } = boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
+                let log = boot::log_run_events(events);
                 let budget = orchestrator_core::RunBudget {
                     tokens: budget_tokens
                         .map(|total_tokens| orchestrator_core::TokenBudget { total_tokens }),
@@ -693,10 +695,14 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 // must still be able to find the run. `submit` calls this AFTER its
                 // duplicate pre-check, so a rejected submit no longer announces an
                 // effect that never happened.
-                cmd::run::submit(&d.scheduler, run, g, budget, || {
+                let out = cmd::run::submit(&scheduler, run, g, budget, || {
                     println!("submitted: {}", run.0)
                 })
-                .await
+                .await;
+                // Closes the event channel, so the log drains everything the drive reported.
+                drop(scheduler);
+                boot::flush_run_events(log).await;
+                out
             }
         },
         Command::Worker { action } => match action {
@@ -706,15 +712,20 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 gateway_config,
                 workspace_root,
             } => {
-                let d =
-                    boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
+                let boot::HeavyDeps {
+                    scheduler, events, ..
+                } = boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
+                let log = boot::log_run_events(events);
                 let shutdown = shutdown_signal()?;
-                cmd::worker::serve(
-                    &d.scheduler,
+                let out = cmd::worker::serve(
+                    &scheduler,
                     cmd::worker::ServeOpts { interval, once },
                     shutdown,
                 )
-                .await
+                .await;
+                drop(scheduler);
+                boot::flush_run_events(log).await;
+                out
             }
         },
         Command::Config { action } => {

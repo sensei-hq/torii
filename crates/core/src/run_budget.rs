@@ -26,13 +26,12 @@ use uuid::Uuid;
 /// what [`RunCharges::settle`] records back — but one no run reaches. `i64::MAX` so it is storable.
 pub const UNBOUNDED_MICRO_USD: u64 = i64::MAX as u64;
 
-/// A dollar figure for an operator, exactly: `1500000` → `$1.500000`.
+/// A dollar figure for an operator, exactly and without trailing zeros past the cents:
+/// `1500000` → `$1.50`, `1` → `$0.000001` — the form `torii run status` prints.
 pub fn usd(micro: u64) -> String {
-    format!(
-        "${}.{:06}",
-        micro / MICRO_USD_PER_USD,
-        micro % MICRO_USD_PER_USD
-    )
+    let frac = format!("{:06}", micro % MICRO_USD_PER_USD);
+    let frac = frac.trim_end_matches('0');
+    format!("${}.{frac:0<2}", micro / MICRO_USD_PER_USD)
 }
 
 /// Why a run's limit could not be admitted (or its spend recorded).

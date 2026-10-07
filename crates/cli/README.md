@@ -90,8 +90,12 @@ Per-tool `grants` are **not** agent frontmatter. They live in the registry root 
 `<dir>/chains.json` of `(area, kind) → chain` bindings.
 
 A shipped `tools/*.json` declares a schema the model may call. The executable side must exist too —
-`torii` wires `fs_read`, `fs_write` and `shell`. A schema with no executable counterpart is a tool
-the model can call and the runtime cannot serve.
+`torii` wires `fs_read`, `fs_write` and `shell`, and (since gateway v0.11.0) every drive also
+composes the five planner discovery tools — `list_agents`, `list_skills`, `list_tools`,
+`list_chains`, `validate_plan` — over the registry that run is pinned to. Wired is not granted: an
+agent can call one only if it declares it in `tools:` and the registry carries its
+`tools/<name>.json` schema, exactly as for any other tool. A schema with no executable counterpart
+is a tool the model can call and the runtime cannot serve.
 
 ## The flow
 

@@ -78,8 +78,13 @@ pub fn config() -> Result<RegistryConfig, OrchestratorError> {
 /// a non-empty one — unrelated files, or an earlier `init` since edited — is refused with
 /// [`PullError::NotEmpty`] and nothing is written, unless `force`, which replaces only the files
 /// a push reads and leaves everything else.
-pub fn init(_dir: &Path, _force: bool) -> Result<PullReport, PullError> {
-    Ok(PullReport::default())
+///
+/// Written by [`registry_dir::pull`](crate::registry_dir::pull) — the one directory writer, so
+/// `init` inherits its refusals (a symlinked layout directory, a case-insensitive file clash)
+/// and the shipped files are exactly what it writes (a test pins that).
+pub fn init(dir: &Path, force: bool) -> Result<PullReport, PullError> {
+    let cfg = config().map_err(|e| PullError::Unrepresentable(e.to_string()))?;
+    crate::registry_dir::pull(&cfg, dir, force)
 }
 
 /// The shipped registry directory's files, relative to its root, in path order.

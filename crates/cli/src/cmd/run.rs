@@ -439,8 +439,8 @@ pub async fn wake(
     // `None` (cost is ledgered only while a cap is in force, so a cap introduced mid-run would
     // be weighed against spend it never counted). Journaling it anyway and reporting `queued`
     // would tell the operator a limit is in force that nothing enforces, so it is refused
-    // here, BEFORE anything is written — the token raise beside it included, so the command
-    // either does what was asked or nothing at all.
+    // here, BEFORE anything is written — the token raise beside it included, so a refusal
+    // writes nothing at all.
     if budget.money.is_some() {
         let events = journal
             .load(run)
@@ -448,13 +448,34 @@ pub async fn wake(
             .map_err(OrchestratorError::Journal)?;
         if orchestrator::money_spend_of(&events).1.is_none() {
             return Ok(Outcome::precondition(format!(
-                "not queued: {} was submitted without a money cap, and --budget-usd can only                  move an existing money cap, never introduce one (spend is counted only while                  a cap is in force, so a cap added now would be weighed against spend it never                  saw). Nothing was written. Submit a new run with --budget-usd to cap its                  spend, or wake this one without it.",
+                "not queued: {} was submitted without a money cap, and --budget-usd can only \
+                 move an existing money cap, never introduce one (spend is counted only while \
+                 a cap is in force, so a cap added now would be weighed against spend it never \
+                 saw). Nothing was written. Submit a new run with --budget-usd to cap its \
+                 spend, or wake this one without it.",
                 run.0
             )));
         }
     }
+    // Past the FIRST append the command can no longer be all-or-nothing — two journal rows
+    // are not one transaction. So every fault after a durable append is REPORTED, naming
+    // exactly which raise landed and which did not, never `?`-ed: a bare error reads as "it
+    // did not go through" for a cap that has in fact moved (`cmd::tool::decide`'s rule).
+    // Before any append, nothing is durable and a fault is still a plain error.
+    let mut landed: Vec<String> = Vec::new();
+    let partial = |landed: &[String], what: &str, e: &dyn std::fmt::Display, rest: &str| {
+        let e = render::safe_reason(&e.to_string());
+        Outcome::precondition(format!(
+            "not queued: {} — {} journaled durably, but {what} failed: {e}.{rest} Run \
+             `torii run wake {}` to finish (repeating a raise that landed is harmless: it \
+             names a total, not an increment).",
+            run.0,
+            landed.join(" and "),
+            run.0
+        ))
+    };
     if let Some(b) = budget.tokens {
-        journal
+        let seq = journal
             .append(
                 run,
                 JournalEvent::BudgetRaised {
@@ -463,26 +484,64 @@ pub async fn wake(
             )
             .await
             .map_err(OrchestratorError::Journal)?;
+        landed.push(format!(
+            "the token cap raise to {} (seq {seq}) is",
+            b.total_tokens
+        ));
     }
     // The money twin of the raise above, under the same append-BEFORE-`force_wake` rule.
     if let Some(m) = budget.money {
-        journal
+        let usd = fmt_usd(m.total_micro_usd);
+        let appended = journal
             .append(
                 run,
                 JournalEvent::MoneyBudgetRaised {
                     new_total_micro_usd: m.total_micro_usd,
                 },
             )
-            .await
-            .map_err(OrchestratorError::Journal)?;
+            .await;
+        match appended {
+            Ok(seq) => landed.push(format!("the money cap raise to {usd} (seq {seq}) is")),
+            Err(e) if landed.is_empty() => return Err(OrchestratorError::Journal(e).into()),
+            Err(e) => {
+                return Ok(partial(
+                    &landed,
+                    "the money cap raise",
+                    &e,
+                    &format!(
+                        " The money cap is not raised to {usd} (nothing of it was \
+                         journaled), and the run is not queued."
+                    ),
+                ));
+            }
+        }
     }
-    store.force_wake(run, now).await?;
+    if let Err(e) = store.force_wake(run, now).await {
+        if landed.is_empty() {
+            return Err(e.into());
+        }
+        return Ok(partial(&landed, "the wake", &e, " The run is not queued."));
+    }
     // This row is never deleted by any shipped store, so `None` here would mean a
     // hypothetical future retention/purge raced us, not a reachable path today.
-    let after = store
-        .status(run)
-        .await?
-        .ok_or_else(|| CliError::error(format!("run {} vanished mid-wake", run.0)))?;
+    let reread = match store.status(run).await {
+        Ok(Some(after)) => Ok(after),
+        Ok(None) => Err(CliError::error(format!("run {} vanished mid-wake", run.0))),
+        Err(e) => Err(CliError::from(e)),
+    };
+    let after = match reread {
+        Ok(after) => after,
+        Err(e) if landed.is_empty() => return Err(e),
+        Err(e) => {
+            let e = e.message;
+            return Ok(partial(
+                &landed,
+                "the status re-read",
+                &e,
+                " The wake was requested, but whether it applied could not be read back.",
+            ));
+        }
+    };
     // The primary signal is STATUS, not next_wake's mere presence: `claim_due` flips
     // `paused -> waking` and leaves a stale `next_wake` untouched, and `cancel` clears
     // it to NULL — neither on its own tells us whether OUR force_wake actually applied
@@ -512,8 +571,13 @@ pub async fn wake(
             run.0
         )))
     } else {
+        let journaled = if landed.is_empty() {
+            String::new()
+        } else {
+            format!(" ({} journaled durably)", landed.join(" and "))
+        };
         Ok(Outcome::precondition(format!(
-            "not queued: {} is {} — force_wake did not apply",
+            "not queued: {} is {} — force_wake did not apply{journaled}",
             run.0,
             after.status.as_str()
         )))

@@ -30,6 +30,9 @@ orchestrator-core = { package = "sensei-orchestrator-core", git = "https://githu
 tokio = { version = "1", features = ["full"] }
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
-# AG-4 (#33): the gateway's in-memory stores, so `results` is tested DB-free against the same
-# traits torii's Postgres stores implement.
-orchestrator-store = { package = "sensei-orchestrator-store", git = "https://github.com/sensei-hq/gateway", tag = "v0.11.0" }
+tempfile = "3"
+# The gateway's in-memory/filesystem orchestrator stores, for tests only. AG-4 (#33): `results`
+# is tested DB-free against the same traits torii's Postgres stores implement. AG-6 (#35): a
+# pulled registry directory is checked by loading it back with the reader `config push` itself
+# uses. Renamed: its lib is `orchestrator_store`, like `tenant-stores`.
+gateway-store = { package = "sensei-orchestrator-store", git = "https://github.com/sensei-hq/gateway", tag = "v0.11.0" }

@@ -3,11 +3,11 @@
 //! implement the same traits torii's Postgres stores do (the tenant scoping is proven at the
 //! binary, in `crates/cli/tests/postgres_backend.rs`).
 
+use gateway_store::{InMemoryContentStore, InMemoryJournal, InMemorySchedulerStore};
 use orchestrator_core::{
     ContentRef, ContentStore, Digest, EffectOutput, ExecutionJournal, Graph, JournalEvent, NodeId,
     RunId, RunStatus, SchedulerStore, Snapshot,
 };
-use orchestrator_store::{InMemoryContentStore, InMemoryJournal, InMemorySchedulerStore};
 use serde_json::json;
 use torii_core::results::{run_results, NodeResult, NodeState, Stored};
 

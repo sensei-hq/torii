@@ -151,8 +151,9 @@ Each entry is the goal, then the props a component would take.
 ### 5.1 Registry overview
 The operator's home. Shows the four collections with counts, the durable config generation, and
 whether the working set differs from what is deployed. It exists to make "what is live, and what
-would change if I pushed" answerable at a glance — today that requires reading `config version`
-and diffing by hand.
+would change if I pushed" answerable at a glance. `torii config show` (AG-6) backs the first half
+— the live registry and its generation as JSON, from one snapshot; the second half still needs a
+diff that does not offer to write (`config push` prints its diff only as it applies).
 
 ```
 { generation, entities: { agents, skills, tools, bindings }[],
@@ -277,7 +278,7 @@ Honest gaps between these screens and the engine, so nobody designs against a fi
 
 | screen | gap |
 |---|---|
-| all of seiki | **The read path EXISTS; only the CLI exposure is missing.** `PostgresConfigSource::load()` returns a whole `RegistryConfig`, `load_versioned()` returns it with its generation, and **`torii` already calls `load_versioned()` inside `push`** to compute the diff. What does not exist is a `config pull`/`show` subcommand to hand that structured data to a UI. A first draft of this table called it a structural blocker — that was wrong, and the correction shrinks the work from a slice to a subcommand. |
+| all of seiki | **Closed by AG-6 (torii#35).** `torii config show` prints the live registry and its generation as JSON from ONE `load_versioned` snapshot, and `torii config pull <dir>` writes it as the `agents/ skills/ tools/ chains.json grants.json` directory `config push` reads — a pull followed by a push of it is a no-op, per tenant, proven at the binary on Postgres. Both live in `torii_core::registry_dir`, so the API can serve the same read without a second implementation. What remains for an editor is a dry-run diff (push prints its diff only as it applies). |
 | 5.6 push review | The paused-run count is available, but per-run detail for the warning list needs `list_paused`, which exists — this one is close. |
 | 6.1 submit | `plannerPreview` has no backing. Nothing exposes "which planner would be selected for this goal" without running the expand. |
 | 6.2 timeline | The journal is durable and complete, but there is no read API shaped for a timeline view. What a run PRODUCED is readable: `torii run results <id>` (AG-4, torii#33) returns each node's state and output — the executor's round checkpoint, with CAS refs resolved through the tenant's content store — from `torii_core::results::run_results`, the read the API will share. The ordered event timeline is still missing. |
@@ -289,8 +290,7 @@ Honest gaps between these screens and the engine, so nobody designs against a fi
 blocker is the **absent default content**, without which a fresh install cannot plan at all —
 including a planner agent that declares the discovery tools, which have been wired since gateway
 v0.11.0 but do nothing for an agent that does not declare them.
-Exposing the durable config for reading is a subcommand over machinery that already runs on every
-push.
+Reading the durable config back out is done: `config show` / `config pull` (AG-6).
 
 ---
 
@@ -303,5 +303,6 @@ push.
    cannot.
 3. **What content ships by default?** Still open, and it gates the registry work: without a
    shipped planner agent, a fresh install cannot plan at all.
-4. **Expose the durable config for reading?** A `config pull`/`show` over the existing
-   `load_versioned()`. Small, and it unblocks every seiki editing screen.
+4. ~~**Expose the durable config for reading?**~~ Decided and built (AG-6, torii#35):
+   `torii config show` (JSON + generation, one snapshot) and `torii config pull <dir>` (the
+   directory `config push` reads; pull-then-push is a no-op), over `torii_core::registry_dir`.

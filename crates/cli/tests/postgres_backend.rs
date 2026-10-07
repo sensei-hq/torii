@@ -585,3 +585,145 @@ async fn run_results_returns_a_completed_runs_outputs_incl_a_cas_ref_and_another
         assert!(!theirs_out.contains("approved") && !theirs_out.contains("clause"));
     }
 }
+
+/// A registry using every file of the layout: AG-15 policy keys, a human-backed escalation
+/// chain, a keyword skill, a tool, chain bindings and per-tool grants.
+fn rich_registry(dir: &std::path::Path, tag: &str) -> std::path::PathBuf {
+    let reg = dir.join(format!("registry-rich-{tag}"));
+    for sub in ["agents", "skills", "tools"] {
+        std::fs::create_dir_all(reg.join(sub)).unwrap();
+    }
+    std::fs::write(
+        reg.join("tools/deploy.json"),
+        r#"{"name":"deploy","description":"ship it","input_schema":{"type":"object"},"effect_class":"Mutation","ttl_secs":null,"source":null,"credentials":["github"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join("skills/careful.md"),
+        "---\nname: careful\ndescription: Be careful: always\nactivate_on: [deploy, ship]\n---\nCheck twice.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join(format!("agents/deployer-{tag}.md")),
+        format!(
+            "---\nname: deployer-{tag}\narea: ops\nkind: deploy\nchains: [plan=chat]\ntools: [deploy]\n\
+             skills: [careful]\ntool_limits: [deploy=2]\nconfirm_tools: [deploy]\n\
+             confirm_timeout: 90m\n---\nYou deploy.\n\n---\nA rule line in the body.\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join("agents/reviewer.md"),
+        "---\nname: reviewer\narea: review\nkind: lead\ntools: []\nskills: []\n\
+         backed_by: human\ntimeout: 1h\nescalate_to: lead\n---\nYou review.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join("agents/lead.md"),
+        "---\nname: lead\narea: review\nkind: escalation\ntools: []\nskills: []\n\
+         backed_by: human\ntimeout: 2d\n---\nYou decide.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join("chains.json"),
+        r#"[{"area":"ops","kind":"deploy","chain":"chat"}]"#,
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join("grants.json"),
+        format!(
+            r#"{{"deployer-{tag}":{{"deploy":{{"commands":["git"],"network":{{"Hosts":["github.com"]}}}}}}}}"#
+        ),
+    )
+    .unwrap();
+    reg
+}
+
+/// AG-6 (#35) done-when, at the BINARY on Postgres: `config pull` then `config push` of the
+/// result is a no-op, per tenant — and neither `config show` nor `config pull` of one tenant
+/// ever carries another tenant's registry.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn config_pull_then_push_is_a_no_op_per_tenant_and_never_shows_another_tenant() {
+    let Some(url) = db_url() else { return };
+    let (a, b) = (Tenant::new(&url).await, Tenant::new(&url).await);
+    let dir = tempfile::tempdir().unwrap();
+    for (t, tag) in [(&a, "alpha"), (&b, "beta")] {
+        ok(&t
+            .torii()
+            .args(["config", "push", "--yes"])
+            .arg(rich_registry(dir.path(), tag))
+            .output()
+            .expect("spawn"));
+    }
+
+    for (t, mine, theirs) in [(&a, "alpha", "beta"), (&b, "beta", "alpha")] {
+        let shown: serde_json::Value = serde_json::from_str(&ok(&t
+            .torii()
+            .args(["config", "show"])
+            .output()
+            .expect("spawn")))
+        .expect("config show prints JSON");
+        assert_eq!(shown["generation"], 1, "{shown}");
+        let names: Vec<String> = shown["registry"]["agents"]
+            .as_array()
+            .expect("agents")
+            .iter()
+            .map(|a| a["name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            [format!("deployer-{mine}"), "lead".into(), "reviewer".into()],
+            "show carries this tenant's agents only"
+        );
+        assert!(!shown.to_string().contains(theirs), "{shown}");
+
+        let pulled = dir.path().join(format!("pulled-{mine}"));
+        let out = ok(&t
+            .torii()
+            .args(["config", "pull"])
+            .arg(&pulled)
+            .output()
+            .expect("spawn"));
+        assert!(out.contains("pulled config v1"), "{out}");
+        let grants = std::fs::read_to_string(pulled.join("grants.json")).unwrap();
+        assert!(grants.contains(&format!("deployer-{mine}")), "{grants}");
+        for entry in walk(&pulled) {
+            let text = std::fs::read_to_string(&entry).unwrap();
+            assert!(
+                !text.contains(theirs),
+                "{} carries the other tenant's registry: {text}",
+                entry.display()
+            );
+        }
+
+        let again = ok(&t
+            .torii()
+            .args(["config", "push", "--yes"])
+            .arg(&pulled)
+            .output()
+            .expect("spawn"));
+        assert!(
+            again.contains("no changes"),
+            "pushing a pull of the live registry must change nothing: {again}"
+        );
+        assert_eq!(t.generation().await, Some(1), "a no-op push bumps nothing");
+    }
+}
+
+/// Every file under `root`, recursively.
+fn walk(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(root).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() {
+            out.extend(walk(&p));
+        } else {
+            out.push(p);
+        }
+    }
+    out
+}

@@ -178,3 +178,86 @@ fn a_bad_wake_policy_fails_only_the_commands_that_drive() {
         "refused BEFORE anything is submitted"
     );
 }
+
+/// AG-6 (#35): `config show` prints the live registry as JSON with its generation, and
+/// `config pull` writes the directory `config push` (and `TORII_REGISTRY_DIR`) reads — so a
+/// memory backend booted from the pulled directory shows the same registry.
+#[test]
+fn config_show_and_pull_on_the_memory_backend_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let (reg, _, _) = fixtures(dir.path());
+    let show = |registry: &std::path::Path| {
+        let out = torii()
+            .env("TORII_BACKEND", "memory")
+            .env("TORII_REGISTRY_DIR", registry)
+            .args(["config", "show"])
+            .output()
+            .expect("spawn torii");
+        assert!(
+            out.status.success(),
+            "exit {:?}\nstderr: {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap_or_else(|e| {
+            panic!(
+                "config show prints JSON ({e}): {}",
+                String::from_utf8_lossy(&out.stdout)
+            )
+        })
+    };
+    let shown = show(&reg);
+    assert_eq!(shown["generation"], 1, "{shown}");
+    assert_eq!(
+        shown["registry"]["agents"][0]["name"], "researcher",
+        "{shown}"
+    );
+
+    let pulled = dir.path().join("pulled");
+    let pull = |force: bool| {
+        let mut c = torii();
+        c.env("TORII_BACKEND", "memory")
+            .env("TORII_REGISTRY_DIR", &reg)
+            .args(["config", "pull"])
+            .arg(&pulled);
+        if force {
+            c.arg("--force");
+        }
+        c.output().expect("spawn torii")
+    };
+    let out = pull(false);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "exit {:?}\nstderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("pulled config v1") && stdout.contains("1 agent"),
+        "{stdout}"
+    );
+    assert!(pulled.join("agents/researcher.md").is_file());
+
+    // A second pull into the now non-empty directory is refused, and says how to proceed.
+    // Exit 2 prints its result on stdout, like `config push`'s refusal.
+    let out = pull(false);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(2), "{stdout}");
+    assert!(
+        stdout.contains("not empty") && stdout.contains("--force"),
+        "{stdout}"
+    );
+    let out = pull(true);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert_eq!(
+        show(&pulled)["registry"],
+        shown["registry"],
+        "the pulled directory boots as the same registry"
+    );
+}

@@ -173,25 +173,42 @@ async fn a_completed_runs_outputs_come_back_inline_cas_failed_and_skipped() {
 async fn an_output_is_redacted_before_it_is_returned() {
     let f = Fixture::new().await;
     let secret = format!("sk-{}", "A".repeat(30));
+    // `c` is over the CAS threshold: the largest outputs, the ones `--node` prints whole, and
+    // the ones whose second redaction pass runs on the value read back from the content store.
+    let big = json!({ "text": format!("{} {secret}", "x".repeat(5000)) });
+    let bytes = serde_json::to_vec(&big).unwrap();
+    let digest = f.content.put(&bytes).await.unwrap();
     f.journal
         .snapshot(
             f.run,
             Snapshot {
                 seq: 0,
-                completed: vec![n("a")],
-                outputs: vec![(n("a"), EffectOutput::Inline(json!({ "text": secret })))],
+                completed: vec![n("a"), n("c")],
+                outputs: vec![
+                    (n("a"), EffectOutput::Inline(json!({ "text": secret }))),
+                    (
+                        n("c"),
+                        EffectOutput::Ref(ContentRef {
+                            digest,
+                            size: bytes.len(),
+                            summary: None,
+                        }),
+                    ),
+                ],
                 ..Snapshot::default()
             },
         )
         .await
         .unwrap();
     let got = f.results().await.unwrap();
-    let text = row(&got.nodes, "a").output.as_ref().unwrap()["text"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(!text.contains(&secret), "{text}");
-    assert!(text.contains("[REDACTED]"), "{text}");
+    for id in ["a", "c"] {
+        let text = row(&got.nodes, id).output.as_ref().unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(!text.contains(&secret), "{id}: {text}");
+        assert!(text.contains("[REDACTED]"), "{id}: {text}");
+    }
 }
 
 #[tokio::test]

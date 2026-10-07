@@ -2996,7 +2996,109 @@ pub(crate) mod tests {
 
     /// Delegates to a real store, but every `status()` after the FIRST fails: `wake`'s
     /// pre-check reads fine, `force_wake` commits, and the post-wake re-read faults.
-    struct FailsTheReread(InMemorySchedulerStore, std::sync::atomic::AtomicUsize);
+    ///
+    /// `pub(crate)` for the answering verbs' tests (`gate decide`, `agent answer`, `tool
+    /// approve|reject`): each reads status once before its append, so the same store faults
+    /// exactly their post-wake re-read too.
+    pub(crate) struct FailsTheReread(
+        pub(crate) InMemorySchedulerStore,
+        pub(crate) std::sync::atomic::AtomicUsize,
+    );
+
+    /// Delegates to a real journal, but every `load()` after the FIRST fails with the hostile
+    /// backend fault: the pre-check folds, the append lands, `force_wake` commits, and the
+    /// post-wake JOURNAL re-read faults.
+    pub(crate) struct FailsTheJournalReread(
+        pub(crate) Arc<InMemoryJournal>,
+        pub(crate) std::sync::atomic::AtomicUsize,
+    );
+
+    #[async_trait::async_trait]
+    impl ExecutionJournal for FailsTheJournalReread {
+        async fn append(
+            &self,
+            run: RunId,
+            event: JournalEvent,
+        ) -> Result<Seq, orchestrator_core::JournalError> {
+            self.0.append(run, event).await
+        }
+        async fn load(
+            &self,
+            run: RunId,
+        ) -> Result<Vec<(Seq, JournalEvent)>, orchestrator_core::JournalError> {
+            if self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
+                return Err(hostile_backend_error(run));
+            }
+            self.0.load(run).await
+        }
+    }
+
+    /// The report every answering verb owes a re-read fault AFTER its `force_wake` committed
+    /// (#55, mirroring `wake`'s fix in 1677913): the wake was SENT, so "not queued" — and the
+    /// advice to `torii run wake` it again — is false. It says what is durable, that the
+    /// outcome could not be read back, points at `torii run status <run>`, and renders the
+    /// backend fault safe. And the run really is queued.
+    pub(crate) async fn assert_reports_wake_sent(
+        out: &Outcome,
+        run: RunId,
+        store: &InMemorySchedulerStore,
+    ) {
+        let t = &out.text;
+        assert_eq!(out.code, EXIT_PRECONDITION, "{t}");
+        assert!(!t.contains("not queued"), "the wake committed: {t}");
+        assert!(
+            !t.contains("`torii run wake"),
+            "advises waking a run whose wake was already sent: {t}"
+        );
+        assert!(t.starts_with("wake sent"), "{t}");
+        assert!(
+            t.contains("journaled durably"),
+            "names what is durable: {t}"
+        );
+        assert!(
+            t.contains("could not be read back")
+                && t.contains(&format!("torii run status {}", run.0)),
+            "{t}"
+        );
+        assert!(!t.contains(&hostile_password()), "rendered safe: {t}");
+        assert!(!t.contains('\u{1b}'), "rendered safe: {t:?}");
+        assert_eq!(
+            store.status(run).await.unwrap().unwrap().next_wake,
+            Some(now()),
+            "it is queued"
+        );
+    }
+
+    /// #55: `signal`'s STATUS re-read faults after `force_wake` committed.
+    #[tokio::test]
+    async fn signal_reports_wake_sent_when_the_status_reread_fails_after_the_wake() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = FailsTheReread(paused_store(run, None).await, Default::default());
+        let j = awaiting_journal(run, &gate(), None).await;
+
+        let out = signal(&s, &j, run, gate(), approved(), now())
+            .await
+            .expect("a post-wake fault is reported, not `?`-ed");
+
+        assert_eq!(journaled_signals(&j, run, &gate()).await.len(), 1);
+        assert_reports_wake_sent(&out, run, &s.0).await;
+    }
+
+    /// #55: `signal`'s JOURNAL re-read faults after `force_wake` committed.
+    #[tokio::test]
+    async fn signal_reports_wake_sent_when_the_journal_reread_fails_after_the_wake() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let inner = Arc::new(awaiting_journal(run, &gate(), None).await);
+        let j = FailsTheJournalReread(inner.clone(), Default::default());
+
+        let out = signal(&s, &j, run, gate(), approved(), now())
+            .await
+            .expect("a post-wake fault is reported, not `?`-ed");
+
+        assert_eq!(journaled_signals(&inner, run, &gate()).await.len(), 1);
+        assert_reports_wake_sent(&out, run, &s).await;
+    }
 
     #[async_trait::async_trait]
     impl SchedulerStore for FailsTheReread {

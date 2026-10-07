@@ -29,9 +29,9 @@ pub const ENV_POOL_SIZE: &str = "TORII_POOL_SIZE";
 pub const ENV_BACKEND: &str = "TORII_BACKEND";
 pub const ENV_REGISTRY_DIR: &str = "TORII_REGISTRY_DIR";
 pub const ENV_TENANT: &str = "TORII_TENANT";
-/// AG-3: the scheduler's wake-retry policy ([`WakeRetryPolicy`]) — every heavy-tier driver
-/// (`worker serve`, and the inline drives of `run submit` and the human decisions) builds its
-/// `Scheduler` from these, so one fleet shares one policy. Unset ⇒ the gateway's defaults.
+/// AG-3: the scheduler's wake-retry policy ([`WakeRetryPolicy`]) — both heavy-tier drivers
+/// (`worker serve`, and `run submit`'s inline drive) build their `Scheduler` from these, so one
+/// fleet shares one policy. Unset ⇒ the gateway's defaults.
 pub const ENV_WAKE_MAX_ATTEMPTS: &str = "TORII_WAKE_MAX_ATTEMPTS";
 pub const ENV_WAKE_BASE_BACKOFF: &str = "TORII_WAKE_BASE_BACKOFF";
 pub const ENV_WAKE_MAX_BACKOFF: &str = "TORII_WAKE_MAX_BACKOFF";
@@ -148,12 +148,64 @@ pub fn env_config_from(get: impl Fn(&str) -> Option<String>) -> Result<EnvConfig
         Some(raw) => parse_pool_size(&raw).map_err(CliError::error)?,
         None => DEFAULT_POOL_SIZE,
     };
+    let wake_retry = wake_retry_from(&non_empty).map_err(CliError::error)?;
     Ok(EnvConfig {
         backend,
         fence_version,
         pool_size,
-        wake_retry: WakeRetryPolicy::default(),
+        wake_retry,
     })
+}
+
+/// AG-3: the `TORII_WAKE_*` overrides on top of the gateway's [`WakeRetryPolicy`] default.
+/// Each unset (or blank) variable keeps the default; a set one is parsed with the same
+/// discipline as `TORII_POOL_SIZE` — loud, naming the variable and echoing the value.
+/// Backoffs take `worker serve --interval`'s units (`500ms`, `30s`, `15m`).
+fn wake_retry_from(non_empty: &impl Fn(&str) -> Option<String>) -> Result<WakeRetryPolicy, String> {
+    let mut policy = WakeRetryPolicy::default();
+    if let Some(raw) = non_empty(ENV_WAKE_MAX_ATTEMPTS) {
+        let s = raw.trim();
+        policy.max_attempts = match s.parse::<u32>() {
+            Ok(0) => {
+                return Err(format!(
+                    "invalid {ENV_WAKE_MAX_ATTEMPTS} {s:?}: a run needs at least one wake \
+                     attempt (there is no \"unlimited\" — a capless retry is the crash loop \
+                     this cap exists to end)"
+                ));
+            }
+            Ok(n) => n,
+            Err(_) => {
+                return Err(format!(
+                    "invalid {ENV_WAKE_MAX_ATTEMPTS} {s:?}: {s:?} is not a positive whole number"
+                ));
+            }
+        };
+    }
+    let backoff = |var: &str| -> Result<Option<chrono::Duration>, String> {
+        let Some(raw) = non_empty(var) else {
+            return Ok(None);
+        };
+        let d = crate::cmd::worker::parse_interval(&raw).map_err(|e| format!("{var}: {e}"))?;
+        chrono::Duration::from_std(d)
+            .map(Some)
+            .map_err(|_| format!("{var}: {:?} is out of range", raw.trim()))
+    };
+    if let Some(d) = backoff(ENV_WAKE_BASE_BACKOFF)? {
+        policy.base_backoff = d;
+    }
+    if let Some(d) = backoff(ENV_WAKE_MAX_BACKOFF)? {
+        policy.max_backoff = d;
+    }
+    if policy.base_backoff > policy.max_backoff {
+        return Err(format!(
+            "{ENV_WAKE_BASE_BACKOFF} ({}s) exceeds {ENV_WAKE_MAX_BACKOFF} ({}s): every retry \
+             would wait the ceiling and the backoff would never grow — lower the base or raise \
+             the ceiling (unset, they are 30s and 60m)",
+            policy.base_backoff.num_seconds(),
+            policy.max_backoff.num_seconds()
+        ));
+    }
+    Ok(policy)
 }
 
 fn postgres_backend(non_empty: &impl Fn(&str) -> Option<String>) -> Result<Backend, CliError> {
@@ -758,12 +810,14 @@ pub async fn heavy(
         }
     }
 
+    // AG-3: the operator's wake-retry policy (TORII_WAKE_*, gateway defaults when unset).
     let scheduler = Scheduler::new(
         light.scheduler_store.clone(),
         executor,
         light.journal.clone(),
         clock.clone(),
-    );
+    )
+    .with_wake_retry(env.wake_retry.clone());
     Ok(HeavyDeps {
         light,
         scheduler,

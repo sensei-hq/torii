@@ -358,7 +358,7 @@ pub async fn decide(
     // with the decision on the journal.
     let after_events = match journal.load(run).await {
         Ok(evs) => evs,
-        Err(e) => return Ok(unread("the journal re-read", &e)),
+        Err(e) => return Ok(reread("the journal re-read", &e)),
     };
     let settled_after = after_events.iter().any(|(seq, e)| {
         *seq > appended

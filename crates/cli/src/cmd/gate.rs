@@ -1014,7 +1014,8 @@ pub(crate) mod tests {
     use super::*;
 
     use crate::cmd::run::tests::{
-        FORGED_RUN, FailingForceWakeStore, awaiting_journal, now, paused_store,
+        FORGED_RUN, FailingForceWakeStore, FailsTheJournalReread, FailsTheReread,
+        assert_reports_wake_sent, awaiting_journal, now, paused_store,
     };
     use crate::errors::{EXIT_OK, EXIT_PRECONDITION};
     use orchestrator_core::{
@@ -2242,6 +2243,38 @@ pub(crate) mod tests {
             "a cancelled run never pauses again — this is advice to wait forever: {}",
             out.text
         );
+    }
+
+    /// #55: `decide`'s STATUS re-read faults after `force_wake` committed — the wake was
+    /// sent, so "not queued" (and "run `torii run wake`") would be false.
+    #[tokio::test]
+    async fn decide_reports_wake_sent_when_the_status_reread_fails_after_the_wake() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = FailsTheReread(paused_store(run, None).await, Default::default());
+        let j = gate_journal(run, &release(), None, &["ship"]).await;
+
+        let out = decide(&s, &j, run, release(), "ship", "alice", None, now())
+            .await
+            .expect("a post-wake fault is reported, not `?`-ed");
+
+        assert_eq!(journaled_decisions(&j, run, &release()).await.len(), 1);
+        assert_reports_wake_sent(&out, run, &s.0).await;
+    }
+
+    /// #55: `decide`'s JOURNAL re-read faults after `force_wake` committed.
+    #[tokio::test]
+    async fn decide_reports_wake_sent_when_the_journal_reread_fails_after_the_wake() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let inner = std::sync::Arc::new(gate_journal(run, &release(), None, &["ship"]).await);
+        let j = FailsTheJournalReread(inner.clone(), Default::default());
+
+        let out = decide(&s, &j, run, release(), "ship", "alice", None, now())
+            .await
+            .expect("a post-wake fault is reported, not `?`-ed");
+
+        assert_eq!(journaled_decisions(&inner, run, &release()).await.len(), 1);
+        assert_reports_wake_sent(&out, run, &s).await;
     }
 
     /// A journal fault raised AFTER the append reaches stdout as an operator report

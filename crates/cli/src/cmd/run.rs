@@ -2086,6 +2086,44 @@ pub async fn submit(
     )))
 }
 
+/// AG-13 (#49): the budget charge a Postgres submit or raise runs under — torii's caps
+/// (`torii_core::run_budget`), and the journal a run's spend is folded from. `None` on the memory
+/// backend, which has no caps.
+pub struct Charging<'a> {
+    pub charges: &'a torii_core::run_budget::RunCharges,
+    pub journal: &'a dyn ExecutionJournal,
+    /// Who submits (`TORII_USER`, as given) — read by [`submit_charged`] only; a raise is checked
+    /// against the caps of the run's recorded issuer, whoever asks.
+    pub user: Option<&'a str>,
+}
+
+/// [`submit`], charged to the issuer's caps.
+pub async fn submit_charged(
+    charging: Option<&Charging<'_>>,
+    scheduler: &orchestrator::Scheduler,
+    run: RunId,
+    graph: orchestrator_core::Graph,
+    budget: RunBudget,
+    lifetime: StoreLifetime,
+    announce: impl FnOnce(),
+) -> Result<Outcome, CliError> {
+    let _ = charging;
+    submit(scheduler, run, graph, budget, lifetime, announce).await
+}
+
+/// [`wake`], with a money raise checked against the caps the run is charged to.
+pub async fn wake_charged(
+    charging: Option<&Charging<'_>>,
+    store: &dyn SchedulerStore,
+    journal: &dyn ExecutionJournal,
+    run: RunId,
+    now: DateTime<Utc>,
+    budget: RunBudget,
+) -> Result<Outcome, CliError> {
+    let _ = charging;
+    wake(store, journal, run, now, budget).await
+}
+
 /// `pub(crate)` **only so `cmd::gate`'s tests can reuse four fixtures** — `now`,
 /// `paused_store`, `awaiting_journal` and `FailingForceWakeStore`. There is no
 /// `tests_support` module in this crate and inventing one would mean moving fixtures
@@ -3236,6 +3274,32 @@ pub(crate) mod tests {
         let v: serde_json::Value = serde_json::from_str(&out.text).expect("valid json");
         assert_eq!(v[0]["spent_micro_usd"], serde_json::json!(12_345));
         assert_eq!(v[0]["money_budget_micro_usd"], serde_json::json!(5_000_000));
+    }
+
+    /// AG-13: a run whose issuer has no hard cap carries the unbounded sentinel as its money
+    /// limit (so its spend is still ledgered) — shown as what it is, not as $9.2 trillion.
+    #[tokio::test]
+    async fn status_shows_an_unbounded_money_limit_as_no_hard_cap() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let unbounded = torii_core::run_budget::UNBOUNDED_MICRO_USD;
+        let journal = journal_with_money(run, Some(unbounded), 12_345).await;
+
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, false)
+            .await
+            .expect("status");
+        assert!(
+            out.text
+                .contains("money spent: $0.012345 / budget: none (no hard cap over the issuer)"),
+            "{}",
+            out.text
+        );
+        // JSON keeps the number: a script compares it, it does not read it.
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, true)
+            .await
+            .expect("status");
+        let v: serde_json::Value = serde_json::from_str(&out.text).expect("valid json");
+        assert_eq!(v[0]["money_budget_micro_usd"], serde_json::json!(unbounded));
     }
 
     #[tokio::test]

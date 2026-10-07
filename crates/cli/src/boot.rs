@@ -36,6 +36,10 @@ pub const ENV_TENANT: &str = "TORII_TENANT";
 pub const ENV_WAKE_MAX_ATTEMPTS: &str = "TORII_WAKE_MAX_ATTEMPTS";
 pub const ENV_WAKE_BASE_BACKOFF: &str = "TORII_WAKE_BASE_BACKOFF";
 pub const ENV_WAKE_MAX_BACKOFF: &str = "TORII_WAKE_MAX_BACKOFF";
+/// AG-5: the executor/scheduler seams the heavy tier tunes ([`DrivePolicy`]). Like
+/// `TORII_WAKE_*`, parsed here and checked only by [`require_drive_policy`], so only the two
+/// commands that drive read them.
+pub const ENV_WAKE_LEASE: &str = "TORII_WAKE_LEASE";
 
 /// The pool cap when `TORII_POOL_SIZE` is unset: one pool serves every store of a worker, so
 /// this is the worker's whole connection budget (`torii_core::connect`).
@@ -81,6 +85,31 @@ pub struct EnvConfig {
     /// `run status`, `run list-paused` or `run cancel` — the verbs an operator reaches for while
     /// fixing it.
     pub wake_retry: Result<WakeRetryPolicy, String>,
+    /// AG-5: the executor/scheduler seams (`TORII_WAKE_LEASE`, …). Checked only by
+    /// [`require_drive_policy`], for the same reason as `wake_retry`.
+    pub drive: Result<DrivePolicy, String>,
+}
+
+/// AG-5: how the heavy tier's `Executor` and `Scheduler` drive, beyond the wake-retry policy.
+/// Every field is set on every boot from an explicit torii default — the gateway's own
+/// defaults are private constants torii cannot name, so relying on them would leave the
+/// documented default one gateway bump away from silently changing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrivePolicy {
+    /// `Scheduler::with_lease`: how old a `waking` claim must be before `tick` treats its
+    /// worker as lost and reclaims the run. Default [`DEFAULT_WAKE_LEASE_SECS`].
+    pub wake_lease: chrono::Duration,
+}
+
+/// The wake lease when `TORII_WAKE_LEASE` is unset — the gateway's own default (60s).
+pub const DEFAULT_WAKE_LEASE_SECS: i64 = 60;
+
+impl Default for DrivePolicy {
+    fn default() -> Self {
+        Self {
+            wake_lease: chrono::Duration::seconds(DEFAULT_WAKE_LEASE_SECS),
+        }
+    }
 }
 
 /// Manual, NOT derived: `#[derive(Debug)]` would put the plaintext database
@@ -102,6 +131,7 @@ impl std::fmt::Debug for EnvConfig {
             .field("fence_version", &self.fence_version)
             .field("pool_size", &self.pool_size)
             .field("wake_retry", &self.wake_retry)
+            .field("drive", &self.drive)
             .finish()
     }
 }
@@ -154,12 +184,30 @@ pub fn env_config_from(get: impl Fn(&str) -> Option<String>) -> Result<EnvConfig
         None => DEFAULT_POOL_SIZE,
     };
     let wake_retry = wake_retry_from(&non_empty);
+    let drive = drive_policy_from(&non_empty);
     Ok(EnvConfig {
         backend,
         fence_version,
         pool_size,
         wake_retry,
+        drive,
     })
+}
+
+/// AG-5: the `TORII_*` drive overrides on top of [`DrivePolicy::default`]. Each unset (or
+/// blank) variable keeps its default; a set one is parsed loudly, naming the variable and
+/// echoing the value. Durations take `worker serve --interval`'s units (`500ms`, `30s`, `15m`).
+fn drive_policy_from(non_empty: &impl Fn(&str) -> Option<String>) -> Result<DrivePolicy, String> {
+    let mut policy = DrivePolicy::default();
+    if let Some(raw) = non_empty(ENV_WAKE_LEASE) {
+        // `parse_interval` already refuses zero: a zero lease would treat every claim as
+        // abandoned the moment it was taken.
+        let d = crate::cmd::worker::parse_interval(&raw)
+            .map_err(|e| format!("{ENV_WAKE_LEASE}: {e}"))?;
+        policy.wake_lease = chrono::Duration::from_std(d)
+            .map_err(|_| format!("{ENV_WAKE_LEASE}: {:?} is out of range", raw.trim()))?;
+    }
+    Ok(policy)
 }
 
 /// AG-3: the `TORII_WAKE_*` overrides on top of the gateway's [`WakeRetryPolicy`] default.
@@ -466,6 +514,12 @@ pub fn require_wake_retry(env: &EnvConfig) -> Result<WakeRetryPolicy, CliError> 
     env.wake_retry.clone().map_err(CliError::error)
 }
 
+/// AG-5: the heavy tier additionally requires a valid [`DrivePolicy`] (`TORII_WAKE_LEASE`, …,
+/// torii's explicit defaults when unset) — refused loudly, naming the variable and its value.
+pub fn require_drive_policy(env: &EnvConfig) -> Result<DrivePolicy, CliError> {
+    env.drive.clone().map_err(CliError::error)
+}
+
 /// Install a `tracing` subscriber reading `RUST_LOG` (default `info`). Writes to
 /// STDERR specifically — never stdout — so `--json` command output stays
 /// machine-parseable. `try_init` (not `init`) so a double call (e.g. a test, or
@@ -684,6 +738,7 @@ pub async fn heavy(
 ) -> Result<HeavyDeps, CliError> {
     let fence = require_fence(env)?.to_string();
     let wake_retry = require_wake_retry(env)?;
+    let drive = require_drive_policy(env)?;
     // ONE gateway-config source per backend (TM-8c), decided before any connection: the
     // catalog on Postgres (a file there would be a second source the API never sees), the
     // file on memory (there is no catalog).
@@ -832,13 +887,15 @@ pub async fn heavy(
     }
 
     // AG-3: the operator's wake-retry policy (TORII_WAKE_*, gateway defaults when unset).
+    // AG-5: and the lease after which a `waking` claim's worker counts as lost.
     let scheduler = Scheduler::new(
         light.scheduler_store.clone(),
         executor,
         light.journal.clone(),
         clock.clone(),
     )
-    .with_wake_retry(wake_retry);
+    .with_wake_retry(wake_retry)
+    .with_lease(drive.wake_lease);
     Ok(HeavyDeps {
         light,
         scheduler,
@@ -930,6 +987,7 @@ mod tests {
             fence_version: Some("v1".into()),
             pool_size: DEFAULT_POOL_SIZE,
             wake_retry: Ok(WakeRetryPolicy::default()),
+            drive: Ok(DrivePolicy::default()),
         };
         let err = match heavy(&env, Some(Path::new("/tmp/gateway.json")), None).await {
             Ok(_) => panic!("must refuse a file on the postgres backend"),
@@ -951,6 +1009,7 @@ mod tests {
             fence_version: Some("v1".into()),
             pool_size: DEFAULT_POOL_SIZE,
             wake_retry: Ok(WakeRetryPolicy::default()),
+            drive: Ok(DrivePolicy::default()),
         };
         let err = match heavy(&env, None, None).await {
             Ok(_) => panic!("must require a file on the memory backend"),
@@ -1203,6 +1262,7 @@ mod tests {
                 max_attempts: 1,
                 ..WakeRetryPolicy::default()
             }),
+            drive: Ok(DrivePolicy::default()),
         };
         let d = match heavy(&env, Some(&gw), None).await {
             Ok(d) => d,
@@ -1285,6 +1345,7 @@ mod tests {
             fence_version: Some("v1".into()),
             pool_size: DEFAULT_POOL_SIZE,
             wake_retry: Ok(WakeRetryPolicy::default()),
+            drive: Ok(DrivePolicy::default()),
         };
         (env, gw)
     }
@@ -1813,6 +1874,7 @@ mod tests {
             fence_version: Some(fence.to_string()),
             pool_size: DEFAULT_POOL_SIZE,
             wake_retry: Ok(WakeRetryPolicy::default()),
+            drive: Ok(DrivePolicy::default()),
         }
     }
 

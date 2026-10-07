@@ -7712,6 +7712,7 @@ name = "torii-cli"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "chrono",
  "clap",
  "sensei-gateway",
@@ -7739,9 +7740,11 @@ dependencies = [
  "chrono",
  "sensei-gateway",
  "sensei-orchestrator-core",
+ "sensei-orchestrator-store",
  "serde",
  "serde_json",
  "sqlx",
+ "tempfile",
  "tokio",
  "torii-orchestrator-store",
  "tracing",

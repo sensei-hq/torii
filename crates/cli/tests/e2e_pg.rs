@@ -735,6 +735,7 @@ async fn the_operator_loop_drives_a_paused_run_to_completion_across_processes() 
         run,
         graph.clone(),
         orchestrator_core::RunBudget::default(),
+        torii::cmd::run::StoreLifetime::Durable,
         || {},
     )
     .await
@@ -889,6 +890,7 @@ async fn a_cancelled_run_is_never_driven_by_a_later_worker_tick() {
         run,
         one_node_graph(&marker),
         orchestrator_core::RunBudget::default(),
+        torii::cmd::run::StoreLifetime::Durable,
         || {},
     )
     .await
@@ -984,6 +986,7 @@ async fn a_stale_config_generation_fails_a_wake_at_the_fence_before_spending_any
         run,
         graph.clone(),
         orchestrator_core::RunBudget::default(),
+        torii::cmd::run::StoreLifetime::Durable,
         || {},
     )
     .await
@@ -1145,6 +1148,7 @@ async fn a_budget_exhausted_run_is_raised_by_an_operator_and_completes_in_a_fres
             tokens: Some(TokenBudget { total_tokens: CAP }),
             money: None,
         },
+        torii::cmd::run::StoreLifetime::Durable,
         || {},
     )
     .await
@@ -1337,6 +1341,7 @@ async fn a_money_capped_run_is_raised_by_an_operator_and_completes_in_a_fresh_pr
                 total_micro_usd: cap,
             }),
         },
+        torii::cmd::run::StoreLifetime::Durable,
         || {},
     )
     .await
@@ -1542,6 +1547,7 @@ async fn a_confirm_before_run_tool_call_is_approved_by_an_operator_and_runs_in_a
         run,
         graph,
         orchestrator_core::RunBudget::default(),
+        torii::cmd::run::StoreLifetime::Durable,
         || {},
     )
     .await
@@ -1714,6 +1720,7 @@ async fn a_signalled_gate_is_answered_by_an_operator_and_completes_in_a_fresh_pr
         run,
         graph.clone(),
         orchestrator_core::RunBudget::default(),
+        torii::cmd::run::StoreLifetime::Durable,
         || {},
     )
     .await
@@ -1940,6 +1947,7 @@ async fn a_human_gate_decided_in_another_process_completes_the_run() {
         run,
         graph.clone(),
         orchestrator_core::RunBudget::default(),
+        torii::cmd::run::StoreLifetime::Durable,
         || {},
     )
     .await
@@ -2246,6 +2254,7 @@ async fn a_human_backed_agent_answered_in_another_process_completes_the_run() {
         run,
         graph.clone(),
         orchestrator_core::RunBudget::default(),
+        torii::cmd::run::StoreLifetime::Durable,
         || {},
     )
     .await
@@ -2611,6 +2620,7 @@ async fn a_loop_gate_decided_in_another_process_resumes_and_converges() {
         run,
         graph.clone(),
         orchestrator_core::RunBudget::default(),
+        torii::cmd::run::StoreLifetime::Durable,
         || {},
     )
     .await

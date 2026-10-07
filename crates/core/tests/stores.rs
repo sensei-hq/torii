@@ -147,46 +147,69 @@ async fn every_store_in_the_bundle_belongs_to_its_tenant() {
     drop_tenant(&pool, b).await;
 }
 
-/// A slug can look like a UUID (slugs are free text; an org can be NAMED after another
-/// tenant's id). Resolution must then never silently pick the tenant with that id: an input
-/// that matches one tenant by id and another by slug is ambiguous, and refused naming both.
+/// A slug can never look like a UUID (AG-7, #36): `core.tenants.slug` carries the CHECK
+/// `tenants_slug_not_uuid`, so no tenant can be NAMED after another tenant's id — the platform
+/// tenant's all-zeros id included — and an id handed to `resolve_tenant` can only ever match
+/// the tenant that owns it. Every spelling either `uuid::Uuid` or Postgres' `uuid` input
+/// accepts is refused; a near miss (31 hex digits) is an ordinary slug.
 #[cfg_attr(
     not(have_database_url),
     ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
 )]
 #[tokio::test]
-async fn a_uuid_shaped_slug_is_never_resolved_to_the_tenant_with_that_id() {
+async fn a_uuid_shaped_slug_is_refused_so_an_id_resolves_only_to_its_tenant() {
     let Some(pool) = pool().await else { return };
     let (a, _) = tenant(&pool).await;
-    // B's slug is A's id.
-    let b = Uuid::new_v4();
+    let id = a.to_string();
+    let spellings = [
+        id.clone(),
+        id.replace('-', ""),
+        id.to_uppercase(),
+        format!("{{{id}}}"),
+        format!("urn:uuid:{id}"),
+        "00000000-0000-0000-0000-000000000000".to_string(),
+        "a0ee-bc99-9c0b-4ef8-bb6d-6bb9-bd38-0a11".to_string(),
+    ];
+    for slug in &spellings {
+        let b = Uuid::new_v4();
+        let err = sqlx::query(
+            "insert into core.tenants (id, name, slug, modified_by) values ($1, $2, $2, 'tm8c-test')",
+        )
+        .bind(b)
+        .bind(slug)
+        .execute(&pool)
+        .await
+        .map(|_| ())
+        .expect_err(&format!("a UUID-shaped slug {slug:?} must be refused"));
+        let db = err.as_database_error().expect("a database error");
+        assert_eq!(db.code().as_deref(), Some("23514"), "{slug:?}: {db}");
+        assert_eq!(db.constraint(), Some("tenants_slug_not_uuid"), "{slug:?}");
+    }
+    assert_eq!(
+        torii_core::resolve_tenant(&pool, &id).await.unwrap(),
+        a,
+        "a tenant id resolves to its own tenant"
+    );
+
+    // A near miss is not an id, and stays a legal slug.
+    let near = Uuid::new_v4();
+    let near_slug = format!("tm8c-{}", &near.simple().to_string()[..31]);
     sqlx::query(
-        "insert into core.tenants (id, name, slug, modified_by) values ($1, $2, $3, 'tm8c-test')",
+        "insert into core.tenants (id, name, slug, modified_by) values ($1, $2, $2, 'tm8c-test')",
     )
-    .bind(b)
-    .bind(format!("tm8c-{b}"))
-    .bind(a.to_string())
+    .bind(near)
+    .bind(&near_slug)
     .execute(&pool)
     .await
-    .unwrap();
-
-    let err = torii_core::resolve_tenant(&pool, &a.to_string())
+    .expect("a slug that is not UUID-shaped is accepted");
+    let bare = &near.simple().to_string()[..31];
+    sqlx::query("update core.tenants set slug = $2 where id = $1")
+        .bind(near)
+        .bind(bare)
+        .execute(&pool)
         .await
-        .expect_err("ambiguous: A by id, B by slug");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("ambiguous") && msg.contains(&a.to_string()) && msg.contains(&b.to_string()),
-        "{msg}"
-    );
+        .expect("31 hex digits is not UUID-shaped");
 
-    // With no tenant having that id, the UUID-shaped slug resolves to its own tenant.
+    drop_tenant(&pool, near).await;
     drop_tenant(&pool, a).await;
-    assert_eq!(
-        torii_core::resolve_tenant(&pool, &a.to_string())
-            .await
-            .unwrap(),
-        b,
-        "a UUID-shaped slug resolves by slug when no tenant has that id"
-    );
-    drop_tenant(&pool, b).await;
 }

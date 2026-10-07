@@ -24,7 +24,8 @@ use torii::{boot, cmd};
                   Exit codes: 0 ok, 1 error (including a submitted run that actually executed \
                   and failed), 2 not-found, precondition-not-met, or a result that is complete \
                   enough to print but not the unqualified success you asked for (`run \
-                  list-paused` with a run whose journal could not be folded). Exit 1 puts a \
+                  list-paused` with a run whose journal could not be folded; a `run submit` \
+                  that pauses on TORII_BACKEND=memory, where nothing can resume it). Exit 1 puts a \
                   message on stderr and nothing on stdout; exit 2 always still prints its \
                   result. Note exit 2 is also clap's own usage-error code (a missing \
                   subcommand, an unknown flag), so it is not unique to a business-logic \
@@ -56,7 +57,9 @@ enum Command {
 
 #[derive(Subcommand)]
 enum RunAction {
-    /// Submit a graph and drive it (blocks until it pauses or finishes)
+    /// Submit a graph and drive it (blocks until it pauses or finishes). A pause exits 0 on
+    /// Postgres, where a worker or an answer finishes it, and 2 on TORII_BACKEND=memory, where
+    /// nothing can resume it
     Submit {
         #[arg(long)]
         graph: PathBuf,
@@ -101,6 +104,26 @@ enum RunAction {
     /// Show one run's schedule record
     Status {
         run_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a run's node outputs — what it produced, not its schedule
+    ///
+    /// One row per node: its state (completed, failed, skipped), where its output is stored
+    /// (`inline`, or `cas <digest> <size>B` when it was big enough for the content store, in
+    /// which case it is read back from there), and the output itself — capped to one line here;
+    /// `--node <id>` prints one node's output whole. A failed node shows its error instead.
+    /// Outputs and errors are redacted, as `run status` redacts a reason.
+    ///
+    /// Exit 0 for a completed run whose outputs all read back. A run that has not completed
+    /// still prints what it has produced so far (as of its last round checkpoint) at exit 2,
+    /// and so does a run with an output the content store could not return. An unknown run or
+    /// node is exit 2 (`null` under --json).
+    Results {
+        run_id: String,
+        /// One node's result, its output printed whole.
+        #[arg(long)]
+        node: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -350,6 +373,18 @@ enum ConfigAction {
         #[arg(long)]
         json: bool,
     },
+    /// Print the live registry as JSON, with the generation it is at
+    Show,
+    /// Write the live registry as the directory `config push` reads (a pull then a push of it
+    /// changes nothing)
+    Pull {
+        dir: PathBuf,
+        /// Pull into a non-empty directory: replaces the files a push reads there
+        /// (agents/*.md, skills/*.md, tools/*.json, chains.json, grants.json) and leaves
+        /// anything else alone
+        #[arg(long)]
+        force: bool,
+    },
     /// Replace the durable config from a directory and advance the generation
     Push {
         dir: PathBuf,
@@ -481,6 +516,23 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                     d.wake_attempts.as_ref(),
                     d.journal.as_ref(),
                     run,
+                    json,
+                )
+                .await
+            }
+            RunAction::Results { run_id, node, json } => {
+                // Parse BEFORE connecting, as `status` does.
+                let run = parse_run_id(&run_id)?;
+                // LIGHT tier: the scheduler store, the journal and the CAS — no gateway config,
+                // no model credentials.
+                let d = boot::light(&env).await?;
+                let node = node.map(orchestrator_core::NodeId);
+                cmd::results::results(
+                    d.scheduler_store.as_ref(),
+                    d.journal.as_ref(),
+                    d.content.as_ref(),
+                    run,
+                    node.as_ref(),
                     json,
                 )
                 .await
@@ -695,9 +747,16 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 // must still be able to find the run. `submit` calls this AFTER its
                 // duplicate pre-check, so a rejected submit no longer announces an
                 // effect that never happened.
-                let out = cmd::run::submit(&scheduler, run, g, budget, || {
-                    println!("submitted: {}", run.0)
-                })
+                // A pause exits 0 only where another process can resume it (AG-5): never on
+                // the memory backend, whose stores die with this process.
+                let out = cmd::run::submit(
+                    &scheduler,
+                    run,
+                    g,
+                    budget,
+                    env.backend.store_lifetime(),
+                    || println!("submitted: {}", run.0),
+                )
                 .await;
                 // Closes the event channel, so the log drains everything the drive reported.
                 drop(scheduler);
@@ -712,20 +771,11 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 gateway_config,
                 workspace_root,
             } => {
-                let boot::HeavyDeps {
-                    scheduler, events, ..
-                } = boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
-                let log = boot::log_run_events(events);
+                let deps =
+                    boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
                 let shutdown = shutdown_signal()?;
-                let out = cmd::worker::serve(
-                    &scheduler,
-                    cmd::worker::ServeOpts { interval, once },
-                    shutdown,
-                )
-                .await;
-                drop(scheduler);
-                boot::flush_run_events(log).await;
-                out
+                deps.serve_worker(cmd::worker::ServeOpts { interval, once }, shutdown)
+                    .await
             }
         },
         Command::Config { action } => {
@@ -733,6 +783,10 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
             match action {
                 ConfigAction::Version { json } => {
                     cmd::config::version(d.config_source.as_ref(), json).await
+                }
+                ConfigAction::Show => cmd::config::show(d.config_source.as_ref()).await,
+                ConfigAction::Pull { dir, force } => {
+                    cmd::config::pull(d.config_source.as_ref(), &dir, force).await
                 }
                 ConfigAction::Push {
                     dir,

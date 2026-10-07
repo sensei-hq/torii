@@ -824,15 +824,14 @@ pub fn awaiting_section(rows: &[(orchestrator_core::RunId, Awaiting)]) -> String
                     // decides which, and the refusals get the same answer by construction).
                     // Both journals were rendered as a kind the refusals disagreed with
                     // before those two fixes.
-                    let cell = match (&a.options, &a.question) {
-                        // A pending tool CALL first: it carries neither a menu nor a
-                        // question, so without this arm it would fall to `signal` — the
-                        // one verb that refuses it.
-                        _ if a.tool_confirm.is_some() => {
-                            tool_confirm_cell(a.tool_confirm.as_ref().expect("checked"))
-                        }
-                        (Some(opts), Some(q)) => loop_gate_cell(opts, q),
-                        (Some(opts), None) => cap_chars(
+                    //
+                    // A pending tool CALL is checked before all of them: it carries neither
+                    // a menu nor a question, so it would otherwise fall to `signal` — the
+                    // one verb that refuses it.
+                    let cell = match (&a.tool_confirm, &a.options, &a.question) {
+                        (Some(call), _, _) => tool_confirm_cell(call),
+                        (None, Some(opts), Some(q)) => loop_gate_cell(opts, q),
+                        (None, Some(opts), None) => cap_chars(
                             &format!(
                                 "gate: {}",
                                 opts.iter()
@@ -862,7 +861,7 @@ pub fn awaiting_section(rows: &[(orchestrator_core::RunId, Awaiting)]) -> String
                         // The cell is built by [`question_cell`] rather than inline,
                         // because it does more than cap: it RESERVES the `## Task` tail,
                         // which `compose` puts last and a front-cut would delete.
-                        (None, Some(q)) => match &a.escalated_to {
+                        (None, None, Some(q)) => match &a.escalated_to {
                             // The holder is a registry agent NAME — free text as far as this
                             // table is concerned — so it is collapsed and capped like a node id.
                             Some(to) => question_cell(
@@ -874,7 +873,7 @@ pub fn awaiting_section(rows: &[(orchestrator_core::RunId, Awaiting)]) -> String
                             ),
                             None => question_cell("agent: ", q),
                         },
-                        (None, None) => "signal".to_string(),
+                        (None, None, None) => "signal".to_string(),
                     };
                     s.push_str(&format!(
                         "{}  {}  {}  {}\n",

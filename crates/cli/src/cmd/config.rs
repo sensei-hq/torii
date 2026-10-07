@@ -149,24 +149,13 @@ pub async fn pull(src: &dyn ConfigSource, dir: &Path, force: bool) -> Result<Out
     let shown = sanitized_source(dir);
     let report = match registry_dir::pull(&snap.registry, dir, force) {
         Ok(r) => r,
-        Err(PullError::NotEmpty(_)) => {
-            return Ok(Outcome::precondition(format!(
-                "refused: {shown} is not empty; nothing written. Pass --force to replace the \
-                 files a push reads there (agents/*.md, skills/*.md, tools/*.json, \
-                 chains.json, grants.json) — anything else in it is left alone."
-            )));
-        }
+        Err(PullError::NotEmpty(_)) => return Ok(Outcome::precondition(not_empty(&shown))),
         Err(e) => return Err(CliError::error(format!("refusing to pull: {e}"))),
     };
-    let count =
-        |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
     let mut text = format!(
-        "pulled config v{} into {shown}: {}, {}, {}, {}",
+        "pulled config v{} into {shown}: {}",
         snap.generation,
-        count(report.agents, "agent", "agents"),
-        count(report.skills, "skill", "skills"),
-        count(report.tools, "tool", "tools"),
-        count(report.chain_bindings, "chain binding", "chain bindings"),
+        counts(&report)
     );
     if report.removed > 0 {
         text.push_str(&format!(
@@ -175,6 +164,28 @@ pub async fn pull(src: &dyn ConfigSource, dir: &Path, force: bool) -> Result<Out
         ));
     }
     Ok(Outcome::ok(text))
+}
+
+/// The refusal for a non-empty target directory (exit 2, nothing written) — `pull` and `init`.
+fn not_empty(shown: &str) -> String {
+    format!(
+        "refused: {shown} is not empty; nothing written. Pass --force to replace the files a \
+         push reads there (agents/*.md, skills/*.md, tools/*.json, chains.json, grants.json) — \
+         anything else in it is left alone."
+    )
+}
+
+/// `4 agents, 4 skills, 5 tools, 4 chain bindings` — what a directory write wrote.
+fn counts(report: &torii_core::registry_dir::PullReport) -> String {
+    let count =
+        |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    format!(
+        "{}, {}, {}, {}",
+        count(report.agents, "agent", "agents"),
+        count(report.skills, "skill", "skills"),
+        count(report.tools, "tool", "tools"),
+        count(report.chain_bindings, "chain binding", "chain bindings"),
+    )
 }
 
 /// The shared tail of both writable `plan_push` outcomes (`Apply` and a confirmed
@@ -231,17 +242,89 @@ pub async fn push(
     yes: bool,
     confirm: &mut dyn FnMut(&str) -> bool,
 ) -> Result<Outcome, CliError> {
-    // 1. Load AND VALIDATE the incoming config before touching a single row.
     let incoming = FilesystemConfigSource::new(dir).load().await.map_err(|e| {
         CliError::error(format!(
             "refusing to push: cannot load {}: {e}",
             dir.display()
         ))
     })?;
+    push_config(
+        src,
+        scheduler,
+        incoming,
+        &dir.display().to_string(),
+        gateway_config,
+        yes,
+        confirm,
+    )
+    .await
+}
+
+/// `config init --dir` (AG-9): write the built-in defaults into `dir` for editing. A local file
+/// operation over defaults compiled into the binary — no database, no environment.
+pub fn init_dir(dir: &Path, force: bool) -> Result<Outcome, CliError> {
+    use torii_core::registry_dir::PullError;
+    let shown = sanitized_source(dir);
+    let report = match torii_core::defaults::init(dir, force) {
+        Ok(r) => r,
+        Err(PullError::NotEmpty(_)) => return Ok(Outcome::precondition(not_empty(&shown))),
+        Err(e) => return Err(CliError::error(format!("refusing to init: {e}"))),
+    };
+    let mut text = format!(
+        "wrote the built-in defaults into {shown}: {}",
+        counts(&report)
+    );
+    if report.removed > 0 {
+        text.push_str(&format!(
+            " (replaced {} registry file(s) already there)",
+            report.removed
+        ));
+    }
+    text.push_str(&format!(
+        ". They are yours now: edit them, then `torii config push {shown}`."
+    ));
+    Ok(Outcome::ok(text))
+}
+
+/// `config init --push` (AG-9): push the built-in defaults as they ship — through
+/// [`push_config`], the one path `config push` takes, so the catalog check, the diff, the
+/// removal and paused-run consent and the generation CAS are exactly a push's.
+pub async fn init_push(
+    src: &dyn ConfigStore,
+    scheduler: &dyn SchedulerStore,
+    gateway_config: Option<&dyn crate::boot::GatewayConfigSource>,
+    yes: bool,
+    confirm: &mut dyn FnMut(&str) -> bool,
+) -> Result<Outcome, CliError> {
+    let incoming = torii_core::defaults::config()
+        .map_err(|e| CliError::error(format!("refusing to push: {e}")))?;
+    push_config(
+        src,
+        scheduler,
+        incoming,
+        "the built-in defaults",
+        gateway_config,
+        yes,
+        confirm,
+    )
+    .await
+}
+
+/// The push itself, whatever the incoming registry was read from — `label` names that source
+/// in every message.
+async fn push_config(
+    src: &dyn ConfigStore,
+    scheduler: &dyn SchedulerStore,
+    incoming: RegistryConfig,
+    label: &str,
+    gateway_config: Option<&dyn crate::boot::GatewayConfigSource>,
+    yes: bool,
+    confirm: &mut dyn FnMut(&str) -> bool,
+) -> Result<Outcome, CliError> {
+    // 1. VALIDATE the incoming config before touching a single row.
     Registry::from_config(incoming.clone()).map_err(|e| {
         CliError::error(format!(
-            "refusing to push: {} does not assemble into a valid registry: {e}",
-            dir.display()
+            "refusing to push: {label} does not assemble into a valid registry: {e}"
         ))
     })?;
 
@@ -276,7 +359,7 @@ pub async fn push(
                 .join("\n");
             return Err(CliError::error(format!(
                 "refusing to push: {} references {} chain id(s) that {} does not define:\n{}",
-                dir.display(),
+                label,
                 missing.len(),
                 source.describe(),
                 detail
@@ -301,7 +384,7 @@ pub async fn push(
     let paused = scheduler.list_paused().await?.len();
 
     // 3. Decide.
-    let source = sanitized_source(dir);
+    let source = one_line(label);
     match plan_push(&current, &incoming, paused, yes) {
         PushDecision::NoOp(_) => Ok(Outcome::ok(format!(
             "no changes: {source} already matches durable config v{current_v}"

@@ -20,13 +20,11 @@ use sha2::{Digest, Sha256};
 
 use super::{RagError, EMBED_DIM};
 
-/// Produces embeddings for a batch of texts. `dim()` is the expected output dimensionality.
+/// Produces embeddings for a batch of texts. Output dimensionality is the fixed [`EMBED_DIM`]
+/// contract, enforced by [`validate_dims`] — not a per-embedder property.
 #[async_trait]
 pub trait Embedder: Send + Sync {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, RagError>;
-    fn dim(&self) -> usize {
-        EMBED_DIM
-    }
 }
 
 /// Validate a single embedding row's dimensionality (fail-closed).
@@ -97,9 +95,6 @@ pub struct WrongDimStubEmbedder(pub usize);
 impl Embedder for WrongDimStubEmbedder {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, RagError> {
         Ok(texts.iter().map(|_| vec![0.0f32; self.0]).collect())
-    }
-    fn dim(&self) -> usize {
-        self.0
     }
 }
 

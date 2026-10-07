@@ -1458,6 +1458,156 @@ mod tests {
         );
     }
 
+    /// A fake model provider speaking the OpenAI wire (`/v1/chat/completions`, which the
+    /// gateway's `ollama` adapter calls). Every call is held for `hold`, then answered with
+    /// `status` — a canned completion on 200, an opaque provider error otherwise. It counts
+    /// calls and the most it ever had in flight at once.
+    struct FakeProvider {
+        url: String,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        max_in_flight: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl FakeProvider {
+        async fn start(status: u16, hold: std::time::Duration) -> Self {
+            use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+            #[derive(Clone)]
+            struct St {
+                status: u16,
+                hold: std::time::Duration,
+                calls: Arc<AtomicUsize>,
+                in_flight: Arc<AtomicUsize>,
+                max_in_flight: Arc<AtomicUsize>,
+            }
+            async fn chat(
+                axum::extract::State(st): axum::extract::State<St>,
+            ) -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+                st.calls.fetch_add(1, SeqCst);
+                let now = st.in_flight.fetch_add(1, SeqCst) + 1;
+                st.max_in_flight.fetch_max(now, SeqCst);
+                tokio::time::sleep(st.hold).await;
+                st.in_flight.fetch_sub(1, SeqCst);
+                let code = axum::http::StatusCode::from_u16(st.status).unwrap();
+                if !code.is_success() {
+                    let body = serde_json::json!({"error": {"message": "upstream blip"}});
+                    return (code, axum::Json(body));
+                }
+                let body = serde_json::json!({
+                    "id": "fake", "object": "chat.completion", "created": 0, "model": "m",
+                    "choices": [{"index": 0, "finish_reason": "stop",
+                                 "message": {"role": "assistant", "content": "ok"}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+                });
+                (code, axum::Json(body))
+            }
+            let st = St {
+                status,
+                hold,
+                calls: Arc::new(AtomicUsize::new(0)),
+                in_flight: Arc::new(AtomicUsize::new(0)),
+                max_in_flight: Arc::new(AtomicUsize::new(0)),
+            };
+            let (calls, max_in_flight) = (st.calls.clone(), st.max_in_flight.clone());
+            let app = axum::Router::new()
+                .route("/v1/chat/completions", axum::routing::post(chat))
+                .with_state(st);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            Self {
+                url,
+                calls,
+                max_in_flight,
+            }
+        }
+
+        /// A gateway config whose chain `c` is one model served by this provider.
+        fn gateway_json(&self) -> String {
+            serde_json::json!({
+                "routers": {"ollama": {"url": self.url}},
+                "models": {"m": {"id": "m", "provider": "ollama", "capabilities": ["text_chat"],
+                                 "context_window": 8192, "max_output_tokens": 1024}},
+                "chains": {"c": {"id": "c", "capability": "text_chat",
+                                 "models": [{"model": "m", "router": "ollama", "priority": 1}],
+                                 "fallback_triggers": []}}
+            })
+            .to_string()
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn max_in_flight(&self) -> usize {
+            self.max_in_flight.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    fn graph_of(id: &str, kind: orchestrator_core::NodeKind) -> orchestrator_core::Graph {
+        orchestrator_core::Graph {
+            nodes: vec![orchestrator_core::Node {
+                id: orchestrator_core::NodeId(id.into()),
+                kind,
+                deps: vec![],
+            }],
+        }
+    }
+
+    /// A `Map` of `items` model calls on chain `c`, asking for all of them at once.
+    fn wide_map(items: usize) -> orchestrator_core::Graph {
+        graph_of(
+            "fan",
+            orchestrator_core::NodeKind::Map {
+                body: orchestrator_core::MapBody::ModelCall { chain: "c".into() },
+                over: (0..items)
+                    .map(|i| serde_json::json!({"prompt": format!("item {i}")}))
+                    .collect(),
+                concurrency: items,
+                aggregation: orchestrator_core::Aggregation::FailFast,
+            },
+        )
+    }
+
+    async fn submit_graph(d: &HeavyDeps, graph: orchestrator_core::Graph) -> RunId {
+        let run = RunId(uuid::Uuid::new_v4());
+        crate::cmd::run::submit(
+            &d.scheduler,
+            run,
+            graph,
+            orchestrator_core::RunBudget::default(),
+            || {},
+        )
+        .await
+        .expect("submit");
+        run
+    }
+
+    /// AG-5: `TORII_MAP_CONCURRENCY` reaches the executor — observed at the provider. A `Map`
+    /// asking for 6 calls at once gets at most 2 in flight under a cap of 2.
+    #[tokio::test]
+    async fn heavy_wires_the_map_concurrency_cap_into_the_executor() {
+        let provider = FakeProvider::start(200, std::time::Duration::from_millis(150)).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (env, gw) = memory_env(
+            dir.path(),
+            &provider.gateway_json(),
+            &[("TORII_MAP_CONCURRENCY", "2")],
+        );
+        let d = boot(&env, &gw).await;
+        let run = submit_graph(&d, wide_map(6)).await;
+        assert_eq!(
+            d.scheduler.status(run).await.unwrap().expect("row").status,
+            orchestrator_core::RunStatus::Completed,
+            "precondition: every call was answered"
+        );
+        assert_eq!(provider.calls(), 6, "precondition: one call per item");
+        assert_eq!(
+            provider.max_in_flight(),
+            2,
+            "TORII_MAP_CONCURRENCY=2 must cap the fan-out at the provider"
+        );
+    }
+
     fn signal_graph() -> orchestrator_core::Graph {
         orchestrator_core::Graph {
             nodes: vec![orchestrator_core::Node {

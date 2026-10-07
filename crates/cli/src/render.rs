@@ -450,6 +450,13 @@ pub struct AwaitingNode {
     /// output for a run with no human-backed agent in it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub question: Option<String>,
+    /// AG-15: for a human-backed `Agent` whose question was ESCALATED, the agent that holds
+    /// it NOW — the last `AgentEscalated` hop's `to` — and [`deadline`](Self::deadline) is
+    /// that hop's, not the original ask's. Answered with the same `run agent answer`.
+    ///
+    /// Skipped when absent, for the byte-identity reason the fields above record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub escalated_to: Option<String>,
 }
 
 /// A node id is author- (or planner-) supplied free text, so it gets the same
@@ -748,7 +755,18 @@ pub fn awaiting_section(rows: &[(orchestrator_core::RunId, Awaiting)]) -> String
                         // The cell is built by [`question_cell`] rather than inline,
                         // because it does more than cap: it RESERVES the `## Task` tail,
                         // which `compose` puts last and a front-cut would delete.
-                        (None, Some(q)) => question_cell("agent: ", q),
+                        (None, Some(q)) => match &a.escalated_to {
+                            // The holder is a registry agent NAME — free text as far as this
+                            // table is concerned — so it is collapsed and capped like a node id.
+                            Some(to) => question_cell(
+                                &format!(
+                                    "agent (escalated to {}): ",
+                                    cap_chars(&one_line(to), NODE_MAX)
+                                ),
+                                q,
+                            ),
+                            None => question_cell("agent: ", q),
+                        },
                         (None, None) => "signal".to_string(),
                     };
                     s.push_str(&format!(

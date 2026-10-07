@@ -18,7 +18,7 @@ toolkit does not yet do something, it says so rather than describing an intentio
 | | |
 |---|---|
 | **torii's database** | The orchestrator's registry (`registry.*`) and run state (`runs.*`) live there, per tenant, beside the catalog. Apply the schema with `dbd` from `database/` (see `database/README.md`), RLS policies included. |
-| **`DATABASE_URL`** | Environment only. There is deliberately no flag: a flag would leak the password into `ps`. |
+| **`DATABASE_URL`** | Environment only. There is deliberately no flag: a flag would leak the password into `ps`. Every command needs it except `config init --dir`, which only writes the built-in defaults to a directory. |
 | **`TORII_TENANT`** | The tenant every command acts for — its id or its slug. A slug can never look like an id (the database refuses a UUID-shaped slug, and org create turns a UUID-shaped name into an `org-`-prefixed slug), so an id always names its own tenant. Required on the Postgres backend: every run, journal and registry belongs to exactly one tenant, and another tenant's are invisible. |
 | **`TORII_FENCE_VERSION`** | Needed by `run submit` and `worker serve`. Set it **explicitly** (e.g. `v1`) and keep a fleet agreed on it — it is recorded in every run and checked on resume, so deriving it from a build version would strand every paused run on a routine deploy. |
 | **`TORII_POOL_SIZE`** | Optional. Defaults are fine to start. |
@@ -50,6 +50,43 @@ convenient for a first boot:
 > lacks (always, on Postgres; with `--gateway-config` on memory), and `run submit` /
 > `worker serve` **always** refuse to boot on one — naming each missing chain and the agent, phase
 > or binding that names it — rather than letting every run that reaches it fail with no candidates.
+
+## Starting from the built-in defaults
+
+```sh
+torii config init --dir ./registry      # write them out to edit — no database needed
+torii config push ./registry            # …then push your edited copy
+
+torii config init --push                # or push them exactly as they ship
+```
+
+torii ships a small registry, compiled into the binary (`crates/core/defaults/`), so a fresh
+tenant can plan without hand-writing one:
+
+| | |
+|---|---|
+| **agents** | `planner` (`area: planning`, `default_planner: true`) — declares the five discovery tools (`list_agents`, `list_skills`, `list_tools`, `list_chains`, `validate_plan`) and is told the plan format; `researcher` (`research/analyst`), `writer` (`writing/author`), `reviewer` (`review/critic`). |
+| **skills** | each keyword-gated (`activate_on`), so none is composed into a prompt that does not ask for it: `summarize`, `research-method`, `code-review`, `structured-output`. |
+| **tools** | the five discovery tools' specs — exactly the gateway executables' own. |
+| **chains.json** | every `(area, kind)` above bound to the catalog's seeded `local` chain (Ollama, priced at an explicit zero, no provider key). Re-point a role at `chat` (or any catalog chain) by editing this one file once its provider keys are set. |
+
+**`--dir <d>`** writes them in the layout `config push` reads — the exact files `config pull`
+would write for them — and nothing else: no database, no `TORII_TENANT`, and it works from an
+installed binary with no source tree beside it. A missing `<d>` is created and an empty one
+seeded; a non-empty one (including an earlier `init` you have since edited) is refused at exit 2
+with nothing written, unless `--force`, which replaces only the files a push reads (the
+layout below) and leaves the rest.
+It is seed-once: from then on the files are yours, and a later release's defaults reach you only
+if you `init` again into a scratch directory and compare.
+
+**`--push`** is `config push` of those files, through the same path: checked against torii's
+catalog (on Postgres; memory has none), replace-all (so on a tenant with a registry it REMOVES whatever the defaults lack, and
+asks first), a generation bump that strands paused runs (asks first), `--yes` to skip both
+prompts, and `no changes` when the tenant already has exactly the defaults.
+
+Nothing per tenant needs seeding in the catalog: the chains the defaults bind are the platform
+tenant's, which every tenant inherits (`catalog.chains_for_tenant`), and every model on them is
+priced, so a `--budget-usd` run accepts them.
 
 ## The registry directory
 
@@ -106,7 +143,7 @@ is a tool the model can call and the runtime cannot serve.
 export DATABASE_URL=… TORII_TENANT=acme TORII_FENCE_VERSION=v1
 
 # 1. push your registry — replace-all; it advances THIS tenant's config generation
-torii config push ./registry
+torii config push ./registry       # or `torii config init --push` for the built-in defaults
 torii config version
 
 # 2. run something
@@ -234,9 +271,14 @@ and counted in a warning. `RUST_LOG=torii::run_event=info` shows only these.
 
 Stated because finding them by experiment is worse.
 
-- **No registry content ships.** There are no built-in agents, skills or tools — you author all of
-  them. `torii worker serve` refuses to boot against a registry with zero agents.
-- **No `config init` and no dry-run diff.** `push` prints its diff as it applies (and asks before
+- **The defaults are the starting point, not a library.** Four agents and four skills; the planner
+  plans for the three role agents and nothing else ships. `torii worker serve` still refuses to
+  boot against a registry with zero agents — push something (`config init --push`) first.
+- **The defaults route to a local model.** Every role is bound to the catalog's `local` chain
+  (Ollama `llama3.2`, then `qwen2.5-coder`), which must be running and pulled for a run to get an
+  answer; a small local model is a weak planner. Edit `chains.json` to use `chat` once provider
+  keys are set.
+- **No dry-run diff.** `push` (and `init --push`) prints its diff as it applies (and asks before
   removing anything), but nothing shows the diff without offering to write it.
 - **With nobody marked, two planner agents resolve by name order.** Mark one `area: planning`
   agent `default_planner: true` and it is chosen; leave every agent unmarked and the selector

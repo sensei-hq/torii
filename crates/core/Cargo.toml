@@ -25,6 +25,9 @@ uuid = { version = "1", features = ["serde"] }
 # `orchestrator_store`, like the gateway's in-memory crate the CLI uses.
 tenant-stores = { package = "torii-orchestrator-store", path = "../orchestrator-store" }
 orchestrator-core = { package = "sensei-orchestrator-core", git = "https://github.com/sensei-hq/gateway", tag = "v0.11.0" }
+# AG-13 (#49): a run's money spend is folded with the engine's OWN fold (`money_spend_of`) before
+# it is recorded on the budget nodes — never a second, drifting sum.
+orchestrator = { package = "sensei-orchestrator", git = "https://github.com/sensei-hq/gateway", tag = "v0.11.0" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

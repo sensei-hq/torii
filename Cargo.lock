@@ -7739,6 +7739,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "sensei-gateway",
+ "sensei-orchestrator",
  "sensei-orchestrator-core",
  "sensei-orchestrator-store",
  "serde",

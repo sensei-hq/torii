@@ -93,8 +93,9 @@ enum RunAction {
         /// places — a cap is kept in whole micro-dollars, and finer is refused, not rounded).
         ///
         /// Ledgered from the cost the gateway prices each call at, so every model on a chain
-        /// this run uses must declare pricing (an explicit zero for a free or local model):
-        /// under a money cap an unpriced model is refused. Independent of --budget-tokens;
+        /// this run can use must declare pricing (an explicit zero for a free or local model):
+        /// a graph that can reach an unpriced one is refused before it is submitted, naming the
+        /// chain and the model. Independent of --budget-tokens;
         /// give either, both or neither. Spend is shown by `run status`, and a run that stops
         /// at its cap is raised with `run wake --budget-usd`. Only a run SUBMITTED with a
         /// money cap has one — a later raise cannot introduce it.

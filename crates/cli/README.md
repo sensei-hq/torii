@@ -204,8 +204,14 @@ run`, `null` under `--json`. Light tier: no gateway config, no credentials.
 neither. A run that stops at a cap pauses, `run status` shows the spend against it, and `run wake
 --budget-tokens`/`--budget-usd` moves the cap before re-queueing. A money raise only moves a cap the
 run was SUBMITTED with — on a run without one it is refused and nothing is written. Under a money
-cap every model on the chains the run uses must declare pricing (an explicit zero for a free or
-local model); an unpriced one is refused.
+cap every model on the chains the run can use must declare pricing (an explicit zero for a free or
+local model): `run submit --budget-usd` checks that before anything is submitted and refuses
+(exit `1`, nothing submitted) naming each chain, who uses it and its unpriced models. "Can use"
+is the graph's `ModelCall` chains, the chain each model-backed agent it names resolves to, and —
+when the graph has an `Expand` anywhere — every route of every model-backed agent in the
+registry, since a plan may run any of them. A chain only a planned `ModelCall` names is still
+refused by the engine at call time. `config push` does not check pricing: an unpriced model is
+fine for every run without a money cap.
 
 **Confirmations and escalations.** A `tool:` row in `list-paused` (and a `tool confirmation
 pending:` line in `status`) is one call of a `confirm_tools` tool waiting for a person; answer it

@@ -7,8 +7,9 @@
 //! `torii` with no source tree beside it.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use crate::registry_dir::{PullError, PullReport};
 use include_dir::{include_dir, Dir};
 use orchestrator_core::{
     AgentDefinition, ChainBinding, OrchestratorError, Permissions, RegistryConfig, SkillDef,
@@ -68,6 +69,17 @@ pub fn config() -> Result<RegistryConfig, OrchestratorError> {
         }
     }
     Ok(cfg)
+}
+
+/// `torii config init --dir`: write the shipped registry into `dir` for editing — seed-once
+/// (SP-REG-1 D6): from then on the files are the operator's, pushed with `config push`.
+///
+/// The four target states (D9): a missing `dir` is created and seeded; an empty one is seeded;
+/// a non-empty one — unrelated files, or an earlier `init` since edited — is refused with
+/// [`PullError::NotEmpty`] and nothing is written, unless `force`, which replaces only the files
+/// a push reads and leaves everything else.
+pub fn init(_dir: &Path, _force: bool) -> Result<PullReport, PullError> {
+    Ok(PullReport::default())
 }
 
 /// The shipped registry directory's files, relative to its root, in path order.
@@ -277,5 +289,98 @@ mod tests {
             serde_json::to_value(c).unwrap()
         };
         assert_eq!(canon(read), canon(config().expect("parse")));
+    }
+
+    /// Every file `init` writes, relative to `dir`, with its contents.
+    fn written(dir: &Path) -> Vec<(PathBuf, String)> {
+        files()
+            .into_iter()
+            .filter_map(|(p, _)| std::fs::read_to_string(dir.join(&p)).ok().map(|c| (p, c)))
+            .collect()
+    }
+
+    fn shipped() -> Vec<(PathBuf, String)> {
+        files()
+            .into_iter()
+            .map(|(p, c)| (p, c.to_string()))
+            .collect()
+    }
+
+    /// D9 state 1 — missing: created, and seeded with exactly the shipped files.
+    #[test]
+    fn init_creates_a_missing_directory_and_seeds_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("registry");
+        let report = init(&dir, false).expect("init");
+        assert_eq!(written(&dir), shipped());
+        let cfg = config().unwrap();
+        assert_eq!(
+            (
+                report.agents,
+                report.skills,
+                report.tools,
+                report.chain_bindings
+            ),
+            (
+                cfg.agents.len(),
+                cfg.skills.len(),
+                cfg.tools.len(),
+                cfg.chain_bindings.len()
+            )
+        );
+    }
+
+    /// D9 state 2 — empty: seeded.
+    #[test]
+    fn init_seeds_an_empty_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), false).expect("init");
+        assert_eq!(written(tmp.path()), shipped());
+    }
+
+    /// D9 state 3 — non-empty and never seeded: refused, nothing written.
+    #[test]
+    fn init_refuses_a_non_empty_directory_and_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("notes.txt"), "mine").unwrap();
+        match init(tmp.path(), false) {
+            Err(PullError::NotEmpty(p)) => assert_eq!(p, tmp.path()),
+            other => panic!("expected NotEmpty, got {other:?}"),
+        }
+        let entries: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(entries, vec![std::ffi::OsString::from("notes.txt")]);
+    }
+
+    /// D9 state 4 — seeded and since edited, the dangerous one: a second `init` must never put
+    /// the operator's edits back to the defaults unasked. `force` does exactly that, and touches
+    /// nothing a push does not read.
+    #[test]
+    fn init_never_overwrites_an_edited_seed_unless_forced() {
+        let tmp = tempfile::tempdir().unwrap();
+        init(tmp.path(), false).expect("first init");
+        assert_eq!(written(tmp.path()), shipped(), "precondition: seeded");
+        let planner = tmp.path().join("agents/planner.md");
+        std::fs::write(&planner, "edited by the operator").unwrap();
+        std::fs::write(tmp.path().join("README.md"), "mine").unwrap();
+
+        assert!(matches!(
+            init(tmp.path(), false),
+            Err(PullError::NotEmpty(_))
+        ));
+        assert_eq!(
+            std::fs::read_to_string(&planner).unwrap(),
+            "edited by the operator"
+        );
+
+        let report = init(tmp.path(), true).expect("forced init");
+        assert!(report.removed > 0, "{report:?}");
+        assert_eq!(written(tmp.path()), shipped());
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("README.md")).unwrap(),
+            "mine"
+        );
     }
 }

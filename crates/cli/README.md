@@ -125,6 +125,38 @@ not). `torii run list-paused` before pushing.
 
 A worker serves **one tenant** (`TORII_TENANT`): its sweeps claim only that tenant's due runs.
 
+## Reading the live config back
+
+```sh
+torii config show              # the live registry as JSON, with the generation it is at
+torii config pull ./registry   # write it as the directory `config push` reads
+```
+
+**`config show`** prints `{"generation": N, "registry": {"agents": […], "skills": […], "tools":
+[…], "chain_bindings": […]}}` — the registry and its generation from ONE snapshot, so a push
+landing mid-read can never pair one with the other. Agents, skills and tools are sorted by name and
+chain bindings by `(area, kind)`; each agent carries its `grants`.
+
+**`config pull <dir>`** writes the layout above: `agents/*.md` and `skills/*.md` (frontmatter +
+body, every key `push` reads — AG-15's included), `tools/*.json`, and `chains.json` and
+`grants.json` in the root (always both). **A pull followed by a `config push` of the result is a
+no-op** — `no changes`, no generation bump, no paused run touched. File names come from entity
+names made safe (characters outside `A-Z a-z 0-9 - _ .` become `_`, a leading `.` gains a `_`,
+and names equal but for case get `-2`, `-3` …); `push` reads only the extension, never the name.
+
+- A non-empty `<dir>` is refused — exit 2, nothing written. `--force` removes the files a push
+  reads there (`agents/*.md`, `skills/*.md`, `tools/*.json`, `chains.json`, `grants.json`)
+  before writing and leaves everything else alone, so a stale agent from an earlier pull cannot
+  come back as an addition.
+- Every file is parsed back with `push`'s own reader before the first write. A value the
+  frontmatter format cannot carry — a line break in a name, a comma or `=` inside a list item, a
+  leading or trailing space, a value shaped like `[a list]`, a sub-second timeout, a body
+  opening with a blank line — is refused naming the entity and the field (exit 1, nothing
+  written), rather than pulled as something the next push would silently change. A registry
+  authored through `push` never contains one.
+
+Both read `TORII_TENANT`'s registry only; another tenant's never appears.
+
 ## Observing and intervening
 
 ```sh
@@ -176,8 +208,8 @@ Stated because finding them by experiment is worse.
 
 - **No registry content ships.** There are no built-in agents, skills or tools — you author all of
   them. `torii worker serve` refuses to boot against a registry with zero agents.
-- **No `config init`, `config pull` or `config diff`.** `version` and `push` are the whole config
-  surface today.
+- **No `config init` and no dry-run diff.** `push` prints its diff as it applies (and asks before
+  removing anything), but nothing shows the diff without offering to write it.
 - **With nobody marked, two planner agents resolve by name order.** Mark one `area: planning`
   agent `default_planner: true` and it is chosen; leave every agent unmarked and the selector
   still takes the first by name.

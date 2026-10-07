@@ -1289,6 +1289,79 @@ mod tests {
         (env, gw)
     }
 
+    /// AG-5: a memory-backend boot whose environment goes through [`env_config_from`] — the
+    /// real parse path — so a test proves a `TORII_*` variable reaches what `heavy()` builds,
+    /// not just that it parses. `gateway_json` is the `--gateway-config` file's contents; the
+    /// registry is [`memory_heavy_fixture`]'s one agent on chain `c`.
+    fn memory_env(dir: &Path, gateway_json: &str, extra: &[(&str, &str)]) -> (EnvConfig, PathBuf) {
+        let (_, gw) = memory_heavy_fixture(dir);
+        std::fs::write(&gw, gateway_json).unwrap();
+        let reg = dir.join("registry").display().to_string();
+        let mut pairs: Vec<(String, String)> = vec![
+            (ENV_BACKEND.into(), "memory".into()),
+            (ENV_REGISTRY_DIR.into(), reg),
+            (ENV_FENCE_VERSION.into(), "v1".into()),
+        ];
+        pairs.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        let env = env_config_from(|k| {
+            pairs
+                .iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.clone())
+        })
+        .expect("the environment parses");
+        (env, gw)
+    }
+
+    /// The gateway config [`memory_heavy_fixture`] writes: an ollama router nobody calls, and
+    /// chain `c` with no models.
+    const IDLE_GATEWAY: &str = r#"{"routers":{"ollama":{"url":"http://127.0.0.1:11434"}},
+        "chains":{"c":{"id":"c","capability":"text_chat","models":[],"fallback_triggers":[]}}}"#;
+
+    async fn boot(env: &EnvConfig, gw: &Path) -> HeavyDeps {
+        match heavy(env, Some(gw), None).await {
+            Ok(d) => d,
+            Err(e) => panic!("heavy boots on the memory backend: {}", e.message),
+        }
+    }
+
+    /// A run whose worker was lost `age` ago: its `waking` claim is that old.
+    async fn abandoned_claim(d: &HeavyDeps, age: chrono::Duration) -> RunId {
+        let run = RunId(uuid::Uuid::new_v4());
+        d.light
+            .scheduler_store
+            .enqueue(run, &signal_graph(), chrono::Utc::now() - age)
+            .await
+            .expect("enqueue");
+        run
+    }
+
+    /// AG-5: `TORII_WAKE_LEASE` reaches the `Scheduler` — observed through `tick`, since the
+    /// scheduler does not expose it. A claim abandoned 5 minutes ago is stale under the 60s
+    /// default (reclaimed and driven) but still held under a 10-minute lease (left alone).
+    #[tokio::test]
+    async fn heavy_wires_the_wake_lease_into_the_scheduler() {
+        let dir = tempfile::tempdir().unwrap();
+        let (env, gw) = memory_env(dir.path(), IDLE_GATEWAY, &[]);
+        let d = boot(&env, &gw).await;
+        abandoned_claim(&d, chrono::Duration::minutes(5)).await;
+        assert_eq!(
+            d.scheduler.tick().await.expect("tick"),
+            1,
+            "precondition: under the default lease a 5-minute-old claim is stale"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let (env, gw) = memory_env(dir.path(), IDLE_GATEWAY, &[("TORII_WAKE_LEASE", "10m")]);
+        let d = boot(&env, &gw).await;
+        abandoned_claim(&d, chrono::Duration::minutes(5)).await;
+        assert_eq!(
+            d.scheduler.tick().await.expect("tick"),
+            0,
+            "TORII_WAKE_LEASE=10m must reach the scheduler: a 5-minute-old claim is still held"
+        );
+    }
+
     fn signal_graph() -> orchestrator_core::Graph {
         orchestrator_core::Graph {
             nodes: vec![orchestrator_core::Node {

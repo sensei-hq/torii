@@ -13,7 +13,8 @@ use orchestrator::agent::tools::{
 use orchestrator::{Executor, Scheduler};
 use orchestrator_core::{
     Clock, ConfigSource, ConfigStore, ContentStore, ContextStore, ExecutionJournal,
-    PatternRedactor, RegistryHandle, RulePlannerSelector, SchedulerStore, SystemClock,
+    OrchestratorError, PatternRedactor, RegistryHandle, RulePlannerSelector, RunId, SchedulerStore,
+    SystemClock,
 };
 use orchestrator_store::{
     FilesystemConfigSource, InMemoryConfigStore, InMemoryContentStore, InMemoryContextStore,
@@ -511,6 +512,14 @@ pub struct LightDeps {
     pub wake_attempts: Arc<dyn WakeAttemptCounts>,
 }
 
+/// AG-3: torii's Postgres scheduler keeps the counter in `runs.scheduled_runs.attempts`.
+#[async_trait::async_trait]
+impl WakeAttemptCounts for torii_core::stores::PgSchedulerStore {
+    async fn wake_attempts(&self, run: RunId) -> Result<Option<u32>, OrchestratorError> {
+        torii_core::stores::PgSchedulerStore::wake_attempts(self, run).await
+    }
+}
+
 /// Every store one backend provides — the light tier's three plus the heavy tier's CAS and
 /// blackboard — built in ONE place, so no tier names a backend type (TM-5).
 struct Stores {
@@ -535,13 +544,15 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                 .await
                 .map_err(|e| CliError::error(format!("{ENV_TENANT}: {e}")))?;
             let stores = torii_core::TenantStores::open(&pool, tenant_id);
+            // ONE store object behind both the trait and the attempt-counter reader.
+            let scheduler = Arc::new(stores.scheduler);
             Ok(Stores {
                 light: LightDeps {
-                    scheduler_store: Arc::new(stores.scheduler),
+                    scheduler_store: scheduler.clone(),
                     journal: Arc::new(stores.journal),
                     config_source: Arc::new(stores.config),
                     gateway_config: Some(Arc::new(CatalogGatewayConfigSource::new(pool))),
-                    wake_attempts: Arc::new(NoWakeAttemptCounts),
+                    wake_attempts: scheduler,
                 },
                 content: Arc::new(stores.content),
                 context: Arc::new(stores.context),

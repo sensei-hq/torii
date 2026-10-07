@@ -38,7 +38,6 @@ pub async fn status(
     run: RunId,
     json: bool,
 ) -> Result<Outcome, CliError> {
-    let _ = attempts;
     match store.status(run).await? {
         // WHOLE-SLICE FIX 5: `--json` promises machine-parseable STDOUT, and the not-found
         // path was emitting prose there — so `torii run status X --json | jq` failed on
@@ -65,6 +64,7 @@ pub async fn status(
             let (spent, budget) = orchestrator::spend_of(&events);
             let budgeted = budgeted_turns(&events);
             let spend_advice = spend_unrecorded_advice(&r);
+            let wake_attempts = reportable_wake_attempts(&r, attempts.wake_attempts(run).await?);
 
             if json {
                 let base = render::json(&[r]).map_err(|e| CliError::error(e.to_string()))?;
@@ -75,7 +75,11 @@ pub async fn status(
                 // does, so re-serializing would silently reorder every key. Only
                 // taking that detour when there is something to splice in is what
                 // keeps the unbudgeted, undegraded case byte-identical.
-                if budget.is_none() && budgeted.is_empty() && spend_advice.is_none() {
+                if budget.is_none()
+                    && budgeted.is_empty()
+                    && spend_advice.is_none()
+                    && wake_attempts.is_none()
+                {
                     return Ok(Outcome::ok(base));
                 }
                 // Reuse `render::json` for the row shape + redaction, then splice
@@ -93,6 +97,9 @@ pub async fn status(
                 }
                 if let Some(advice) = spend_advice {
                     rows[0]["spend_unrecorded"] = serde_json::json!(advice);
+                }
+                if let Some(n) = wake_attempts {
+                    rows[0]["wake_attempts"] = serde_json::json!(n);
                 }
                 Ok(Outcome::ok(
                     serde_json::to_string_pretty(&rows)
@@ -121,6 +128,11 @@ pub async fn status(
                 }
                 if let Some(advice) = spend_advice {
                     text.push_str(&format!("spend unrecorded: {advice}\n"));
+                }
+                if let Some(n) = wake_attempts {
+                    text.push_str(&format!(
+                        "wake attempts: {n} consecutive since the last successful drive\n"
+                    ));
                 }
                 Ok(Outcome::ok(text))
             }
@@ -151,6 +163,14 @@ fn spend_unrecorded_advice(r: &orchestrator_core::ScheduledRun) -> Option<&'stat
             .as_deref()
             .is_some_and(|reason| reason.starts_with(SPEND_UNRECORDED_PREFIX)))
     .then_some(SPEND_UNRECORDED_ADVICE)
+}
+
+/// AG-3: the wake-attempt count worth showing — only on a LIVE run that has attempts since
+/// its last successful drive (a `waking` row mid-attempt, or a `paused` one backing off).
+/// A healthy pause has a count of 0, and a terminal run's count is history (one that gave up
+/// names it in its reason), so neither gets a line and both stay byte-identical.
+fn reportable_wake_attempts(r: &orchestrator_core::ScheduledRun, n: Option<u32>) -> Option<u32> {
+    n.filter(|&n| n > 0 && !r.status.is_terminal())
 }
 
 /// One SP-7b `ContextBudgeted` row in the shape `status` reports it.

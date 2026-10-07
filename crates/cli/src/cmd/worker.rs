@@ -616,4 +616,85 @@ mod tests {
         );
         assert!(out.text.contains("shutdown"), "{}", out.text);
     }
+
+    // ---- AG-5: the reloading ticker ---------------------------------------------------------
+
+    /// A durable config source that is down.
+    struct DownSource;
+
+    #[async_trait::async_trait]
+    impl orchestrator_core::ConfigSource for DownSource {
+        async fn load(&self) -> Result<orchestrator_core::RegistryConfig, OrchestratorError> {
+            Err(OrchestratorError::Store("config store unreachable".into()))
+        }
+        async fn version(&self) -> Result<Option<u64>, OrchestratorError> {
+            Err(OrchestratorError::Store("config store unreachable".into()))
+        }
+    }
+
+    /// A refresh that fails never stops the tick: the last good registry stays live and the
+    /// due runs are still driven (a store fault surfaces through the tick itself).
+    #[tokio::test]
+    async fn a_failed_registry_refresh_still_ticks() {
+        let t = FakeTicker::ok();
+        let registry = torii_core::registry::RegistryReloader::new(
+            orchestrator_core::RegistryHandle::new(orchestrator_core::Registry::default()),
+            std::sync::Arc::new(DownSource),
+        );
+        let chains = std::collections::HashMap::new();
+        let ticker = Reloading {
+            inner: &t,
+            registry: &registry,
+            gateway_chains: &chains,
+        };
+        assert_eq!(ticker.tick().await.expect("the tick still runs"), 1);
+        assert_eq!(t.calls.load(Ordering::SeqCst), 1);
+    }
+
+    fn registry_on(chain: &str) -> orchestrator_core::Registry {
+        let cfg: orchestrator_core::RegistryConfig = serde_json::from_value(serde_json::json!({
+            "agents": [{"name": "a", "area": "x", "kind": "y", "chain": chain,
+                        "tools": [], "skills": [], "system_prompt": "p"}],
+            "skills": [], "tools": [], "chain_bindings": []
+        }))
+        .expect("config");
+        orchestrator_core::Registry::from_config(cfg).expect("registry")
+    }
+
+    fn chains(
+        ids: &[&str],
+    ) -> std::collections::HashMap<String, kernel::types::config::FallbackChainConfig> {
+        ids.iter()
+            .map(|id| {
+                (
+                    id.to_string(),
+                    kernel::types::config::FallbackChainConfig {
+                        id: id.to_string(),
+                        capability: kernel::types::capability::Capability::TextChat,
+                        models: vec![],
+                        fallback_triggers: vec![],
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// A reloaded registry is diagnosed against the worker's boot-time gateway: a chain the
+    /// gateway lacks is named with the remedy (restart), zero agents is named, and a registry
+    /// that resolves has nothing to report.
+    #[test]
+    fn a_reloaded_registry_is_diagnosed_against_the_workers_gateway() {
+        assert_eq!(
+            reload_problem(&registry_on("chat"), &chains(&["chat"])),
+            None
+        );
+        let p = reload_problem(&registry_on("brand-new"), &chains(&["chat"])).expect("missing");
+        assert!(
+            p.contains("brand-new") && p.contains("restart the worker"),
+            "{p}"
+        );
+        let p = reload_problem(&orchestrator_core::Registry::default(), &chains(&["chat"]))
+            .expect("empty");
+        assert!(p.contains("zero agents"), "{p}");
+    }
 }

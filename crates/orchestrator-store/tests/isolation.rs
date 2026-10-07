@@ -351,6 +351,81 @@ async fn scheduler_transitions_never_reach_another_tenants_row() {
     b.drop_tenant().await;
 }
 
+/// AG-3's wake-attempt writers are tenant-bound: with B holding the same run id `waking`
+/// (attempts = 1, no deadline, no recorded error), A's `begin_wake_attempt` (its locking read
+/// and its update) and `record_wake_failed` read, count, arm, pause and record only A's row.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn a_wake_attempt_and_a_failed_wake_never_reach_another_tenants_row() {
+    let Some(pool) = pool().await else { return };
+    let (a, b) = (Tenant::new(&pool).await, Tenant::new(&pool).await);
+    let (sa, sb) = (a.scheduler(), b.scheduler());
+    let run = RunId(uuid::Uuid::new_v4());
+    let now = ts(3_200_000);
+    let g = Graph { nodes: vec![] };
+
+    sa.enqueue(run, &g, now).await.unwrap();
+    sb.enqueue(run, &g, now).await.unwrap();
+
+    let attempt = sa
+        .begin_wake_attempt(run, &|_| ts(500))
+        .await
+        .unwrap()
+        .expect("A's own row is waking");
+    assert_eq!(attempt.attempt, 2, "A counts its own attempt");
+    sa.record_wake_failed(run, ts(500), "a-boom").await.unwrap();
+
+    // A's row moved: paused at its retry deadline, with its error as the reason.
+    let st_a = sa.status(run).await.unwrap().unwrap();
+    assert_eq!(st_a.status, RunStatus::Paused);
+    assert_eq!(st_a.next_wake, Some(ts(500)));
+    assert_eq!(st_a.reason.as_deref(), Some("a-boom"));
+    // A's row is paused, B's is waking: A's next attempt finds no waking row of ITS OWN —
+    // the locking read never picks up (or hands back the error of) B's row.
+    assert!(
+        sa.begin_wake_attempt(run, &|_| ts(700))
+            .await
+            .unwrap()
+            .is_none(),
+        "A's wake attempt never reads B's waking row"
+    );
+
+    // B's row did not.
+    let st_b = sb.status(run).await.unwrap().unwrap();
+    assert_eq!(
+        st_b.status,
+        RunStatus::Waking,
+        "A's failed wake never pauses B's run"
+    );
+    assert_eq!(st_b.reason, None, "A's error never becomes B's reason");
+    assert_eq!(
+        st_b.next_wake, None,
+        "A's wake attempt never arms B's deadline"
+    );
+    assert_eq!(
+        sb.wake_attempts(run).await.unwrap(),
+        Some(1),
+        "A's wake attempt never counts against B"
+    );
+    // B's own next attempt sees B's history: its count, and no error recorded by A.
+    let b_next = sb
+        .begin_wake_attempt(run, &|_| ts(900))
+        .await
+        .unwrap()
+        .expect("B's row is still waking");
+    assert_eq!(b_next.attempt, 2);
+    assert_eq!(
+        b_next.last_error, None,
+        "A's failed wake never records an error on B's row"
+    );
+
+    a.drop_tenant().await;
+    b.drop_tenant().await;
+}
+
 /// The format fence is per tenant: A's run carrying an incompatible format_version never
 /// fences B's run of the same id.
 #[cfg_attr(

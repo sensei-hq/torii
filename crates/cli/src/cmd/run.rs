@@ -4890,6 +4890,130 @@ pub(crate) mod tests {
 
     // ---- SP-6 s3: a human-backed `Agent` in the listing -------------------------------
 
+    // ---- AG-15: an ESCALATED human-backed agent ----------------------------------------
+
+    fn at(secs: i64) -> DateTime<Utc> {
+        DateTime::<Utc>::from_timestamp(secs, 0).unwrap()
+    }
+
+    fn shown_at(secs: i64) -> String {
+        at(secs).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    }
+
+    /// `reviewer` asked with a deadline of `at(1000)`, let it expire, and the question was
+    /// escalated along `hops` — each `(to, deadline)` journaled as the executor writes it.
+    async fn escalated_journal(run: RunId, hops: &[(&str, Option<i64>)]) -> InMemoryJournal {
+        let j = agent_journal(run, &reviewer(), Some(at(1000))).await;
+        let mut from = "reviewer".to_string();
+        for (to, deadline) in hops {
+            j.append(
+                run,
+                JournalEvent::AgentEscalated {
+                    node: reviewer(),
+                    from: from.clone(),
+                    to: to.to_string(),
+                    deadline: deadline.map(at),
+                },
+            )
+            .await
+            .unwrap();
+            j.append(
+                run,
+                JournalEvent::RunPaused {
+                    reason: format!("human_agent: escalated to {to}"),
+                    resume_after: deadline.map(at),
+                },
+            )
+            .await
+            .unwrap();
+            from = to.to_string();
+        }
+        j
+    }
+
+    /// The CURRENT deadline of an escalated question is the last hop's, never the original
+    /// `AgentAwaited` one (which is first-wins, has passed, and is left untouched by the
+    /// executor). Every reader of a node's deadline goes through this fold.
+    #[tokio::test]
+    async fn an_escalated_agents_deadline_is_the_last_hops_not_the_original() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let j = escalated_journal(run, &[("legal-lead", Some(2000))]).await;
+        assert_eq!(
+            signal_state(&j.load(run).await.unwrap(), &reviewer()),
+            SignalState::Awaiting {
+                deadline: Some(at(2000))
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn list_paused_shows_an_escalated_agents_holder_and_current_deadline() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, Some(at(2000))).await;
+        let j = escalated_journal(run, &[("legal-lead", Some(2000))]).await;
+
+        let out = list_paused(&s, &j, false).await.expect("lists");
+        assert_eq!(out.code, EXIT_OK, "{}", out.text);
+        let row = awaiting_row(&out.text, run, "reviewer");
+        assert!(
+            row.contains(&format!("deadline {}", shown_at(2000))),
+            "the deadline shown must be the escalation's: {row}"
+        );
+        assert!(
+            !row.contains(&shown_at(1000)),
+            "the original, already-passed deadline must not be shown as current: {row}"
+        );
+        assert!(
+            row.contains("escalated to legal-lead"),
+            "the row must name who holds the question now: {row}"
+        );
+        assert!(row.contains(THE_QUESTION), "still the same question: {row}");
+
+        let out = list_paused(&s, &j, true).await.expect("lists");
+        let v: serde_json::Value = serde_json::from_str(&out.text).expect("json");
+        let node = &v[0]["awaiting"][0];
+        assert_eq!(node["escalated_to"], serde_json::json!("legal-lead"), "{v}");
+        assert_eq!(node["deadline"], serde_json::json!(at(2000)), "{v}");
+    }
+
+    /// Hops fold FIRST-wins per target (a duplicated hop moves nothing — the executor never
+    /// escalates to an agent already in the chain), and the current holder is the LAST
+    /// distinct one. An indefinite last hop reads as no deadline.
+    #[tokio::test]
+    async fn the_current_holder_is_the_last_distinct_hop_and_a_duplicate_moves_nothing() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let j = escalated_journal(
+            run,
+            &[
+                ("legal-lead", Some(2000)),
+                ("cto", None),
+                ("legal-lead", Some(4000)),
+            ],
+        )
+        .await;
+
+        assert_eq!(
+            signal_state(&j.load(run).await.unwrap(), &reviewer()),
+            SignalState::Awaiting { deadline: None }
+        );
+        let out = list_paused(&s, &j, false).await.expect("lists");
+        let row = awaiting_row(&out.text, run, "reviewer");
+        assert!(row.contains("escalated to cto"), "{row}");
+        assert!(row.contains("no deadline"), "{row}");
+        assert!(!row.contains(&shown_at(4000)), "{row}");
+    }
+
+    /// A run with no escalation lists exactly as before — no `escalated_to` key at all.
+    #[tokio::test]
+    async fn an_unescalated_agent_has_no_escalation_in_the_listing() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let j = agent_journal(run, &reviewer(), Some(at(1000))).await;
+        let out = list_paused(&s, &j, true).await.expect("lists");
+        assert!(!out.text.contains("escalated"), "{}", out.text);
+    }
+
     /// The third waiting kind must be VISIBLE. `signal_states`' `AgentAwaited` arm is the
     /// only thing that puts a human-backed agent in the awaited set, and until this test
     /// nothing in `list-paused` exercised it — dropping that arm reddened nine `cmd::human`

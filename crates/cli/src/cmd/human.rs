@@ -1003,6 +1003,38 @@ pub(crate) mod tests {
     ///
     /// Exit 1, matching both siblings: exit 2 in this taxonomy means "ran fine, nothing to
     /// do", and an over-limit answer is invalid INPUT.
+    /// AG-15: an escalated question is answered with this same verb, and it must not be
+    /// refused against the ORIGINAL `AgentAwaited` deadline — that one passed by definition
+    /// (its expiry is what escalated the question). `answer` checks no deadline at all (see its
+    /// doc), and this pins that it stays so for the escalated case.
+    #[tokio::test]
+    async fn an_escalated_question_is_answered_past_its_original_deadline() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let original = now() - chrono::Duration::hours(2);
+        let j = agent_journal(run, &reviewer(), Some(original)).await;
+        j.append(
+            run,
+            JournalEvent::AgentEscalated {
+                node: reviewer(),
+                from: "reviewer".into(),
+                to: "legal-lead".into(),
+                deadline: Some(now() + chrono::Duration::hours(1)),
+            },
+        )
+        .await
+        .unwrap();
+        let s = paused_store(run, Some(now() + chrono::Duration::hours(1))).await;
+
+        let out = answer(&s, &j, run, reviewer(), "ship it", "legal-lead", now())
+            .await
+            .expect("answers");
+        assert_eq!(out.code, EXIT_OK, "{}", out.text);
+        assert_eq!(
+            journaled_answers(&j, run, &reviewer()).await,
+            vec![("ship it".to_string(), "legal-lead".to_string())]
+        );
+    }
+
     #[tokio::test]
     async fn an_oversized_answer_is_rejected_before_anything_is_journaled() {
         let run = RunId(uuid::Uuid::new_v4());

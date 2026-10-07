@@ -730,9 +730,15 @@ async fn the_operator_loop_drives_a_paused_run_to_completion_across_processes() 
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
     // `|| {}` for the announce hook: `main` passes the `submitted: <id>` print, which a
     // test has no use for.
-    let submitted = torii::cmd::run::submit(&sched_a, run, graph.clone(), None, || {})
-        .await
-        .expect("a paused run is not an error");
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        graph.clone(),
+        orchestrator_core::RunBudget::default(),
+        || {},
+    )
+    .await
+    .expect("a paused run is not an error");
     assert_eq!(submitted.code, torii::errors::EXIT_OK, "{}", submitted.text);
     assert!(
         submitted.text.starts_with("paused:"),
@@ -784,9 +790,15 @@ async fn the_operator_loop_drives_a_paused_run_to_completion_across_processes() 
     // `queued_at` is well past A's own deadline, so the assertion below cannot be
     // satisfied by the pre-existing timer still sitting in the column.
     let queued_at = deadline + Duration::seconds(600);
-    let woken = torii::cmd::run::wake(store_b.as_ref(), journal_b.as_ref(), run, queued_at, None)
-        .await
-        .expect("wake");
+    let woken = torii::cmd::run::wake(
+        store_b.as_ref(),
+        journal_b.as_ref(),
+        run,
+        queued_at,
+        orchestrator_core::RunBudget::default(),
+    )
+    .await
+    .expect("wake");
     assert_eq!(woken.code, torii::errors::EXIT_OK, "{}", woken.text);
     assert!(woken.text.contains("queued for wake"), "{}", woken.text);
     let after_wake = store_b.status(run).await.unwrap().unwrap();
@@ -872,9 +884,15 @@ async fn a_cancelled_run_is_never_driven_by_a_later_worker_tick() {
         .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
-    let submitted = torii::cmd::run::submit(&sched_a, run, one_node_graph(&marker), None, || {})
-        .await
-        .expect("a paused run is not an error");
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        one_node_graph(&marker),
+        orchestrator_core::RunBudget::default(),
+        || {},
+    )
+    .await
+    .expect("a paused run is not an error");
     assert!(submitted.text.starts_with("paused:"), "{}", submitted.text);
     let deadline = store_a
         .status(run)
@@ -961,9 +979,15 @@ async fn a_stale_config_generation_fails_a_wake_at_the_fence_before_spending_any
         .with_registry_handle(handle_a)
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
-    let submitted = torii::cmd::run::submit(&sched_a, run, graph.clone(), None, || {})
-        .await
-        .expect("a paused run is not an error");
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        graph.clone(),
+        orchestrator_core::RunBudget::default(),
+        || {},
+    )
+    .await
+    .expect("a paused run is not an error");
     assert!(
         submitted.text.starts_with("paused:"),
         "the gated run must PAUSE (resumable): {}",
@@ -1033,7 +1057,7 @@ async fn a_stale_config_generation_fails_a_wake_at_the_fence_before_spending_any
         journal_a.as_ref(),
         run,
         deadline + Duration::seconds(2),
-        None,
+        orchestrator_core::RunBudget::default(),
     )
     .await
     .expect("wake");
@@ -1117,7 +1141,10 @@ async fn a_budget_exhausted_run_is_raised_by_an_operator_and_completes_in_a_fres
         &sched_a,
         run,
         graph.clone(),
-        Some(TokenBudget { total_tokens: CAP }),
+        orchestrator_core::RunBudget {
+            tokens: Some(TokenBudget { total_tokens: CAP }),
+            money: None,
+        },
         || {},
     )
     .await
@@ -1194,9 +1221,12 @@ async fn a_budget_exhausted_run_is_raised_by_an_operator_and_completes_in_a_fres
         journal_b.as_ref(),
         run,
         queued_at,
-        Some(TokenBudget {
-            total_tokens: RAISED,
-        }),
+        orchestrator_core::RunBudget {
+            tokens: Some(TokenBudget {
+                total_tokens: RAISED,
+            }),
+            money: None,
+        },
     )
     .await
     .expect("wake");
@@ -1307,9 +1337,15 @@ async fn a_signalled_gate_is_answered_by_an_operator_and_completes_in_a_fresh_pr
         .with_context_store(Arc::new(PgContextStore::new(db.pool().await, db.tenant)))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
-    let submitted = torii::cmd::run::submit(&sched_a, run, graph.clone(), None, || {})
-        .await
-        .expect("a gate-paused run is not an error");
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        graph.clone(),
+        orchestrator_core::RunBudget::default(),
+        || {},
+    )
+    .await
+    .expect("a gate-paused run is not an error");
     assert_eq!(submitted.code, torii::errors::EXIT_OK, "{}", submitted.text);
     assert!(
         submitted.text.starts_with("paused:") && submitted.text.contains("await_signal"),
@@ -1527,9 +1563,15 @@ async fn a_human_gate_decided_in_another_process_completes_the_run() {
         .with_context_store(Arc::new(PgContextStore::new(db.pool().await, db.tenant)))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
-    let submitted = torii::cmd::run::submit(&sched_a, run, graph.clone(), None, || {})
-        .await
-        .expect("a gate-paused run is not an error");
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        graph.clone(),
+        orchestrator_core::RunBudget::default(),
+        || {},
+    )
+    .await
+    .expect("a gate-paused run is not an error");
     assert_eq!(submitted.code, torii::errors::EXIT_OK, "{}", submitted.text);
     assert!(
         submitted.text.starts_with("paused:") && submitted.text.contains("human_gate"),
@@ -1619,9 +1661,15 @@ async fn a_human_gate_decided_in_another_process_completes_the_run() {
     // it. Here the very same run is woken with no decision on the journal, driven by a
     // real worker tick, and must come back untouched.
     let woken_at = t0 + Duration::seconds(60);
-    let woken = torii::cmd::run::wake(store_b.as_ref(), journal_b.as_ref(), run, woken_at, None)
-        .await
-        .expect("wake");
+    let woken = torii::cmd::run::wake(
+        store_b.as_ref(),
+        journal_b.as_ref(),
+        run,
+        woken_at,
+        orchestrator_core::RunBudget::default(),
+    )
+    .await
+    .expect("wake");
     assert_eq!(woken.code, torii::errors::EXIT_OK, "{}", woken.text);
     let (sched_w, calls_w) = fresh_context_worker(&db, woken_at + Duration::seconds(1)).await;
     let served_w = serve_once(&sched_w).await;
@@ -1821,9 +1869,15 @@ async fn a_human_backed_agent_answered_in_another_process_completes_the_run() {
         .with_registry(human_registry(sla))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
-    let submitted = torii::cmd::run::submit(&sched_a, run, graph.clone(), None, || {})
-        .await
-        .expect("a role-paused run is not an error");
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        graph.clone(),
+        orchestrator_core::RunBudget::default(),
+        || {},
+    )
+    .await
+    .expect("a role-paused run is not an error");
     assert_eq!(submitted.code, torii::errors::EXIT_OK, "{}", submitted.text);
     assert!(
         submitted.text.starts_with("paused:") && submitted.text.contains("human_agent"),
@@ -1951,9 +2005,15 @@ async fn a_human_backed_agent_answered_in_another_process_completes_the_run() {
     // would pass every assertion after it. Here the very same run is woken with no answer
     // on the journal, driven by a real worker tick, and must come back untouched.
     let woken_at = t0 + Duration::seconds(60);
-    let woken = torii::cmd::run::wake(store_b.as_ref(), journal_b.as_ref(), run, woken_at, None)
-        .await
-        .expect("wake");
+    let woken = torii::cmd::run::wake(
+        store_b.as_ref(),
+        journal_b.as_ref(),
+        run,
+        woken_at,
+        orchestrator_core::RunBudget::default(),
+    )
+    .await
+    .expect("wake");
     assert_eq!(woken.code, torii::errors::EXIT_OK, "{}", woken.text);
     let (sched_w, calls_w) = fresh_human_worker(&db, woken_at + Duration::seconds(1), sla).await;
     let served_w = serve_once(&sched_w).await;
@@ -2174,9 +2234,15 @@ async fn a_loop_gate_decided_in_another_process_resumes_and_converges() {
         .with_registry(human_registry(sla))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
-    let submitted = torii::cmd::run::submit(&sched_a, run, graph.clone(), None, || {})
-        .await
-        .expect("a gate-paused run is not an error");
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        graph.clone(),
+        orchestrator_core::RunBudget::default(),
+        || {},
+    )
+    .await
+    .expect("a gate-paused run is not an error");
     assert_eq!(submitted.code, torii::errors::EXIT_OK, "{}", submitted.text);
     assert!(
         submitted.text.starts_with("paused:") && submitted.text.contains("loop_gate"),
@@ -2289,9 +2355,15 @@ async fn a_loop_gate_decided_in_another_process_resumes_and_converges() {
     // it. Here the very same run is woken with no decision on the journal, driven by a real
     // worker tick, and must come back untouched.
     let woken_at = t0 + Duration::seconds(60);
-    let woken = torii::cmd::run::wake(store_b.as_ref(), journal_b.as_ref(), run, woken_at, None)
-        .await
-        .expect("wake");
+    let woken = torii::cmd::run::wake(
+        store_b.as_ref(),
+        journal_b.as_ref(),
+        run,
+        woken_at,
+        orchestrator_core::RunBudget::default(),
+    )
+    .await
+    .expect("wake");
     assert_eq!(woken.code, torii::errors::EXIT_OK, "{}", woken.text);
     let (sched_w, calls_w) = fresh_human_worker(&db, woken_at + Duration::seconds(1), sla).await;
     let served_w = serve_once(&sched_w).await;

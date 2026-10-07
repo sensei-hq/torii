@@ -7,8 +7,8 @@ use crate::errors::CliError;
 use crate::render;
 use chrono::{DateTime, Utc};
 use orchestrator_core::{
-    ExecutionJournal, JournalEvent, NodeId, OrchestratorError, RunId, RunStatus, SchedulerStore,
-    Scope, Seq, TokenBudget,
+    ExecutionJournal, JournalEvent, NodeId, OrchestratorError, RunBudget, RunId, RunStatus,
+    SchedulerStore, Scope, Seq,
 };
 use std::collections::HashMap;
 
@@ -356,7 +356,7 @@ pub async fn wake(
     journal: &dyn ExecutionJournal,
     run: RunId,
     now: DateTime<Utc>,
-    budget: Option<TokenBudget>,
+    budget: RunBudget,
 ) -> Result<Outcome, CliError> {
     let Some(before) = store.status(run).await? else {
         return Ok(Outcome::precondition(format!("no such run: {}", run.0)));
@@ -380,7 +380,7 @@ pub async fn wake(
     // one moment later, under the very cap they just tried to raise. Appending
     // first closes that window: any worker that can observe the wake can only ever
     // fold a journal that already includes the raise.
-    if let Some(b) = budget {
+    if let Some(b) = budget.tokens {
         journal
             .append(
                 run,
@@ -1695,7 +1695,7 @@ pub async fn submit(
     scheduler: &orchestrator::Scheduler,
     run: RunId,
     graph: orchestrator_core::Graph,
-    budget: Option<TokenBudget>,
+    budget: RunBudget,
     announce: impl FnOnce(),
 ) -> Result<Outcome, CliError> {
     // A run id that already has a schedule record cannot be submitted again. Left to
@@ -1724,7 +1724,7 @@ pub async fn submit(
     announce();
     // SP-DATA-5 Task 5: `submit_budgeted` with `None` is exactly `submit` — the
     // operator-specified cap (if any) rides on `RunStarted` from here.
-    let outcome = scheduler.submit_budgeted(run, graph, budget).await?;
+    let outcome = scheduler.submit_budgeted(run, graph, budget.tokens).await?;
     if let Some(p) = &outcome.paused {
         return Ok(Outcome::ok(format!(
             "paused: {} at node {} ({})",
@@ -1772,7 +1772,9 @@ pub(crate) mod tests {
     // shape the command that answers it folds, or the two drift silently.
     use crate::cmd::human::tests::{THE_QUESTION, agent_journal, agent_journal_asking, reviewer};
     use crate::errors::{EXIT_OK, EXIT_PRECONDITION};
-    use orchestrator_core::{EffectClass, EffectId, EffectOutput, Graph, NodeId, TokenUsage};
+    use orchestrator_core::{
+        EffectClass, EffectId, EffectOutput, Graph, NodeId, TokenBudget, TokenUsage,
+    };
     use orchestrator_store::{InMemoryJournal, InMemorySchedulerStore};
     use std::sync::Arc;
 
@@ -1917,7 +1919,7 @@ pub(crate) mod tests {
     async fn wake_says_queued_never_resumed() {
         let run = RunId(uuid::Uuid::new_v4());
         let s = paused_store(run, None).await;
-        let out = wake(&s, &empty_journal(), run, now(), None)
+        let out = wake(&s, &empty_journal(), run, now(), RunBudget::default())
             .await
             .expect("wakes");
         assert_eq!(out.code, EXIT_OK);
@@ -1939,7 +1941,7 @@ pub(crate) mod tests {
         let run = RunId(uuid::Uuid::new_v4());
         let s = InMemorySchedulerStore::default();
         s.enqueue(run, &empty_graph(), now()).await.unwrap(); // status = waking, not paused
-        let out = wake(&s, &empty_journal(), run, now(), None)
+        let out = wake(&s, &empty_journal(), run, now(), RunBudget::default())
             .await
             .expect("no hard error");
         assert_eq!(out.code, EXIT_PRECONDITION);
@@ -2309,9 +2311,12 @@ pub(crate) mod tests {
             &journal,
             run,
             now(),
-            Some(TokenBudget {
-                total_tokens: 5_000,
-            }),
+            RunBudget {
+                tokens: Some(TokenBudget {
+                    total_tokens: 5_000,
+                }),
+                money: None,
+            },
         )
         .await
         .expect("wakes");
@@ -2335,7 +2340,9 @@ pub(crate) mod tests {
         let s = paused_store(run, Some(now())).await;
         let journal = empty_journal();
 
-        let out = wake(&s, &journal, run, now(), None).await.expect("wakes");
+        let out = wake(&s, &journal, run, now(), RunBudget::default())
+            .await
+            .expect("wakes");
         assert_eq!(out.code, EXIT_OK, "{}", out.text);
         assert!(
             journal.load(run).await.unwrap().is_empty(),
@@ -2433,9 +2440,12 @@ pub(crate) mod tests {
             &journal,
             run,
             now(),
-            Some(TokenBudget {
-                total_tokens: 5_000,
-            }),
+            RunBudget {
+                tokens: Some(TokenBudget {
+                    total_tokens: 5_000,
+                }),
+                money: None,
+            },
         )
         .await;
 
@@ -2773,9 +2783,11 @@ pub(crate) mod tests {
         let sched = scheduler_over(store.clone()).await;
 
         let mut announced = false;
-        let out = submit(&sched, run, empty_graph(), None, || announced = true)
-            .await
-            .expect("a duplicate submit is not a transport fault");
+        let out = submit(&sched, run, empty_graph(), RunBudget::default(), || {
+            announced = true
+        })
+        .await
+        .expect("a duplicate submit is not a transport fault");
 
         assert_eq!(
             out.code, EXIT_PRECONDITION,
@@ -2809,9 +2821,11 @@ pub(crate) mod tests {
         let sched = scheduler_over(store.clone()).await;
 
         let mut announced = false;
-        let out = submit(&sched, run, empty_graph(), None, || announced = true)
-            .await
-            .expect("a fresh submit runs");
+        let out = submit(&sched, run, empty_graph(), RunBudget::default(), || {
+            announced = true
+        })
+        .await
+        .expect("a fresh submit runs");
 
         assert!(announced, "the operator must get the id");
         assert_eq!(out.code, EXIT_OK, "{}", out.text);
@@ -2968,7 +2982,7 @@ pub(crate) mod tests {
             actor: ConcurrentActor::ClaimsFirst,
         };
 
-        let out = wake(&racing, &empty_journal(), run, now(), None)
+        let out = wake(&racing, &empty_journal(), run, now(), RunBudget::default())
             .await
             .expect("no hard error");
 
@@ -3004,7 +3018,7 @@ pub(crate) mod tests {
             actor: ConcurrentActor::CancelsFirst,
         };
 
-        let out = wake(&racing, &empty_journal(), run, now(), None)
+        let out = wake(&racing, &empty_journal(), run, now(), RunBudget::default())
             .await
             .expect("no hard error");
 
@@ -3038,7 +3052,7 @@ pub(crate) mod tests {
             actor: ConcurrentActor::ReclaimsThenRepausesWithUnrelatedDeadline,
         };
 
-        let out = wake(&racing, &empty_journal(), run, now(), None)
+        let out = wake(&racing, &empty_journal(), run, now(), RunBudget::default())
             .await
             .expect("no hard error");
 

@@ -54,6 +54,10 @@ fn fixtures(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf, s
     (reg, gw, graph)
 }
 
+/// The run reaches its pause with no database — and because the answer (`run signal`) could only
+/// come from another process, which sees an empty memory store, that pause is stranded: `run
+/// submit` prints it but exits 2, never 0. (On Postgres the same pause exits 0 — a later `run
+/// signal` and `worker serve` finish it; `tests/postgres_backend.rs` pins that.)
 #[test]
 fn run_submit_on_the_memory_backend_needs_no_database() {
     let dir = tempfile::tempdir().unwrap();
@@ -70,16 +74,18 @@ fn run_submit_on_the_memory_backend_needs_no_database() {
         .expect("spawn torii");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        out.status.success(),
-        "exit {:?}\nstdout: {stdout}\nstderr: {stderr}",
-        out.status.code()
-    );
     assert!(stdout.contains("submitted: "), "{stdout}");
     assert!(
         stdout.contains("paused: ") && stdout.contains("at node gate"),
-        "the run reached its durable pause on the memory backend: {stdout}"
+        "the run reached its pause on the memory backend: {stdout}\nstderr: {stderr}"
     );
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a human-in-the-loop pause on memory is one no other process can answer: not exit 0\n\
+         stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(stdout.contains(STRANDED), "{stdout}");
 }
 
 #[test]
@@ -262,9 +268,12 @@ fn config_show_and_pull_on_the_memory_backend_round_trip() {
     );
 }
 
-/// A provider speaking the OpenAI wire that fails every call with a 500 — a fault the gateway
-/// classifies as retryable. Returns its base URL and its call count.
-async fn failing_provider() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+/// A provider speaking the OpenAI wire that fails every call with `status` — a 500 the gateway
+/// classifies as retryable, a 429 as a rate limit that gates the endpoint. Returns its base URL
+/// and its call count.
+async fn failing_provider(
+    status: axum::http::StatusCode,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
     let calls = Arc::new(AtomicUsize::new(0));
@@ -276,7 +285,7 @@ async fn failing_provider() -> (String, std::sync::Arc<std::sync::atomic::Atomic
             async move {
                 counted.fetch_add(1, SeqCst);
                 (
-                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    status,
                     axum::Json(serde_json::json!({"error": {"message": "upstream blip"}})),
                 )
             }
@@ -288,13 +297,10 @@ async fn failing_provider() -> (String, std::sync::Arc<std::sync::atomic::Atomic
     (url, calls)
 }
 
-/// AG-5 on the memory backend: nothing outlives the process, so a run paused on a transient
-/// retry can never be woken — no later `worker serve` can see it. With `TORII_TRANSIENT_ATTEMPTS`
-/// unset, `run submit` must therefore fail a provider 500 (exit non-zero), not print `paused`
-/// and exit 0 on a model call that never succeeded.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_provider_500_fails_run_submit_on_the_memory_backend_by_default() {
-    let (url, calls) = failing_provider().await;
+/// `run submit` on the memory backend of a one-node graph — a model call `ask` on chain `c`,
+/// whose one model is served by the provider at `url` — with `TORII_TRANSIENT_ATTEMPTS` unset.
+/// Returns the exit code, stdout and stderr.
+fn submit_a_model_call_on_memory(url: &str) -> (Option<i32>, String, String) {
     let dir = tempfile::tempdir().unwrap();
     let (reg, gw, _) = fixtures(dir.path());
     std::fs::write(
@@ -334,20 +340,65 @@ async fn a_provider_500_fails_run_submit_on_the_memory_backend_by_default() {
         .arg(&gw)
         .output()
         .expect("spawn torii");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// AG-5 on the memory backend: nothing outlives the process, so a run paused on a transient
+/// retry can never be woken — no later `worker serve` can see it. With `TORII_TRANSIENT_ATTEMPTS`
+/// unset, `run submit` must therefore fail a provider 500 (exit non-zero), not print `paused`
+/// and exit 0 on a model call that never succeeded.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_provider_500_fails_run_submit_on_the_memory_backend_by_default() {
+    let (url, calls) = failing_provider(axum::http::StatusCode::INTERNAL_SERVER_ERROR).await;
+    let (code, stdout, stderr) = submit_a_model_call_on_memory(&url);
     assert!(
         calls.load(std::sync::atomic::Ordering::SeqCst) >= 1,
         "precondition: the provider was called\nstdout: {stdout}\nstderr: {stderr}"
     );
     assert_ne!(
-        out.status.code(),
+        code,
         Some(0),
         "a memory-backend run paused on a retry nothing can wake must not exit 0\n\
          stdout: {stdout}\nstderr: {stderr}"
     );
     assert!(
         stderr.contains("failed: ") && stderr.contains("at node ask"),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+}
+
+/// The words `run submit` prints beside a memory-backend pause: nothing can resume the run.
+const STRANDED: &str = "nothing can resume it";
+
+/// A 429 is not a transient retry: the gateway locks the endpoint and, with every candidate
+/// gated, the walk ends in a TIMED pause (~60s) that a later wake would retry. On the memory
+/// backend no later process can see the run, so that pause is stranded too: `run submit` must
+/// not exit 0 on it. It exits 2 — a result printable, not the success asked for — still
+/// printing the pause, and saying nothing can resume it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_provider_429_does_not_exit_0_from_run_submit_on_the_memory_backend() {
+    let (url, calls) = failing_provider(axum::http::StatusCode::TOO_MANY_REQUESTS).await;
+    let (code, stdout, stderr) = submit_a_model_call_on_memory(&url);
+    assert!(
+        calls.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "precondition: the provider was called\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("paused: ") && stdout.contains("at node ask"),
+        "precondition: the 429 paused the run\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert_eq!(
+        code,
+        Some(2),
+        "a memory-backend pause nothing can wake must not exit 0\nstdout: {stdout}\n\
+         stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains(STRANDED) && stdout.contains("memory backend"),
         "stdout: {stdout}\nstderr: {stderr}"
     );
 }

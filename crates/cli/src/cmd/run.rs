@@ -2690,9 +2690,16 @@ pub(crate) mod tests {
         )
         .await;
 
+        // AG-18 review: the raise is DURABLE by the time the wake fails, so the fault is
+        // reported as "journaled, not queued" — a bare `Err` would read as "nothing happened".
+        let out = result.expect("a fault after a durable append is reported, not `?`-ed");
+        assert_eq!(out.code, EXIT_PRECONDITION, "{}", out.text);
         assert!(
-            result.is_err(),
-            "the injected force_wake failure must surface, not be swallowed"
+            out.text.contains("journaled durably")
+                && out.text.contains("5000")
+                && out.text.contains("torii run wake"),
+            "{}",
+            out.text
         );
         let events = journal.load(run).await.unwrap();
         assert!(
@@ -2790,15 +2797,104 @@ pub(crate) mod tests {
         let store = FailingForceWakeStore(paused_store(run, None).await);
         let journal = journal_with_money(run, Some(1_000_000), 999_000).await;
 
-        let result = wake(&store, &journal, run, now(), money(5_000_000)).await;
+        let out = wake(&store, &journal, run, now(), money(5_000_000))
+            .await
+            .expect("a fault after a durable append is reported, not `?`-ed");
+        assert_eq!(out.code, EXIT_PRECONDITION, "{}", out.text);
         assert!(
-            result.is_err(),
-            "the injected force_wake failure must surface"
+            out.text.contains("journaled durably") && out.text.contains("$5.00"),
+            "{}",
+            out.text
         );
         assert_eq!(
             money_raises(&journal.load(run).await.unwrap()),
             vec![5_000_000],
             "MoneyBudgetRaised must already be durable when force_wake runs"
+        );
+    }
+
+    /// A journal that delegates everything EXCEPT a `MoneyBudgetRaised` append, which fails
+    /// with a hostile backend error — the second of `wake`'s two appends, after the token
+    /// raise beside it has already landed.
+    struct FailsTheMoneyRaise(InMemoryJournal);
+
+    #[async_trait::async_trait]
+    impl ExecutionJournal for FailsTheMoneyRaise {
+        async fn append(
+            &self,
+            run: RunId,
+            event: JournalEvent,
+        ) -> Result<Seq, orchestrator_core::JournalError> {
+            if matches!(event, JournalEvent::MoneyBudgetRaised { .. }) {
+                return Err(hostile_backend_error(run));
+            }
+            self.0.append(run, event).await
+        }
+        async fn load(
+            &self,
+            run: RunId,
+        ) -> Result<Vec<(Seq, JournalEvent)>, orchestrator_core::JournalError> {
+            self.0.load(run).await
+        }
+    }
+
+    /// AG-18 review: once the token raise is durable, a fault on the money raise must say so —
+    /// which cap moved, which did not, and that nothing was queued — never a bare `?` that
+    /// reads as "nothing happened" while the token cap has in fact moved.
+    #[tokio::test]
+    async fn a_money_raise_fault_after_the_token_raise_landed_reports_what_was_applied() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let journal = FailsTheMoneyRaise(journal_with_money(run, Some(1_000_000), 999_000).await);
+
+        let out = wake(
+            &s,
+            &journal,
+            run,
+            now(),
+            RunBudget {
+                tokens: Some(TokenBudget {
+                    total_tokens: 5_000,
+                }),
+                money: Some(MoneyBudget {
+                    total_micro_usd: 5_000_000,
+                }),
+            },
+        )
+        .await
+        .expect("a fault after a durable append is reported, not `?`-ed");
+
+        assert_eq!(out.code, EXIT_PRECONDITION, "{}", out.text);
+        let t = &out.text;
+        assert!(t.starts_with("not queued"), "{t}");
+        assert!(
+            t.contains("token cap") && t.contains("5000") && t.contains("journaled durably"),
+            "names the raise that DID land: {t}"
+        );
+        assert!(
+            t.contains("money cap") && t.contains("$5.00") && t.contains("not raised"),
+            "names the raise that did NOT: {t}"
+        );
+        assert!(t.contains("torii run wake"), "says how to finish: {t}");
+        assert!(
+            !t.contains(&hostile_password()) && !t.contains('\u{1b}'),
+            "the backend fault is rendered safe: {t}"
+        );
+        let events = journal.load(run).await.unwrap();
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                JournalEvent::BudgetRaised {
+                    new_total_tokens: 5_000
+                }
+            )),
+            "{events:?}"
+        );
+        assert!(money_raises(&events).is_empty(), "{events:?}");
+        assert_ne!(
+            s.status(run).await.unwrap().unwrap().next_wake,
+            Some(now()),
+            "a half-applied raise is not queued"
         );
     }
 

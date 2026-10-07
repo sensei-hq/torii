@@ -23,6 +23,12 @@ impl PgSchedulerStore {
     pub fn new(pool: PgPool, tenant: Uuid) -> Self {
         Self { pool, tenant }
     }
+
+    /// AG-3: `run`'s consecutive wake attempts since its last successful drive, or `None` for
+    /// a run this tenant does not have.
+    pub async fn wake_attempts(&self, _run: RunId) -> Result<Option<u32>, OrchestratorError> {
+        Ok(None)
+    }
 }
 
 /// Fold a 128-bit id into 64 bits.

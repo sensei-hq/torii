@@ -86,6 +86,17 @@ enum RunAction {
         /// unbudgeted one.
         #[arg(long, value_parser = cmd::run::parse_budget_tokens)]
         budget_tokens: Option<u64>,
+        /// Cap this run's MONEY spend, in US dollars (e.g. 5 or 0.25; at most 6 decimal
+        /// places — a cap is kept in whole micro-dollars, and finer is refused, not rounded).
+        ///
+        /// Ledgered from the cost the gateway prices each call at, so every model on a chain
+        /// this run uses must declare pricing (an explicit zero for a free or local model):
+        /// under a money cap an unpriced model is refused. Independent of --budget-tokens;
+        /// give either, both or neither. Spend is shown by `run status`, and a run that stops
+        /// at its cap is raised with `run wake --budget-usd`. Only a run SUBMITTED with a
+        /// money cap has one — a later raise cannot introduce it.
+        #[arg(long, value_parser = cmd::run::parse_budget_usd)]
+        budget_usd: Option<u64>,
     },
     /// Show one run's schedule record
     Status {
@@ -254,6 +265,23 @@ enum RunAction {
         #[command(subcommand)]
         action: cmd::human::AgentAction,
     },
+    /// Approve or reject a confirm-before-run tool call an agent is waiting on
+    ///
+    /// An agent whose definition lists a tool under `confirm_tools` pauses before each call
+    /// of it until a person decides. `list-paused` and `status` show every pending call on a
+    /// `tool:` row — the node, the tool, the (redacted) arguments, the deadline, and the
+    /// call's id, which is what `--call` takes. One node can have several pending calls; each
+    /// is decided on its own.
+    ///
+    /// An approval runs the tool on the next worker tick; a rejection — or the deadline
+    /// passing — tells the model `not_confirmed` and the agent carries on. `--note` is
+    /// recorded for the audit and never shown to the model. `--as` is ATTRIBUTION, NOT
+    /// AUTHENTICATION; who may approve is not enforced here (torii#47).
+    Tool {
+        // In the LIBRARY (`cmd::tool`), for the reason `cmd::gate::GateAction` records.
+        #[command(subcommand)]
+        action: cmd::tool::ToolAction,
+    },
     /// Cancel a non-terminal run so it is never woken
     Cancel { run_id: String },
     /// Queue a paused run for the next worker tick
@@ -270,6 +298,18 @@ enum RunAction {
         // doc comment for why that order is load-bearing.
         #[arg(long, value_parser = cmd::run::parse_budget_tokens)]
         budget_tokens: Option<u64>,
+        /// Move the run's MONEY cap, in US dollars, before waking it — the way to restart a
+        /// run that stopped at its money budget. Lowering it below what the run has spent
+        /// halts the run at its next model call.
+        ///
+        /// It moves an existing money cap and can never introduce one: on a run submitted
+        /// without --budget-usd this is REFUSED and nothing is written (spend is only
+        /// counted while a cap is in force, so a cap added now would be weighed against
+        /// spend it never saw).
+        //
+        // Recorded as `MoneyBudgetRaised` BEFORE the wake is queued, like `BudgetRaised`.
+        #[arg(long, value_parser = cmd::run::parse_budget_usd)]
+        budget_usd: Option<u64>,
     },
     /// Delete terminal run records (completed/failed/cancelled) older than a window
     ///
@@ -436,7 +476,14 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 // connecting first would make a bad uuid take ~30s to reject.
                 let run = parse_run_id(&run_id)?;
                 let d = boot::light(&env).await?;
-                cmd::run::status(d.scheduler_store.as_ref(), d.journal.as_ref(), run, json).await
+                cmd::run::status(
+                    d.scheduler_store.as_ref(),
+                    d.wake_attempts.as_ref(),
+                    d.journal.as_ref(),
+                    run,
+                    json,
+                )
+                .await
             }
             RunAction::ListPaused { json } => {
                 let d = boot::light(&env).await?;
@@ -546,6 +593,26 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 )
                 .await
             }
+            RunAction::Tool { action } => {
+                // One normalised shape and exactly ONE call to `decide`, as `run gate` does.
+                let d0 = cmd::tool::tool_decision_of(action);
+                // Parse BEFORE connecting, like every other run-id verb.
+                let run = parse_run_id(&d0.run_id)?;
+                // LIGHT tier: the scheduler store and the journal, nothing else.
+                let d = boot::light(&env).await?;
+                cmd::tool::decide(
+                    d.scheduler_store.as_ref(),
+                    d.journal.as_ref(),
+                    run,
+                    &d0.call,
+                    d0.node.map(orchestrator_core::NodeId),
+                    d0.approved,
+                    &d0.actor,
+                    d0.note.as_deref(),
+                    chrono::Utc::now(),
+                )
+                .await
+            }
             RunAction::Cancel { run_id } => {
                 let run = parse_run_id(&run_id)?;
                 let d = boot::light(&env).await?;
@@ -554,12 +621,17 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
             RunAction::Wake {
                 run_id,
                 budget_tokens,
+                budget_usd,
             } => {
                 let run = parse_run_id(&run_id)?;
                 let d = boot::light(&env).await?;
                 let now = chrono::Utc::now();
-                let budget = budget_tokens
-                    .map(|total_tokens| orchestrator_core::TokenBudget { total_tokens });
+                let budget = orchestrator_core::RunBudget {
+                    tokens: budget_tokens
+                        .map(|total_tokens| orchestrator_core::TokenBudget { total_tokens }),
+                    money: budget_usd
+                        .map(|total_micro_usd| orchestrator_core::MoneyBudget { total_micro_usd }),
+                };
                 cmd::run::wake(
                     d.scheduler_store.as_ref(),
                     d.journal.as_ref(),
@@ -597,6 +669,7 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 gateway_config,
                 workspace_root,
                 budget_tokens,
+                budget_usd,
             } => {
                 let run = match run_id {
                     Some(s) => parse_run_id(&s)?,
@@ -608,18 +681,28 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 let g: Graph = serde_json::from_str(&raw).map_err(|e| {
                     CliError::error(format!("{} is not a valid graph: {e}", graph.display()))
                 })?;
-                let d =
-                    boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
-                let budget = budget_tokens
-                    .map(|total_tokens| orchestrator_core::TokenBudget { total_tokens });
+                let boot::HeavyDeps {
+                    scheduler, events, ..
+                } = boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
+                let log = boot::log_run_events(events);
+                let budget = orchestrator_core::RunBudget {
+                    tokens: budget_tokens
+                        .map(|total_tokens| orchestrator_core::TokenBudget { total_tokens }),
+                    money: budget_usd
+                        .map(|total_micro_usd| orchestrator_core::MoneyBudget { total_micro_usd }),
+                };
                 // Print the id BEFORE driving: an operator who loses the terminal
                 // must still be able to find the run. `submit` calls this AFTER its
                 // duplicate pre-check, so a rejected submit no longer announces an
                 // effect that never happened.
-                cmd::run::submit(&d.scheduler, run, g, budget, || {
+                let out = cmd::run::submit(&scheduler, run, g, budget, || {
                     println!("submitted: {}", run.0)
                 })
-                .await
+                .await;
+                // Closes the event channel, so the log drains everything the drive reported.
+                drop(scheduler);
+                boot::flush_run_events(log).await;
+                out
             }
         },
         Command::Worker { action } => match action {
@@ -629,15 +712,20 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 gateway_config,
                 workspace_root,
             } => {
-                let d =
-                    boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
+                let boot::HeavyDeps {
+                    scheduler, events, ..
+                } = boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
+                let log = boot::log_run_events(events);
                 let shutdown = shutdown_signal()?;
-                cmd::worker::serve(
-                    &d.scheduler,
+                let out = cmd::worker::serve(
+                    &scheduler,
                     cmd::worker::ServeOpts { interval, once },
                     shutdown,
                 )
-                .await
+                .await;
+                drop(scheduler);
+                boot::flush_run_events(log).await;
+                out
             }
         },
         Command::Config { action } => {

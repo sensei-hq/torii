@@ -10,7 +10,7 @@ name = "orchestrator_store"
 [dependencies]
 # The persistence traits + domain types — the same gateway git ref as every other sensei-*
 # dependency (TM-8a). Dev resolves via the workspace [patch] to ../gateway.
-orchestrator-core = { package = "sensei-orchestrator-core", git = "https://github.com/sensei-hq/gateway", tag = "v0.10.0" }
+orchestrator-core = { package = "sensei-orchestrator-core", git = "https://github.com/sensei-hq/gateway", tag = "v0.11.0" }
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 serde = "1"
@@ -20,5 +20,5 @@ uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 # The gateway's store conformance suite (TM-3) — the contract these stores must keep.
-orchestrator-testkit = { package = "sensei-orchestrator-testkit", git = "https://github.com/sensei-hq/gateway", tag = "v0.10.0" }
+orchestrator-testkit = { package = "sensei-orchestrator-testkit", git = "https://github.com/sensei-hq/gateway", tag = "v0.11.0" }
 tokio = { version = "1", features = ["full"] }

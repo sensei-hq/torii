@@ -24,7 +24,8 @@ The evidence is specific and recent:
 
 - `PlannerRef::Select` was dead in every shipped binary until PR #63 — an entire planning slice
   could not run, and the test suite was green throughout.
-- The five planner discovery tools are built, tested, and wired nowhere.
+- The five planner discovery tools were built, tested, and wired nowhere until gateway v0.11.0
+  (torii#53 adopts it): `Executor::pinned` now composes them per run.
 - **No registry content ships at all.** Zero agents, skills, tools. The activation mechanism has
   no production constructor because nothing constructs it.
 - Until PR #64 there were zero `.md` files under `crates/torii`.
@@ -53,10 +54,14 @@ picks one — deterministically by designation if an agent is marked `default_pl
 by name, or by a model call if the LLM selector is wired. The chosen planner runs a journaled
 ReAct loop and emits a plan.
 
-> **Gap:** the planner is supposed to introspect the registry while planning — `list_agents`,
-> `list_skills`, `list_tools`, `list_chains`, `validate_plan` exist for exactly this and are
-> **not wired into the running executor**. Until they are, a planner plans blind and cannot
-> self-validate. This is the single largest functional gap in the journey.
+> **Discovery (wired since gateway v0.11.0).** The planner introspects the registry while
+> planning through `list_agents`, `list_skills`, `list_tools`, `list_chains` and
+> `validate_plan`. `Executor::pinned` composes all five per run, over the registry that run is
+> pinned to, whenever the executor has a registry handle — which `torii`'s `boot::heavy` always
+> sets, so every `run submit` and `worker serve` drive has them. They are not granted to anyone
+> by being registered: like any tool, a planner agent must **declare** each one it may call in
+> its `tools:` frontmatter, and the registry must carry the matching `tools/<name>.json` schema
+> (the registry refuses an agent that names a tool it does not define). All five are `Pure`.
 
 **Gate the plan.** The plan passes a pure feasibility check before anything executes — reserved
 ids, node counts, references that resolve.
@@ -269,11 +274,12 @@ Honest gaps between these screens and the engine, so nobody designs against a fi
 | 6.2 timeline | The journal is durable and complete, but there is no read API shaped for a timeline view. |
 | 6.3 plan review | Plans are journaled; approving or rejecting one interactively is not a mechanism that exists. |
 | 6.4 interventions | Best-supported screen — `list-paused`, `signal`, `gate`, `agent`, `wake`, `cancel` all exist as commands. |
-| planner quality | The five discovery tools are unwired, so a planner cannot introspect the registry it is planning against. |
+| planner quality | No longer a code gap: the five discovery tools are composed per run (gateway v0.11.0). What remains is content — no shipped planner agent declares them, and no shipped `tools/*.json` defines their schemas (see the absent default content below). |
 
 **Revised assessment.** With the read path already present below the CLI, the largest genuine
-blockers are (a) the **unwired discovery tools**, which degrade planning quality on the core
-journey, and (b) the **absent default content**, without which a fresh install cannot plan at all.
+blocker is the **absent default content**, without which a fresh install cannot plan at all —
+including a planner agent that declares the discovery tools, which have been wired since gateway
+v0.11.0 but do nothing for an agent that does not declare them.
 Exposing the durable config for reading is a subcommand over machinery that already runs on every
 push.
 

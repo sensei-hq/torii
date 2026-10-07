@@ -478,8 +478,15 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
 
-        let probe = AgentDefinition::from_frontmatter("---\nname: n\narea: a\nkind: k\n---\nb\n")
-            .expect("the probe agent parses");
+        // EVERY optional key is set on the probe. AG-15's `tool_limits`, `confirm_tools`,
+        // `confirm_timeout` and `escalate_to` are `skip_serializing_if` empty, so a bare
+        // probe serialized without them and this guard passed while the README named none of
+        // the four — the scrape can only see a key the probe actually carries.
+        let probe = AgentDefinition::from_frontmatter(
+            "---\nname: n\narea: a\nkind: k\ntools: [deploy]\ntool_limits: [deploy=3]\n\
+             confirm_tools: [deploy]\nconfirm_timeout: 2h\nescalate_to: lead\n---\nb\n",
+        )
+        .expect("the probe agent parses");
         let fields: Vec<String> = match serde_json::to_value(&probe).expect("serializes") {
             serde_json::Value::Object(m) => m.keys().cloned().collect(),
             other => panic!("AgentDefinition is no longer a JSON object: {other}"),
@@ -586,6 +593,10 @@ mod tests {
                 skills: vec![],
                 system_prompt: "p".into(),
                 backed_by: Default::default(),
+                tool_limits: Default::default(),
+                confirm_tools: vec![],
+                confirm_timeout: None,
+                escalate_to: None,
             }],
             skills: vec![],
             tools: vec![],

@@ -3,8 +3,14 @@ name: coverage
 # Test coverage -> Qlty Cloud. Needs repo secret QLTY_COVERAGE_TOKEN.
 # No untrusted github.event.* is used in any run: step (injection-safe).
 #
-# Two jobs:
+# Three jobs:
 #   * rust — torii-gateway via cargo llvm-cov (lcov).
+#   * rust-tests — the torii CLI and its crates (torii-cli, torii-core,
+#     torii-orchestrator-store, tools): `cargo test`, with NO database. Their
+#     Postgres-backed tests are `#[ignore]`d by each crate's build.rs when
+#     DATABASE_URL is unset (a `have_database_url` cfg), so this runs every
+#     DB-free test — unit, memory-backend and binary-level — and skips, not
+#     passes, the rest. Run the Postgres suite locally (see crates/cli/README.md).
 #   * js   — @torii/core, @torii/ui, @seiki/admin via vitest --coverage (lcov).
 #     (@kavach/* resolve from npm now, so the old "link: deps not resolvable in
 #     CI" deferral no longer applies. @torii/desktop stays excluded — built and
@@ -53,6 +59,21 @@ jobs:
           token: ${{ secrets.QLTY_COVERAGE_TOKEN }}
           files: lcov-rust.info
           strip-prefix: ${{ github.workspace }}/
+
+  rust-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+      # Same dev-[patch] strip as the rust job: resolve every sensei-* from the pinned git ref.
+      - name: Strip dev [patch]
+        run: sed -i '/^\[patch\./,/^$/d' Cargo.toml
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: Swatinem/rust-cache@bc2d2e71bd35c5549942babaa51a89c586b981d1 # v2.8.1
+      # No DATABASE_URL on purpose — the DB-gated tests compile to `#[ignore]` (see above).
+      - name: Test (torii-cli, torii-core, torii-orchestrator-store, tools — no database)
+        run: cargo test -p torii-cli -p torii-core -p torii-orchestrator-store -p tools
 
   js:
     runs-on: ubuntu-latest

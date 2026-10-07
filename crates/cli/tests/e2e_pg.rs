@@ -22,7 +22,7 @@
 use chrono::{DateTime, Duration, Utc};
 use kernel::types::cost::TokenUsage;
 use orchestrator::test_support::{
-    CallLog, FakeClock, gated_gateway, metered_gateway, recording_gateway,
+    CallLog, FakeClock, gated_gateway, metered_gateway, price_single_chain, recording_gateway,
 };
 use orchestrator::{Executor, Scheduler};
 use orchestrator_core::ConfigStore;
@@ -316,6 +316,10 @@ fn reviewer(timeout: Option<Duration>) -> orchestrator_core::AgentDefinition {
         skills: vec![],
         system_prompt: REVIEWER_PROMPT.into(),
         backed_by: orchestrator_core::AgentBacking::Human { timeout },
+        tool_limits: Default::default(),
+        confirm_tools: vec![],
+        confirm_timeout: None,
+        escalate_to: None,
     }
 }
 
@@ -726,9 +730,15 @@ async fn the_operator_loop_drives_a_paused_run_to_completion_across_processes() 
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
     // `|| {}` for the announce hook: `main` passes the `submitted: <id>` print, which a
     // test has no use for.
-    let submitted = torii::cmd::run::submit(&sched_a, run, graph.clone(), None, || {})
-        .await
-        .expect("a paused run is not an error");
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        graph.clone(),
+        orchestrator_core::RunBudget::default(),
+        || {},
+    )
+    .await
+    .expect("a paused run is not an error");
     assert_eq!(submitted.code, torii::errors::EXIT_OK, "{}", submitted.text);
     assert!(
         submitted.text.starts_with("paused:"),
@@ -753,9 +763,15 @@ async fn the_operator_loop_drives_a_paused_run_to_completion_across_processes() 
         listed.text
     );
 
-    let shown = torii::cmd::run::status(store_b.as_ref(), journal_b.as_ref(), run, true)
-        .await
-        .expect("status");
+    let shown = torii::cmd::run::status(
+        store_b.as_ref(),
+        &torii::cmd::run::NoWakeAttemptCounts,
+        journal_b.as_ref(),
+        run,
+        true,
+    )
+    .await
+    .expect("status");
     assert_eq!(shown.code, torii::errors::EXIT_OK, "{}", shown.text);
     assert!(
         shown.text.contains(&marker) && shown.text.contains("\"paused\""),
@@ -774,9 +790,15 @@ async fn the_operator_loop_drives_a_paused_run_to_completion_across_processes() 
     // `queued_at` is well past A's own deadline, so the assertion below cannot be
     // satisfied by the pre-existing timer still sitting in the column.
     let queued_at = deadline + Duration::seconds(600);
-    let woken = torii::cmd::run::wake(store_b.as_ref(), journal_b.as_ref(), run, queued_at, None)
-        .await
-        .expect("wake");
+    let woken = torii::cmd::run::wake(
+        store_b.as_ref(),
+        journal_b.as_ref(),
+        run,
+        queued_at,
+        orchestrator_core::RunBudget::default(),
+    )
+    .await
+    .expect("wake");
     assert_eq!(woken.code, torii::errors::EXIT_OK, "{}", woken.text);
     assert!(woken.text.contains("queued for wake"), "{}", woken.text);
     let after_wake = store_b.status(run).await.unwrap().unwrap();
@@ -862,9 +884,15 @@ async fn a_cancelled_run_is_never_driven_by_a_later_worker_tick() {
         .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
-    let submitted = torii::cmd::run::submit(&sched_a, run, one_node_graph(&marker), None, || {})
-        .await
-        .expect("a paused run is not an error");
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        one_node_graph(&marker),
+        orchestrator_core::RunBudget::default(),
+        || {},
+    )
+    .await
+    .expect("a paused run is not an error");
     assert!(submitted.text.starts_with("paused:"), "{}", submitted.text);
     let deadline = store_a
         .status(run)
@@ -951,9 +979,15 @@ async fn a_stale_config_generation_fails_a_wake_at_the_fence_before_spending_any
         .with_registry_handle(handle_a)
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
-    let submitted = torii::cmd::run::submit(&sched_a, run, graph.clone(), None, || {})
-        .await
-        .expect("a paused run is not an error");
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        graph.clone(),
+        orchestrator_core::RunBudget::default(),
+        || {},
+    )
+    .await
+    .expect("a paused run is not an error");
     assert!(
         submitted.text.starts_with("paused:"),
         "the gated run must PAUSE (resumable): {}",
@@ -1023,7 +1057,7 @@ async fn a_stale_config_generation_fails_a_wake_at_the_fence_before_spending_any
         journal_a.as_ref(),
         run,
         deadline + Duration::seconds(2),
-        None,
+        orchestrator_core::RunBudget::default(),
     )
     .await
     .expect("wake");
@@ -1107,7 +1141,10 @@ async fn a_budget_exhausted_run_is_raised_by_an_operator_and_completes_in_a_fres
         &sched_a,
         run,
         graph.clone(),
-        Some(TokenBudget { total_tokens: CAP }),
+        orchestrator_core::RunBudget {
+            tokens: Some(TokenBudget { total_tokens: CAP }),
+            money: None,
+        },
         || {},
     )
     .await
@@ -1159,9 +1196,15 @@ async fn a_budget_exhausted_run_is_raised_by_an_operator_and_completes_in_a_fres
     // model credentials, and shares nothing in-process with A.
     let store_b = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
     let journal_b = Arc::new(PgJournal::new(db.pool().await, db.tenant));
-    let shown = torii::cmd::run::status(store_b.as_ref(), journal_b.as_ref(), run, false)
-        .await
-        .expect("status");
+    let shown = torii::cmd::run::status(
+        store_b.as_ref(),
+        &torii::cmd::run::NoWakeAttemptCounts,
+        journal_b.as_ref(),
+        run,
+        false,
+    )
+    .await
+    .expect("status");
     assert_eq!(shown.code, torii::errors::EXIT_OK, "{}", shown.text);
     assert!(
         shown
@@ -1178,9 +1221,12 @@ async fn a_budget_exhausted_run_is_raised_by_an_operator_and_completes_in_a_fres
         journal_b.as_ref(),
         run,
         queued_at,
-        Some(TokenBudget {
-            total_tokens: RAISED,
-        }),
+        orchestrator_core::RunBudget {
+            tokens: Some(TokenBudget {
+                total_tokens: RAISED,
+            }),
+            money: None,
+        },
     )
     .await
     .expect("wake");
@@ -1232,6 +1278,378 @@ async fn a_budget_exhausted_run_is_raised_by_an_operator_and_completes_in_a_fres
         (spent_after, budget_after),
         (u64::from(PER_CALL) * 2, Some(RAISED)),
         "both processes' spend is in ONE durable ledger, folded by effect id"
+    );
+}
+
+/// AG-12: [`fresh_metered_worker`] over a PRICED chain — a money-capped run refuses an
+/// unpriced model before dispatch, so a worker that resumes one must price its chain.
+async fn fresh_priced_worker(
+    db: &Db,
+    at: DateTime<Utc>,
+    per_call_tokens: u32,
+    usd_per_1k: f64,
+) -> (Scheduler, CallLog) {
+    let journal = Arc::new(PgJournal::new(db.pool().await, db.tenant));
+    let (gw, calls) = metered_gateway(Some(usage(per_call_tokens))).await;
+    price_single_chain(&gw, usd_per_1k, usd_per_1k).await;
+    let clock = FakeClock::new(at);
+    let exec = Executor::new(Arc::new(gw), journal.clone(), "v1")
+        .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
+        .with_clock(clock.clone());
+    let store = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    (Scheduler::new(store, exec, journal, clock), calls)
+}
+
+/// AG-12, the money twin of the token-budget loop above, across a process boundary:
+/// `run submit --budget-usd` caps a run, the first call overspends it and the second is
+/// refused, `run status` shows the dollars folded from the DURABLE journal, `run wake
+/// --budget-usd` moves the cap, and a fresh priced worker finishes the run with the money
+/// ledger accumulated across both processes and no re-spend.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+)]
+#[tokio::test]
+async fn a_money_capped_run_is_raised_by_an_operator_and_completes_in_a_fresh_process() {
+    let Some(db) = Db::new().await else { return };
+
+    // $1 per 1k tokens on both sides, 1500 tokens a call ⇒ every call costs $1.50.
+    const PER_CALL: u32 = 1_500;
+    const USD_PER_1K: f64 = 1.0;
+    const CALL_MICRO_USD: u64 = 1_500_000;
+
+    let run = RunId(uuid::Uuid::new_v4());
+    let marker = run.0.to_string();
+    let (first, second) = (format!("{marker}#n1"), format!("{marker}#n2"));
+    let graph = two_node_graph(&marker);
+    let at = DateTime::<Utc>::from_timestamp(5_100_000, 0).unwrap();
+
+    // ---- Process A: submit under a $1 cap one call overspends ------------------------
+    let cap = torii::cmd::run::parse_budget_usd("1").expect("a dollar");
+    let (sched_a, calls_a) = fresh_priced_worker(&db, at, PER_CALL, USD_PER_1K).await;
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        graph.clone(),
+        orchestrator_core::RunBudget {
+            tokens: None,
+            money: Some(orchestrator_core::MoneyBudget {
+                total_micro_usd: cap,
+            }),
+        },
+        || {},
+    )
+    .await
+    .expect("a money-paused run is not an error");
+    assert_eq!(submitted.code, torii::errors::EXIT_OK, "{}", submitted.text);
+    assert!(
+        submitted.text.starts_with("paused:") && submitted.text.contains("n2"),
+        "the money cap pauses the run on the node it refused: {}",
+        submitted.text
+    );
+    assert_eq!(
+        (calls_for(&calls_a, &first), calls_for(&calls_a, &second)),
+        (1, 0)
+    );
+
+    // ---- The operator, light tier: dollars from the durable journal ------------------
+    let store_b = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_b = Arc::new(PgJournal::new(db.pool().await, db.tenant));
+    let shown = torii::cmd::run::status(
+        store_b.as_ref(),
+        &torii::cmd::run::NoWakeAttemptCounts,
+        journal_b.as_ref(),
+        run,
+        false,
+    )
+    .await
+    .expect("status");
+    assert!(
+        shown.text.contains("money spent: $1.50 / budget: $1.00"),
+        "{}",
+        shown.text
+    );
+
+    // ---- The operator moves the money cap and queues the run --------------------------
+    let paused = store_b
+        .status(run)
+        .await
+        .unwrap()
+        .expect("a schedule record");
+    assert_eq!(paused.status, RunStatus::Paused, "{paused:?}");
+    let queued_at = paused.updated_at + Duration::seconds(600);
+    let raised = torii::cmd::run::parse_budget_usd("10").expect("ten dollars");
+    let woken = torii::cmd::run::wake(
+        store_b.as_ref(),
+        journal_b.as_ref(),
+        run,
+        queued_at,
+        orchestrator_core::RunBudget {
+            tokens: None,
+            money: Some(orchestrator_core::MoneyBudget {
+                total_micro_usd: raised,
+            }),
+        },
+    )
+    .await
+    .expect("wake");
+    assert_eq!(woken.code, torii::errors::EXIT_OK, "{}", woken.text);
+    assert_eq!(
+        orchestrator::money_spend_of(&journal_b.load(run).await.unwrap()),
+        (CALL_MICRO_USD, Some(raised)),
+        "the raise is durable and is what the engine folds as the cap"
+    );
+
+    // ---- Process B: a fresh priced worker finishes it ---------------------------------
+    let (sched_b, calls_b) =
+        fresh_priced_worker(&db, queued_at + Duration::seconds(1), PER_CALL, USD_PER_1K).await;
+    let served = serve_until_settled(&sched_b, store_b.as_ref(), run).await;
+    assert_eq!(served.code, torii::errors::EXIT_OK, "{}", served.text);
+    assert_eq!(
+        store_b.status(run).await.unwrap().unwrap().status,
+        RunStatus::Completed,
+        "{}",
+        served.text
+    );
+    assert_eq!(
+        (calls_for(&calls_b, &first), calls_for(&calls_b, &second)),
+        (0, 1),
+        "n1 was paid for by process A and is replayed, never re-bought"
+    );
+    assert_eq!(
+        orchestrator::money_spend_of(&journal_b.load(run).await.unwrap()),
+        (2 * CALL_MICRO_USD, Some(raised)),
+        "both processes' spend is in ONE durable money ledger"
+    );
+}
+
+/// AG-15: a Pure `deploy` tool that counts its runs — the executable side of a
+/// confirm-before-run tool, shared by nothing across the two "processes".
+struct DeployTool(Arc<std::sync::atomic::AtomicUsize>);
+
+impl orchestrator::agent::tools::Tool for DeployTool {
+    fn spec(&self) -> orchestrator_core::ToolSpec {
+        orchestrator_core::ToolSpec {
+            name: "deploy".into(),
+            description: Some("ship it".into()),
+            input_schema: serde_json::json!({}),
+            effect_class: orchestrator_core::EffectClass::Pure,
+            ttl_secs: None,
+            source: None,
+            permissions: Default::default(),
+            activation: Default::default(),
+            credentials: vec![],
+        }
+    }
+    fn call(
+        &self,
+        _args: serde_json::Value,
+    ) -> Result<serde_json::Value, orchestrator_core::OrchestratorError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(serde_json::json!({ "deployed": true }))
+    }
+}
+
+/// A model-backed agent that must have each `deploy` call confirmed by a person.
+fn deployer_registry() -> Arc<orchestrator_core::Registry> {
+    let deployer = orchestrator_core::AgentDefinition {
+        default_planner: false,
+        name: "deployer".into(),
+        area: "ops".into(),
+        kind: "deploy".into(),
+        chain: Some("c".into()),
+        chains: Default::default(),
+        grants: Default::default(),
+        tools: vec!["deploy".into()],
+        skills: vec![],
+        system_prompt: "You deploy.".into(),
+        backed_by: orchestrator_core::AgentBacking::Model,
+        tool_limits: Default::default(),
+        confirm_tools: vec!["deploy".into()],
+        confirm_timeout: Some(Duration::hours(1)),
+        escalate_to: None,
+    };
+    let tool = DeployTool(Default::default());
+    Arc::new(
+        orchestrator_core::Registry::default()
+            .with_agent(deployer)
+            .with_tool(orchestrator::agent::tools::Tool::spec(&tool)),
+    )
+}
+
+/// One "process" that drives `deployer` over a scripted model, counting its tool runs.
+async fn deployer_worker(
+    db: &Db,
+    at: DateTime<Utc>,
+    script: Vec<kernel::types::io::ChatResponse>,
+) -> (Scheduler, Arc<std::sync::atomic::AtomicUsize>) {
+    let journal = Arc::new(PgJournal::new(db.pool().await, db.tenant));
+    let (gw, _calls) = orchestrator::test_support::scripted_gateway(script).await;
+    let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let clock = FakeClock::new(at);
+    let exec = Executor::new(Arc::new(gw), journal.clone(), "v1")
+        .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
+        .with_registry(deployer_registry())
+        .with_tools(Arc::new(
+            orchestrator::agent::tools::ToolRegistry::default()
+                .with_tool(Arc::new(DeployTool(runs.clone()))),
+        ))
+        .with_clock(clock.clone());
+    let store = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    (Scheduler::new(store, exec, journal, clock), runs)
+}
+
+/// AG-15 across a process boundary: process A's agent asks to call a confirm-before-run tool
+/// and the run pauses BEFORE the tool runs; the operator, from the durable journal alone,
+/// sees the pending call in `list-paused` and `status` and approves it with `run tool
+/// approve`; process B resumes, runs the tool exactly once and completes — and the call is no
+/// longer listed as pending.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+)]
+#[tokio::test]
+async fn a_confirm_before_run_tool_call_is_approved_by_an_operator_and_runs_in_a_fresh_process() {
+    let Some(db) = Db::new().await else { return };
+    let run = RunId(uuid::Uuid::new_v4());
+    let node = NodeId(format!("deploy-{}", run.0));
+    let graph = Graph {
+        nodes: vec![Node {
+            id: node.clone(),
+            kind: NodeKind::Agent {
+                agent: orchestrator_core::AgentRef("deployer".into()),
+                input: serde_json::json!("ship it"),
+                phase: None,
+            },
+            deps: vec![],
+        }],
+    };
+    let at = DateTime::<Utc>::from_timestamp(5_200_000, 0).unwrap();
+
+    // ---- Process A: the model asks for `deploy`; the run pauses before it runs ---------
+    let (sched_a, runs_a) = deployer_worker(
+        &db,
+        at,
+        vec![orchestrator::test_support::tool_call_response(
+            "t1",
+            "deploy",
+            r#"{"env":"prod"}"#,
+        )],
+    )
+    .await;
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        graph,
+        orchestrator_core::RunBudget::default(),
+        || {},
+    )
+    .await
+    .expect("submit");
+    assert!(submitted.text.starts_with("paused:"), "{}", submitted.text);
+    assert_eq!(
+        runs_a.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "nothing ran yet"
+    );
+
+    // ---- The operator, light tier, from the durable journal ----------------------------
+    let store_b = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_b = Arc::new(PgJournal::new(db.pool().await, db.tenant));
+    let call = journal_b
+        .load(run)
+        .await
+        .unwrap()
+        .into_iter()
+        .find_map(|(_, e)| match e {
+            JournalEvent::ToolConfirmAwaited { effect_id, .. } => Some(effect_id.0),
+            _ => None,
+        })
+        .expect("the call asked for confirmation");
+    let listed = torii::cmd::run::list_paused(store_b.as_ref(), journal_b.as_ref(), false)
+        .await
+        .expect("list-paused");
+    let row = listed
+        .text
+        .lines()
+        .find(|l| l.starts_with(&run.0.to_string()) && l.contains("tool: deploy"))
+        .unwrap_or_else(|| panic!("no tool row:\n{}", listed.text));
+    assert!(row.contains(&call) && row.contains("prod"), "{row}");
+    let shown = torii::cmd::run::status(
+        store_b.as_ref(),
+        &torii::cmd::run::NoWakeAttemptCounts,
+        journal_b.as_ref(),
+        run,
+        false,
+    )
+    .await
+    .expect("status");
+    assert!(
+        shown
+            .text
+            .contains(&format!("torii run tool approve {} --call {call}", run.0)),
+        "{}",
+        shown.text
+    );
+
+    // On the run's own (fake) clock, inside the confirmation's one-hour deadline.
+    let decided_at = at + Duration::seconds(60);
+    let approved = torii::cmd::tool::decide(
+        store_b.as_ref(),
+        journal_b.as_ref(),
+        run,
+        &call,
+        Some(node.clone()),
+        true,
+        "alice",
+        Some("looks fine"),
+        decided_at,
+    )
+    .await
+    .expect("approve");
+    assert_eq!(approved.code, torii::errors::EXIT_OK, "{}", approved.text);
+
+    // ---- Process B: a fresh worker runs the approved tool once and completes -----------
+    let (sched_b, runs_b) = deployer_worker(
+        &db,
+        decided_at + Duration::seconds(1),
+        vec![orchestrator::test_support::final_response("deployed")],
+    )
+    .await;
+    let served = serve_until_settled(&sched_b, store_b.as_ref(), run).await;
+    assert_eq!(served.code, torii::errors::EXIT_OK, "{}", served.text);
+    assert_eq!(
+        store_b.status(run).await.unwrap().unwrap().status,
+        RunStatus::Completed,
+        "{}",
+        served.text
+    );
+    assert_eq!(
+        runs_b.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "ran exactly once"
+    );
+    assert_eq!(runs_a.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    // A second decision on the settled call is refused, and nothing is written.
+    let again = torii::cmd::tool::decide(
+        store_b.as_ref(),
+        journal_b.as_ref(),
+        run,
+        &call,
+        None,
+        false,
+        "bob",
+        None,
+        decided_at,
+    )
+    .await
+    .expect("refusal");
+    assert_eq!(
+        again.code,
+        torii::errors::EXIT_PRECONDITION,
+        "{}",
+        again.text
     );
 }
 
@@ -1291,9 +1709,15 @@ async fn a_signalled_gate_is_answered_by_an_operator_and_completes_in_a_fresh_pr
         .with_context_store(Arc::new(PgContextStore::new(db.pool().await, db.tenant)))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
-    let submitted = torii::cmd::run::submit(&sched_a, run, graph.clone(), None, || {})
-        .await
-        .expect("a gate-paused run is not an error");
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        graph.clone(),
+        orchestrator_core::RunBudget::default(),
+        || {},
+    )
+    .await
+    .expect("a gate-paused run is not an error");
     assert_eq!(submitted.code, torii::errors::EXIT_OK, "{}", submitted.text);
     assert!(
         submitted.text.starts_with("paused:") && submitted.text.contains("await_signal"),
@@ -1511,9 +1935,15 @@ async fn a_human_gate_decided_in_another_process_completes_the_run() {
         .with_context_store(Arc::new(PgContextStore::new(db.pool().await, db.tenant)))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
-    let submitted = torii::cmd::run::submit(&sched_a, run, graph.clone(), None, || {})
-        .await
-        .expect("a gate-paused run is not an error");
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        graph.clone(),
+        orchestrator_core::RunBudget::default(),
+        || {},
+    )
+    .await
+    .expect("a gate-paused run is not an error");
     assert_eq!(submitted.code, torii::errors::EXIT_OK, "{}", submitted.text);
     assert!(
         submitted.text.starts_with("paused:") && submitted.text.contains("human_gate"),
@@ -1603,9 +2033,15 @@ async fn a_human_gate_decided_in_another_process_completes_the_run() {
     // it. Here the very same run is woken with no decision on the journal, driven by a
     // real worker tick, and must come back untouched.
     let woken_at = t0 + Duration::seconds(60);
-    let woken = torii::cmd::run::wake(store_b.as_ref(), journal_b.as_ref(), run, woken_at, None)
-        .await
-        .expect("wake");
+    let woken = torii::cmd::run::wake(
+        store_b.as_ref(),
+        journal_b.as_ref(),
+        run,
+        woken_at,
+        orchestrator_core::RunBudget::default(),
+    )
+    .await
+    .expect("wake");
     assert_eq!(woken.code, torii::errors::EXIT_OK, "{}", woken.text);
     let (sched_w, calls_w) = fresh_context_worker(&db, woken_at + Duration::seconds(1)).await;
     let served_w = serve_once(&sched_w).await;
@@ -1805,9 +2241,15 @@ async fn a_human_backed_agent_answered_in_another_process_completes_the_run() {
         .with_registry(human_registry(sla))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
-    let submitted = torii::cmd::run::submit(&sched_a, run, graph.clone(), None, || {})
-        .await
-        .expect("a role-paused run is not an error");
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        graph.clone(),
+        orchestrator_core::RunBudget::default(),
+        || {},
+    )
+    .await
+    .expect("a role-paused run is not an error");
     assert_eq!(submitted.code, torii::errors::EXIT_OK, "{}", submitted.text);
     assert!(
         submitted.text.starts_with("paused:") && submitted.text.contains("human_agent"),
@@ -1935,9 +2377,15 @@ async fn a_human_backed_agent_answered_in_another_process_completes_the_run() {
     // would pass every assertion after it. Here the very same run is woken with no answer
     // on the journal, driven by a real worker tick, and must come back untouched.
     let woken_at = t0 + Duration::seconds(60);
-    let woken = torii::cmd::run::wake(store_b.as_ref(), journal_b.as_ref(), run, woken_at, None)
-        .await
-        .expect("wake");
+    let woken = torii::cmd::run::wake(
+        store_b.as_ref(),
+        journal_b.as_ref(),
+        run,
+        woken_at,
+        orchestrator_core::RunBudget::default(),
+    )
+    .await
+    .expect("wake");
     assert_eq!(woken.code, torii::errors::EXIT_OK, "{}", woken.text);
     let (sched_w, calls_w) = fresh_human_worker(&db, woken_at + Duration::seconds(1), sla).await;
     let served_w = serve_once(&sched_w).await;
@@ -2158,9 +2606,15 @@ async fn a_loop_gate_decided_in_another_process_resumes_and_converges() {
         .with_registry(human_registry(sla))
         .with_clock(clock.clone());
     let sched_a = Scheduler::new(store_a.clone(), exec_a, journal_a.clone(), clock.clone());
-    let submitted = torii::cmd::run::submit(&sched_a, run, graph.clone(), None, || {})
-        .await
-        .expect("a gate-paused run is not an error");
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        graph.clone(),
+        orchestrator_core::RunBudget::default(),
+        || {},
+    )
+    .await
+    .expect("a gate-paused run is not an error");
     assert_eq!(submitted.code, torii::errors::EXIT_OK, "{}", submitted.text);
     assert!(
         submitted.text.starts_with("paused:") && submitted.text.contains("loop_gate"),
@@ -2273,9 +2727,15 @@ async fn a_loop_gate_decided_in_another_process_resumes_and_converges() {
     // it. Here the very same run is woken with no decision on the journal, driven by a real
     // worker tick, and must come back untouched.
     let woken_at = t0 + Duration::seconds(60);
-    let woken = torii::cmd::run::wake(store_b.as_ref(), journal_b.as_ref(), run, woken_at, None)
-        .await
-        .expect("wake");
+    let woken = torii::cmd::run::wake(
+        store_b.as_ref(),
+        journal_b.as_ref(),
+        run,
+        woken_at,
+        orchestrator_core::RunBudget::default(),
+    )
+    .await
+    .expect("wake");
     assert_eq!(woken.code, torii::errors::EXIT_OK, "{}", woken.text);
     let (sched_w, calls_w) = fresh_human_worker(&db, woken_at + Duration::seconds(1), sla).await;
     let served_w = serve_once(&sched_w).await;

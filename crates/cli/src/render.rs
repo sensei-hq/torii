@@ -256,12 +256,31 @@ fn visible_len(redacted: &str) -> usize {
 /// what this sentence used to describe), and the reader here is the trusted human being
 /// asked to do the work.
 pub(crate) fn redact_question(s: &str) -> String {
+    redact_withholding(s, WITHHELD_QUESTION)
+}
+
+/// AG-15: scrub a confirm-before-run call's ARGUMENTS for display — the same narrowed
+/// transform a question takes, and for the same reason: they are what the human is asked to
+/// approve, so withholding them on an ordinary-prose false positive would leave the operator
+/// approving a call they cannot see. The executor already redacted them before the
+/// `ToolConfirmAwaited` append; this is the second pass a question also gets.
+pub(crate) fn redact_arguments(s: &str) -> String {
+    redact_withholding(s, WITHHELD_ARGUMENTS)
+}
+
+/// [`redact_question`]'s transform with the literal that replaces a withheld value — each
+/// caller names the field it withheld, so an operator is never told about the wrong one.
+fn redact_withholding(s: &str, withheld: &str) -> String {
     let redacted = redact_once(s);
     if visible_len(&redact_once(&strip_control(s))) < visible_len(&redacted) {
-        return WITHHELD_QUESTION.to_string();
+        return withheld.to_string();
     }
     redacted
 }
+
+/// What withheld call ARGUMENTS render as — see [`WITHHELD_QUESTION`] for why each field
+/// names itself.
+const WITHHELD_ARGUMENTS: &str = "[REDACTED: arguments withheld]";
 
 /// Rendered reasons are capped so one unbounded provider message can't wreck the
 /// table's column alignment or scroll an operator's terminal off-screen.
@@ -450,6 +469,86 @@ pub struct AwaitingNode {
     /// output for a run with no human-backed agent in it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub question: Option<String>,
+    /// AG-15: for a human-backed `Agent` whose question was ESCALATED, the agent that holds
+    /// it NOW — the last `AgentEscalated` hop's `to` — and [`deadline`](Self::deadline) is
+    /// that hop's, not the original ask's. Answered with the same `run agent answer`.
+    ///
+    /// Skipped when absent, for the byte-identity reason the fields above record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub escalated_to: Option<String>,
+    /// AG-15: `Some` ⇒ this row is not a node-level ask at all but ONE confirm-before-run
+    /// tool CALL of an agent node, waiting for `torii run tool approve|reject <run> --call
+    /// <effect_id>`. One node can have several, each its own row; `options` and `question`
+    /// are then both `None`, so a script must test this key FIRST — the "neither ⇒
+    /// `run signal`" rule above predates it, and `run signal` refuses such a node.
+    ///
+    /// Skipped when absent, for the byte-identity reason the fields above record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_confirm: Option<ToolConfirmCall>,
+}
+
+/// AG-15: the call a confirm-before-run row is asking about — the `effect_id` to quote with
+/// `--call`, the tool, and the arguments the human is approving (ALREADY REDACTED, like a
+/// question; the display-only collapse and cap are applied by [`awaiting_section`]).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ToolConfirmCall {
+    pub effect_id: String,
+    pub tool: String,
+    pub arguments: String,
+}
+
+/// The cap for a call's rendered ARGUMENTS — JSON a model wrote, bounded upstream only by
+/// `MAX_HUMAN_TEXT_BYTES`. `--json` carries them whole.
+const ARGS_MAX: usize = 200;
+
+/// `run status`'s line for one pending confirm-before-run call (a row [`AwaitingNode`] whose
+/// `tool_confirm` is `Some`), naming the exact command that answers it.
+pub fn tool_confirm_line(run: orchestrator_core::RunId, n: &AwaitingNode) -> String {
+    let Some(c) = &n.tool_confirm else {
+        return String::new();
+    };
+    let call = cap_chars(&one_line(&c.effect_id), NODE_MAX);
+    format!(
+        "tool confirmation pending: node {}, {}, {} — answer with `torii run tool approve {} \
+         --call {call}` (or `reject`)\n",
+        cap_chars(&one_line(&n.node.0), NODE_MAX),
+        tool_confirm_cell(c),
+        deadline_cell(n.deadline),
+        run.0,
+    )
+}
+
+/// `run status`'s line for one escalated question: who holds it now, until when.
+pub fn escalation_line(n: &AwaitingNode) -> String {
+    format!(
+        "escalated: node {} now waits on {}, {}\n",
+        cap_chars(&one_line(&n.node.0), NODE_MAX),
+        cap_chars(
+            &one_line(n.escalated_to.as_deref().unwrap_or_default()),
+            NODE_MAX
+        ),
+        deadline_cell(n.deadline),
+    )
+}
+
+/// The deadline cell every awaiting row ends with.
+fn deadline_cell(deadline: Option<DateTime<Utc>>) -> String {
+    match deadline {
+        Some(d) => format!("deadline {}", fmt_wake(Some(d))),
+        // Says what it MEANS, not just that the field is empty: this run is never
+        // auto-woken and will wait until a human acts.
+        None => "no deadline — waits until signalled".to_string(),
+    }
+}
+
+/// The `tool:` cell for one pending confirm-before-run call.
+fn tool_confirm_cell(c: &ToolConfirmCall) -> String {
+    format!(
+        "tool: {} call {} args \"{}\"",
+        cap_chars(&one_line(&c.tool), NODE_MAX),
+        cap_chars(&one_line(&c.effect_id), NODE_MAX),
+        cap_chars(&one_line(&c.arguments), ARGS_MAX)
+    )
 }
 
 /// A node id is author- (or planner-) supplied free text, so it gets the same
@@ -689,6 +788,15 @@ pub fn awaiting_section(rows: &[(orchestrator_core::RunId, Awaiting)]) -> String
              `torii run agent answer <run> --node <node> --text <text>`\n",
         );
     }
+    let any_tool = rows
+        .iter()
+        .any(|(_, a)| matches!(a, Ok(nodes) if nodes.iter().any(|n| n.tool_confirm.is_some())));
+    if any_tool {
+        s.push_str(
+            "                   a `tool:` row is one tool call awaiting approval — \
+             `torii run tool approve <run> --call <call>` (or `reject`)\n",
+        );
+    }
     for (run, a) in rows {
         match a {
             Ok(nodes) => {
@@ -716,9 +824,14 @@ pub fn awaiting_section(rows: &[(orchestrator_core::RunId, Awaiting)]) -> String
                     // decides which, and the refusals get the same answer by construction).
                     // Both journals were rendered as a kind the refusals disagreed with
                     // before those two fixes.
-                    let cell = match (&a.options, &a.question) {
-                        (Some(opts), Some(q)) => loop_gate_cell(opts, q),
-                        (Some(opts), None) => cap_chars(
+                    //
+                    // A pending tool CALL is checked before all of them: it carries neither
+                    // a menu nor a question, so it would otherwise fall to `signal` — the
+                    // one verb that refuses it.
+                    let cell = match (&a.tool_confirm, &a.options, &a.question) {
+                        (Some(call), _, _) => tool_confirm_cell(call),
+                        (None, Some(opts), Some(q)) => loop_gate_cell(opts, q),
+                        (None, Some(opts), None) => cap_chars(
                             &format!(
                                 "gate: {}",
                                 opts.iter()
@@ -748,20 +861,26 @@ pub fn awaiting_section(rows: &[(orchestrator_core::RunId, Awaiting)]) -> String
                         // The cell is built by [`question_cell`] rather than inline,
                         // because it does more than cap: it RESERVES the `## Task` tail,
                         // which `compose` puts last and a front-cut would delete.
-                        (None, Some(q)) => question_cell("agent: ", q),
-                        (None, None) => "signal".to_string(),
+                        (None, None, Some(q)) => match &a.escalated_to {
+                            // The holder is a registry agent NAME — free text as far as this
+                            // table is concerned — so it is collapsed and capped like a node id.
+                            Some(to) => question_cell(
+                                &format!(
+                                    "agent (escalated to {}): ",
+                                    cap_chars(&one_line(to), NODE_MAX)
+                                ),
+                                q,
+                            ),
+                            None => question_cell("agent: ", q),
+                        },
+                        (None, None, None) => "signal".to_string(),
                     };
                     s.push_str(&format!(
                         "{}  {}  {}  {}\n",
                         run.0,
                         cap_chars(&one_line(&a.node.0), NODE_MAX),
                         cell,
-                        match a.deadline {
-                            Some(d) => format!("deadline {}", fmt_wake(Some(d))),
-                            // Says what it MEANS, not just that the field is empty: this
-                            // run is never auto-woken and will wait until a human acts.
-                            None => "no deadline — waits until signalled".to_string(),
-                        }
+                        deadline_cell(a.deadline)
                     ));
                 }
             }

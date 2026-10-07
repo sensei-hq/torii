@@ -5,14 +5,16 @@
 //! module either. Concentrating the wiring in one place is what keeps the commands
 //! unit-testable against in-memory doubles.
 
+use crate::cmd::run::{NoWakeAttemptCounts, WakeAttemptCounts};
 use crate::errors::{CliError, redact_url};
 use orchestrator::agent::tools::{
     FsReadTool, FsWriteReconciler, FsWriteTool, ReconcileRegistry, ShellTool, ToolRegistry,
 };
-use orchestrator::{Executor, Scheduler};
+use orchestrator::{Executor, Scheduler, WakeRetryPolicy};
 use orchestrator_core::{
     Clock, ConfigSource, ConfigStore, ContentStore, ContextStore, ExecutionJournal,
-    PatternRedactor, RegistryHandle, RulePlannerSelector, SchedulerStore, SystemClock,
+    OrchestratorError, PatternRedactor, RegistryHandle, RulePlannerSelector, RunId, SchedulerStore,
+    SystemClock,
 };
 use orchestrator_store::{
     FilesystemConfigSource, InMemoryConfigStore, InMemoryContentStore, InMemoryContextStore,
@@ -20,6 +22,7 @@ use orchestrator_store::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use torii_core::events::{DEFAULT_EVENT_BUFFER, RunEventSink, RunEvents};
 
 pub const ENV_DATABASE_URL: &str = "DATABASE_URL";
 pub const ENV_FENCE_VERSION: &str = "TORII_FENCE_VERSION";
@@ -27,6 +30,12 @@ pub const ENV_POOL_SIZE: &str = "TORII_POOL_SIZE";
 pub const ENV_BACKEND: &str = "TORII_BACKEND";
 pub const ENV_REGISTRY_DIR: &str = "TORII_REGISTRY_DIR";
 pub const ENV_TENANT: &str = "TORII_TENANT";
+/// AG-3: the scheduler's wake-retry policy ([`WakeRetryPolicy`]) — both heavy-tier drivers
+/// (`worker serve`, and `run submit`'s inline drive) build their `Scheduler` from these, so one
+/// fleet shares one policy. Unset ⇒ the gateway's defaults.
+pub const ENV_WAKE_MAX_ATTEMPTS: &str = "TORII_WAKE_MAX_ATTEMPTS";
+pub const ENV_WAKE_BASE_BACKOFF: &str = "TORII_WAKE_BASE_BACKOFF";
+pub const ENV_WAKE_MAX_BACKOFF: &str = "TORII_WAKE_MAX_BACKOFF";
 
 /// The pool cap when `TORII_POOL_SIZE` is unset: one pool serves every store of a worker, so
 /// this is the worker's whole connection budget (`torii_core::connect`).
@@ -59,13 +68,19 @@ pub enum Backend {
     Memory { registry_dir: Option<PathBuf> },
 }
 
-/// The validated environment. `fence_version` is only required by the heavy tier;
-/// `pool_size` only by the Postgres backend.
+/// The validated environment. `fence_version` and `wake_retry` are only required by the heavy
+/// tier; `pool_size` only by the Postgres backend.
 #[derive(PartialEq)]
 pub struct EnvConfig {
     pub backend: Backend,
     pub fence_version: Option<String>,
     pub pool_size: u32,
+    /// AG-3: how the heavy tier's `Scheduler` backs off a failing wake, and when it gives up.
+    /// Parsed here but CHECKED only by [`require_wake_retry`], exactly as `fence_version` is by
+    /// [`require_fence`]: only the commands that drive read it, so a bad value must not break
+    /// `run status`, `run list-paused` or `run cancel` — the verbs an operator reaches for while
+    /// fixing it.
+    pub wake_retry: Result<WakeRetryPolicy, String>,
 }
 
 /// Manual, NOT derived: `#[derive(Debug)]` would put the plaintext database
@@ -86,6 +101,7 @@ impl std::fmt::Debug for EnvConfig {
             .field("backend", &backend)
             .field("fence_version", &self.fence_version)
             .field("pool_size", &self.pool_size)
+            .field("wake_retry", &self.wake_retry)
             .finish()
     }
 }
@@ -137,11 +153,64 @@ pub fn env_config_from(get: impl Fn(&str) -> Option<String>) -> Result<EnvConfig
         Some(raw) => parse_pool_size(&raw).map_err(CliError::error)?,
         None => DEFAULT_POOL_SIZE,
     };
+    let wake_retry = wake_retry_from(&non_empty);
     Ok(EnvConfig {
         backend,
         fence_version,
         pool_size,
+        wake_retry,
     })
+}
+
+/// AG-3: the `TORII_WAKE_*` overrides on top of the gateway's [`WakeRetryPolicy`] default.
+/// Each unset (or blank) variable keeps the default; a set one is parsed with the same
+/// discipline as `TORII_POOL_SIZE` — loud, naming the variable and echoing the value.
+/// Backoffs take `worker serve --interval`'s units (`500ms`, `30s`, `15m`).
+fn wake_retry_from(non_empty: &impl Fn(&str) -> Option<String>) -> Result<WakeRetryPolicy, String> {
+    let mut policy = WakeRetryPolicy::default();
+    if let Some(raw) = non_empty(ENV_WAKE_MAX_ATTEMPTS) {
+        let s = raw.trim();
+        policy.max_attempts = match s.parse::<u32>() {
+            Ok(0) => {
+                return Err(format!(
+                    "invalid {ENV_WAKE_MAX_ATTEMPTS} {s:?}: a run needs at least one wake \
+                     attempt (there is no \"unlimited\" — a capless retry is the crash loop \
+                     this cap exists to end)"
+                ));
+            }
+            Ok(n) => n,
+            Err(_) => {
+                return Err(format!(
+                    "invalid {ENV_WAKE_MAX_ATTEMPTS} {s:?}: {s:?} is not a positive whole number"
+                ));
+            }
+        };
+    }
+    let backoff = |var: &str| -> Result<Option<chrono::Duration>, String> {
+        let Some(raw) = non_empty(var) else {
+            return Ok(None);
+        };
+        let d = crate::cmd::worker::parse_interval(&raw).map_err(|e| format!("{var}: {e}"))?;
+        chrono::Duration::from_std(d)
+            .map(Some)
+            .map_err(|_| format!("{var}: {:?} is out of range", raw.trim()))
+    };
+    if let Some(d) = backoff(ENV_WAKE_BASE_BACKOFF)? {
+        policy.base_backoff = d;
+    }
+    if let Some(d) = backoff(ENV_WAKE_MAX_BACKOFF)? {
+        policy.max_backoff = d;
+    }
+    if policy.base_backoff > policy.max_backoff {
+        return Err(format!(
+            "{ENV_WAKE_BASE_BACKOFF} ({}s) exceeds {ENV_WAKE_MAX_BACKOFF} ({}s): every retry \
+             would wait the ceiling and the backoff would never grow — lower the base or raise \
+             the ceiling (unset, they are 30s and 60m)",
+            policy.base_backoff.num_seconds(),
+            policy.max_backoff.num_seconds()
+        ));
+    }
+    Ok(policy)
 }
 
 fn postgres_backend(non_empty: &impl Fn(&str) -> Option<String>) -> Result<Backend, CliError> {
@@ -391,6 +460,12 @@ pub fn require_fence(env: &EnvConfig) -> Result<&str, CliError> {
     })
 }
 
+/// The heavy tier additionally requires a valid wake-retry policy (`TORII_WAKE_*`, the
+/// gateway's defaults when unset) — refused loudly, naming the variable and its value.
+pub fn require_wake_retry(env: &EnvConfig) -> Result<WakeRetryPolicy, CliError> {
+    env.wake_retry.clone().map_err(CliError::error)
+}
+
 /// Install a `tracing` subscriber reading `RUST_LOG` (default `info`). Writes to
 /// STDERR specifically — never stdout — so `--json` command output stays
 /// machine-parseable. `try_init` (not `init`) so a double call (e.g. a test, or
@@ -506,6 +581,16 @@ pub struct LightDeps {
     /// The backend's own gateway config: torii's catalog on Postgres; `None` on the memory
     /// backend, which has no catalog and takes `--gateway-config` instead.
     pub gateway_config: Option<Arc<dyn GatewayConfigSource>>,
+    /// AG-3: the scheduler's per-run wake-attempt counter, for `run status`.
+    pub wake_attempts: Arc<dyn WakeAttemptCounts>,
+}
+
+/// AG-3: torii's Postgres scheduler keeps the counter in `runs.scheduled_runs.attempts`.
+#[async_trait::async_trait]
+impl WakeAttemptCounts for torii_core::stores::PgSchedulerStore {
+    async fn wake_attempts(&self, run: RunId) -> Result<Option<u32>, OrchestratorError> {
+        torii_core::stores::PgSchedulerStore::wake_attempts(self, run).await
+    }
 }
 
 /// Every store one backend provides — the light tier's three plus the heavy tier's CAS and
@@ -532,12 +617,15 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                 .await
                 .map_err(|e| CliError::error(format!("{ENV_TENANT}: {e}")))?;
             let stores = torii_core::TenantStores::open(&pool, tenant_id);
+            // ONE store object behind both the trait and the attempt-counter reader.
+            let scheduler = Arc::new(stores.scheduler);
             Ok(Stores {
                 light: LightDeps {
-                    scheduler_store: Arc::new(stores.scheduler),
+                    scheduler_store: scheduler.clone(),
                     journal: Arc::new(stores.journal),
                     config_source: Arc::new(stores.config),
                     gateway_config: Some(Arc::new(CatalogGatewayConfigSource::new(pool))),
+                    wake_attempts: scheduler,
                 },
                 content: Arc::new(stores.content),
                 context: Arc::new(stores.context),
@@ -561,6 +649,7 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                     journal: Arc::new(InMemoryJournal::default()),
                     config_source: Arc::new(config),
                     gateway_config: None,
+                    wake_attempts: Arc::new(NoWakeAttemptCounts),
                 },
                 context: Arc::new(InMemoryContextStore::new(content.clone())),
                 content,
@@ -584,6 +673,8 @@ pub struct HeavyDeps {
     pub scheduler: Scheduler,
     #[allow(dead_code)]
     pub clock: Arc<dyn Clock>,
+    /// AG-18: the run events the scheduler's drives report (torii-core's `RunEventSink`).
+    pub events: RunEvents,
 }
 
 pub async fn heavy(
@@ -592,6 +683,7 @@ pub async fn heavy(
     workspace_root: Option<&Path>,
 ) -> Result<HeavyDeps, CliError> {
     let fence = require_fence(env)?.to_string();
+    let wake_retry = require_wake_retry(env)?;
     // ONE gateway-config source per backend (TM-8c), decided before any connection: the
     // catalog on Postgres (a file there would be a second source the API never sees), the
     // file on memory (there is no catalog).
@@ -659,7 +751,14 @@ pub async fn heavy(
     let gateway = Arc::new(facade.gateway);
 
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    // AG-18: hooks on EVERY drive. This executor is the only one the binary builds, and both
+    // drivers (`worker serve`, `run submit`'s inline drive) take it from here — the light-tier
+    // verbs (`signal`, `gate`, `agent`, `tool`, `wake`) only append and `force_wake`, they
+    // never drive. A drive WITHOUT hooks that honoured a decision would leave no
+    // `DecisionHookFired` marker, so the next hooked drive would report that decision late.
+    let (sink, events) = RunEventSink::bounded(DEFAULT_EVENT_BUFFER);
     let mut executor = Executor::new(gateway, light.journal.clone(), fence)
+        .with_hooks(sink)
         .with_content_store(content)
         .with_context_store(context)
         .with_registry_handle(handle)
@@ -732,17 +831,42 @@ pub async fn heavy(
         }
     }
 
+    // AG-3: the operator's wake-retry policy (TORII_WAKE_*, gateway defaults when unset).
     let scheduler = Scheduler::new(
         light.scheduler_store.clone(),
         executor,
         light.journal.clone(),
         clock.clone(),
-    );
+    )
+    .with_wake_retry(wake_retry);
     Ok(HeavyDeps {
         light,
         scheduler,
         clock,
+        events,
     })
+}
+
+/// AG-18: the CLI's consumer of [`HeavyDeps::events`] — every run event as one structured log
+/// line (target `torii::run_event`, the event's JSON in `event`), on stderr with the rest of
+/// the log. It drains as fast as the log writes, so the drive's bounded channel stays empty;
+/// the API's SSE stream (torii#51) is a second consumer of the same `RunEvent`s.
+pub fn log_run_events(mut events: RunEvents) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(e) = events.recv().await {
+            match serde_json::to_string(&e) {
+                Ok(json) => tracing::info!(target: "torii::run_event", event = %json, "run event"),
+                Err(err) => tracing::warn!(run = %e.run, "run event not serializable: {err}"),
+            }
+        }
+    })
+}
+
+/// Let [`log_run_events`] finish once the drives are done: the caller drops the `Scheduler`
+/// (closing the channel) first, then this waits — bounded, so a sender still alive somewhere
+/// can delay the exit by at most two seconds, never hang it.
+pub async fn flush_run_events(log: tokio::task::JoinHandle<()>) {
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), log).await;
 }
 
 #[cfg(test)]
@@ -805,6 +929,7 @@ mod tests {
             },
             fence_version: Some("v1".into()),
             pool_size: DEFAULT_POOL_SIZE,
+            wake_retry: Ok(WakeRetryPolicy::default()),
         };
         let err = match heavy(&env, Some(Path::new("/tmp/gateway.json")), None).await {
             Ok(_) => panic!("must refuse a file on the postgres backend"),
@@ -825,6 +950,7 @@ mod tests {
             backend: Backend::Memory { registry_dir: None },
             fence_version: Some("v1".into()),
             pool_size: DEFAULT_POOL_SIZE,
+            wake_retry: Ok(WakeRetryPolicy::default()),
         };
         let err = match heavy(&env, None, None).await {
             Ok(_) => panic!("must require a file on the memory backend"),
@@ -964,6 +1090,314 @@ mod tests {
         ]))
         .expect("ok");
         assert_eq!(e.pool_size, 8);
+    }
+
+    /// AG-3: unset, the wake-retry policy is the gateway's own default — torii adds no second
+    /// set of numbers that could drift from it.
+    #[test]
+    fn an_absent_wake_retry_is_the_gateway_default() {
+        let e = env_config_from(getter(&[(ENV_DATABASE_URL, "postgres://h/db")])).expect("ok");
+        assert_eq!(e.wake_retry, Ok(WakeRetryPolicy::default()));
+    }
+
+    #[test]
+    fn the_wake_retry_policy_is_read_from_the_environment() {
+        let e = env_config_from(getter(&[
+            (ENV_DATABASE_URL, "postgres://h/db"),
+            (ENV_WAKE_MAX_ATTEMPTS, " 3 "),
+            (ENV_WAKE_BASE_BACKOFF, "10s"),
+            (ENV_WAKE_MAX_BACKOFF, "15m"),
+        ]))
+        .expect("ok");
+        assert_eq!(
+            e.wake_retry,
+            Ok(WakeRetryPolicy {
+                max_attempts: 3,
+                base_backoff: chrono::Duration::seconds(10),
+                max_backoff: chrono::Duration::minutes(15),
+                ..WakeRetryPolicy::default()
+            })
+        );
+    }
+
+    /// The heavy tier's refusal of a bad `TORII_WAKE_*` set: the environment itself PARSES
+    /// (the light tier never reads the policy), and [`require_wake_retry`] is what refuses.
+    fn wake_err(pairs: &[(&str, &str)]) -> CliError {
+        let e = env_config_from(getter(pairs))
+            .expect("a bad wake policy must not fail the environment the light tier reads");
+        require_wake_retry(&e).expect_err("the heavy tier must refuse")
+    }
+
+    /// The gateway reads `max_attempts: 0` as 1; an operator who wrote 0 almost certainly
+    /// meant something else (unlimited?), so it is refused, naming the variable.
+    #[test]
+    fn a_zero_or_unparseable_max_attempts_is_rejected() {
+        for bad in ["0", "abc", "-1"] {
+            let err = wake_err(&[
+                (ENV_DATABASE_URL, "postgres://h/db"),
+                (ENV_WAKE_MAX_ATTEMPTS, bad),
+            ]);
+            assert_eq!(err.code, crate::errors::EXIT_ERROR);
+            assert!(
+                err.message.contains(ENV_WAKE_MAX_ATTEMPTS) && err.message.contains(bad),
+                "{}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn an_unparseable_backoff_is_rejected_naming_the_variable() {
+        for var in [ENV_WAKE_BASE_BACKOFF, ENV_WAKE_MAX_BACKOFF] {
+            let err = wake_err(&[(ENV_DATABASE_URL, "postgres://h/db"), (var, "5")]);
+            assert_eq!(err.code, crate::errors::EXIT_ERROR);
+            assert!(err.message.contains(var), "{}", err.message);
+        }
+    }
+
+    /// A base past the ceiling would clamp EVERY delay to the ceiling — the doubling the
+    /// operator configured would never happen. Refused rather than silently flattened.
+    #[test]
+    fn a_base_backoff_past_the_max_backoff_is_rejected() {
+        let err = wake_err(&[
+            (ENV_DATABASE_URL, "postgres://h/db"),
+            (ENV_WAKE_BASE_BACKOFF, "2m"),
+            (ENV_WAKE_MAX_BACKOFF, "1m"),
+        ]);
+        assert!(
+            err.message.contains(ENV_WAKE_BASE_BACKOFF)
+                && err.message.contains(ENV_WAKE_MAX_BACKOFF),
+            "{}",
+            err.message
+        );
+    }
+
+    /// AG-3: the policy reaches the `Scheduler` `heavy()` builds — observed through `tick`,
+    /// since the scheduler does not expose it. A submit whose worker was lost (a stale
+    /// `waking` row, attempt 1 spent) is reclaimed as attempt 2: past a cap of 1 it is filed
+    /// `Failed` WITHOUT being driven, where the default cap (5) would drive it to its pause.
+    #[tokio::test]
+    async fn heavy_wires_the_wake_retry_policy_into_the_scheduler() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = dir.path().join("registry");
+        std::fs::create_dir_all(reg.join("agents")).unwrap();
+        std::fs::write(
+            reg.join("agents/researcher.md"),
+            "---\nname: researcher\narea: research\nkind: lead\nchain: c\ntools: []\nskills: []\n---\nYou research.\n",
+        )
+        .unwrap();
+        let gw = dir.path().join("gateway.json");
+        std::fs::write(
+            &gw,
+            r#"{"routers":{"ollama":{"url":"http://127.0.0.1:11434"}},
+                "chains":{"c":{"id":"c","capability":"text_chat","models":[],"fallback_triggers":[]}}}"#,
+        )
+        .unwrap();
+        let env = EnvConfig {
+            backend: Backend::Memory {
+                registry_dir: Some(reg),
+            },
+            fence_version: Some("v1".into()),
+            pool_size: DEFAULT_POOL_SIZE,
+            wake_retry: Ok(WakeRetryPolicy {
+                max_attempts: 1,
+                ..WakeRetryPolicy::default()
+            }),
+        };
+        let d = match heavy(&env, Some(&gw), None).await {
+            Ok(d) => d,
+            Err(e) => panic!("heavy boots on the memory backend: {}", e.message),
+        };
+        let run = orchestrator_core::RunId(uuid::Uuid::new_v4());
+        let graph = orchestrator_core::Graph {
+            nodes: vec![orchestrator_core::Node {
+                id: orchestrator_core::NodeId("gate".into()),
+                kind: orchestrator_core::NodeKind::AwaitSignal { timeout: None },
+                deps: vec![],
+            }],
+        };
+        d.light
+            .scheduler_store
+            .enqueue(
+                run,
+                &graph,
+                chrono::Utc::now() - chrono::Duration::minutes(5),
+            )
+            .await
+            .expect("enqueue");
+        d.scheduler.tick().await.expect("tick");
+        let st = d.scheduler.status(run).await.unwrap().expect("row");
+        assert_eq!(
+            (st.status, st.reason.as_deref()),
+            (
+                orchestrator_core::RunStatus::Failed,
+                Some(
+                    "gave up after 1 failed wake attempts; last error: the drive never \
+                     recorded an outcome — its worker was lost mid-drive and its lease was \
+                     reclaimed"
+                )
+            ),
+            "a cap of 1 must reach the scheduler"
+        );
+    }
+
+    /// AG-18 review: the policy is checked where it is USED — `heavy()` refuses a bad one before
+    /// it opens a store, naming the variable.
+    #[tokio::test]
+    async fn heavy_refuses_a_bad_wake_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut env, gw) = memory_heavy_fixture(dir.path());
+        env.wake_retry =
+            wake_retry_from(&|k: &str| (k == ENV_WAKE_MAX_ATTEMPTS).then(|| "0".to_string()));
+        let err = match heavy(&env, Some(&gw), None).await {
+            Ok(_) => panic!("a bad wake policy must not boot a driver"),
+            Err(e) => e,
+        };
+        assert_eq!(err.code, crate::errors::EXIT_ERROR);
+        assert!(
+            err.message.contains(ENV_WAKE_MAX_ATTEMPTS),
+            "{}",
+            err.message
+        );
+    }
+
+    /// A memory-backend `EnvConfig` and gateway-config file `heavy()` boots on with no
+    /// database and no model: one agent bound to chain `c`, which the file defines.
+    fn memory_heavy_fixture(dir: &Path) -> (EnvConfig, PathBuf) {
+        let reg = dir.join("registry");
+        std::fs::create_dir_all(reg.join("agents")).unwrap();
+        std::fs::write(
+            reg.join("agents/researcher.md"),
+            "---\nname: researcher\narea: research\nkind: lead\nchain: c\ntools: []\nskills: []\n---\nYou research.\n",
+        )
+        .unwrap();
+        let gw = dir.join("gateway.json");
+        std::fs::write(
+            &gw,
+            r#"{"routers":{"ollama":{"url":"http://127.0.0.1:11434"}},
+                "chains":{"c":{"id":"c","capability":"text_chat","models":[],"fallback_triggers":[]}}}"#,
+        )
+        .unwrap();
+        let env = EnvConfig {
+            backend: Backend::Memory {
+                registry_dir: Some(reg),
+            },
+            fence_version: Some("v1".into()),
+            pool_size: DEFAULT_POOL_SIZE,
+            wake_retry: Ok(WakeRetryPolicy::default()),
+        };
+        (env, gw)
+    }
+
+    fn signal_graph() -> orchestrator_core::Graph {
+        orchestrator_core::Graph {
+            nodes: vec![orchestrator_core::Node {
+                id: orchestrator_core::NodeId("gate".into()),
+                kind: orchestrator_core::NodeKind::AwaitSignal { timeout: None },
+                deps: vec![],
+            }],
+        }
+    }
+
+    fn drained(events: &mut RunEvents) -> Vec<torii_core::events::RunEventKind> {
+        let mut out = Vec::new();
+        while let Ok(e) = events.try_recv() {
+            out.push(e.kind);
+        }
+        out
+    }
+
+    /// AG-18: `run submit`'s inline drive is `heavy()`'s scheduler, and it reports run events:
+    /// the run's ask reaches `HeavyDeps::events`.
+    #[tokio::test]
+    async fn heavy_reports_run_events_from_the_submit_drive() {
+        let dir = tempfile::tempdir().unwrap();
+        let (env, gw) = memory_heavy_fixture(dir.path());
+        let mut d = match heavy(&env, Some(&gw), None).await {
+            Ok(d) => d,
+            Err(e) => panic!("heavy boots on the memory backend: {}", e.message),
+        };
+        let run = RunId(uuid::Uuid::new_v4());
+        let out = crate::cmd::run::submit(
+            &d.scheduler,
+            run,
+            signal_graph(),
+            orchestrator_core::RunBudget::default(),
+            || {},
+        )
+        .await
+        .expect("submit");
+        assert!(out.text.contains("paused"), "{}", out.text);
+        assert_eq!(
+            drained(&mut d.events),
+            vec![torii_core::events::RunEventKind::SignalAwaited {
+                node: "gate".into(),
+                deadline: None,
+            }],
+            "the submit drive's ask must reach the event stream"
+        );
+    }
+
+    /// AG-18: `worker serve`'s drive is `heavy()`'s scheduler too, and the decision a worker
+    /// drive honours is reported BY that drive — an unhooked worker would leave the report to
+    /// some later hooked drive, late.
+    #[tokio::test]
+    async fn heavy_reports_the_decision_a_worker_drive_honours() {
+        let dir = tempfile::tempdir().unwrap();
+        let (env, gw) = memory_heavy_fixture(dir.path());
+        let mut d = match heavy(&env, Some(&gw), None).await {
+            Ok(d) => d,
+            Err(e) => panic!("heavy boots on the memory backend: {}", e.message),
+        };
+        let run = RunId(uuid::Uuid::new_v4());
+        crate::cmd::run::submit(
+            &d.scheduler,
+            run,
+            signal_graph(),
+            orchestrator_core::RunBudget::default(),
+            || {},
+        )
+        .await
+        .expect("submit");
+        drained(&mut d.events);
+
+        // The operator answers on the light tier, then the worker loop drives it once.
+        let out = crate::cmd::run::signal(
+            d.light.scheduler_store.as_ref(),
+            d.light.journal.as_ref(),
+            run,
+            orchestrator_core::NodeId("gate".into()),
+            serde_json::json!({"decision": "approved"}),
+            chrono::Utc::now(),
+        )
+        .await
+        .expect("signal");
+        assert_eq!(out.code, crate::errors::EXIT_OK, "{}", out.text);
+        let (_tx, shutdown) = tokio::sync::watch::channel(0u64);
+        let out = crate::cmd::worker::serve(
+            &d.scheduler,
+            crate::cmd::worker::ServeOpts {
+                interval: std::time::Duration::from_millis(10),
+                once: true,
+            },
+            shutdown,
+        )
+        .await
+        .expect("serve --once");
+        assert_eq!(out.code, crate::errors::EXIT_OK, "{}", out.text);
+        assert_eq!(
+            d.scheduler.status(run).await.unwrap().expect("row").status,
+            orchestrator_core::RunStatus::Completed,
+            "the worker drive completed the run"
+        );
+        assert_eq!(
+            drained(&mut d.events),
+            vec![torii_core::events::RunEventKind::SignalReceived {
+                node: "gate".into(),
+                payload: serde_json::json!({"decision": "approved"}),
+            }],
+            "the worker drive must report the decision it honoured"
+        );
     }
 
     /// The heavy tier must refuse to start without an explicit fence base: deriving
@@ -1305,6 +1739,7 @@ mod tests {
             },
             fence_version: Some(fence.to_string()),
             pool_size: DEFAULT_POOL_SIZE,
+            wake_retry: Ok(WakeRetryPolicy::default()),
         }
     }
 
@@ -1322,6 +1757,10 @@ mod tests {
                 skills: vec![],
                 system_prompt: "probe".to_string(),
                 backed_by: orchestrator_core::AgentBacking::Model,
+                tool_limits: Default::default(),
+                confirm_tools: vec![],
+                confirm_timeout: None,
+                escalate_to: None,
             }],
             ..Default::default()
         }
@@ -1393,6 +1832,34 @@ mod tests {
             deps.scheduler.executor().has_planner_selector(),
             "heavy() built an executor with NO planner selector",
         );
+    }
+
+    /// AG-3: `run status` on the Postgres backend reads the tenant's real wake-attempt
+    /// counter — the light tier must wire the store's reader, not the memory backend's no-op.
+    #[cfg_attr(
+        not(have_database_url),
+        ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+    )]
+    #[tokio::test]
+    async fn light_wires_the_tenants_wake_attempt_counter() {
+        let Some(url) = crate::test_guard::db_url() else {
+            return;
+        };
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let env = tenant_env(&url, t.id, "torii-attempts-probe-fence");
+        let run = orchestrator_core::RunId(uuid::Uuid::new_v4());
+        let d = light(&env).await.expect("light boots");
+        d.scheduler_store
+            .enqueue(
+                run,
+                &orchestrator_core::Graph { nodes: vec![] },
+                chrono::Utc::now(),
+            )
+            .await
+            .expect("enqueue");
+        let n = d.wake_attempts.wake_attempts(run).await.expect("read");
+        drop(t);
+        assert_eq!(n, Some(1), "submit's inline drive is attempt 1");
     }
 
     /// `heavy()` shares ONE pool across every store AND the catalog read: a regression to a

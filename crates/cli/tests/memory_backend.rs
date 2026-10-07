@@ -12,6 +12,13 @@ fn torii() -> Command {
     c.env_remove("TORII_FENCE_VERSION");
     c.env_remove("TORII_BACKEND");
     c.env_remove("TORII_REGISTRY_DIR");
+    for v in [
+        "TORII_WAKE_MAX_ATTEMPTS",
+        "TORII_WAKE_BASE_BACKOFF",
+        "TORII_WAKE_MAX_BACKOFF",
+    ] {
+        c.env_remove(v);
+    }
     c
 }
 
@@ -101,5 +108,73 @@ fn an_unknown_backend_is_refused_naming_the_choices() {
     assert!(
         err.contains("mysql") && err.contains("memory") && err.contains("postgres"),
         "{err}"
+    );
+}
+
+/// AG-18 review: `TORII_WAKE_*` is the DRIVERS' policy, so a bad value must fail only the
+/// commands that drive (`run submit`, `worker serve`) — never strand an operator's read and
+/// recovery verbs (`run status`, `run list-paused`, `run cancel`) on a variable they never read.
+#[test]
+fn a_bad_wake_policy_fails_only_the_commands_that_drive() {
+    let dir = tempfile::tempdir().unwrap();
+    let (reg, gw, graph) = fixtures(dir.path());
+    let bad = |c: &mut Command| {
+        c.env("TORII_BACKEND", "memory")
+            .env("TORII_REGISTRY_DIR", &reg)
+            .env("TORII_FENCE_VERSION", "v1")
+            .env("TORII_WAKE_MAX_ATTEMPTS", "0");
+    };
+
+    let mut c = torii();
+    bad(&mut c);
+    let out = c
+        .args(["run", "list-paused"])
+        .output()
+        .expect("spawn torii");
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        out.status.success(),
+        "list-paused never reads the wake policy: exit {:?}\nstdout: {stdout}\nstderr: {stderr}",
+        out.status.code()
+    );
+
+    let mut c = torii();
+    bad(&mut c);
+    let out = c
+        .args(["run", "status", "00000000-0000-4000-8000-000000000001"])
+        .output()
+        .expect("spawn torii");
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        stdout.contains("no such run") && !stderr.contains("TORII_WAKE_MAX_ATTEMPTS"),
+        "run status reaches the store, not the wake policy: exit {:?}\nstdout: {stdout}\n\
+         stderr: {stderr}",
+        out.status.code()
+    );
+
+    let mut c = torii();
+    bad(&mut c);
+    let out = c
+        .args(["run", "submit", "--graph"])
+        .arg(&graph)
+        .arg("--gateway-config")
+        .arg(&gw)
+        .output()
+        .expect("spawn torii");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "a driver refuses: {stderr}");
+    assert!(
+        stderr.contains("TORII_WAKE_MAX_ATTEMPTS") && stderr.contains("\"0\""),
+        "and names the variable and the value: {stderr}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("submitted"),
+        "refused BEFORE anything is submitted"
     );
 }

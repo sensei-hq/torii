@@ -207,13 +207,20 @@ async fn a_run_submitted_on_postgres_pauses_is_signalled_and_a_worker_completes_
     std::fs::write(&graph, serde_json::to_string(&g).unwrap()).unwrap();
 
     // Submit: drives to the durable pause. No --gateway-config: the catalog is the config.
-    let submitted = ok(&t
+    let submit = t
         .torii()
         .env("TORII_FENCE_VERSION", "v1")
         .args(["run", "submit", "--graph"])
         .arg(&graph)
         .output()
-        .expect("spawn"));
+        .expect("spawn");
+    let submitted = ok(&submit);
+    // AG-18: the submit drive's run events reach the operator's log.
+    let log = String::from_utf8_lossy(&submit.stderr);
+    assert!(
+        log.contains(r#""type":"signal_awaited""#) && log.contains(r#""node":"gate""#),
+        "run submit must log the drive's run events:\n{log}"
+    );
     let run = submitted
         .lines()
         .find_map(|l| l.strip_prefix("submitted: "))
@@ -234,12 +241,19 @@ async fn a_run_submitted_on_postgres_pauses_is_signalled_and_a_worker_completes_
         .expect("spawn"));
 
     // A worker — a third process — drives it home.
-    ok(&t
+    let worker = t
         .torii()
         .env("TORII_FENCE_VERSION", "v1")
         .args(["worker", "serve", "--once"])
         .output()
-        .expect("spawn"));
+        .expect("spawn");
+    ok(&worker);
+    // AG-18: and the worker drive reports the decision it honoured.
+    let log = String::from_utf8_lossy(&worker.stderr);
+    assert!(
+        log.contains(r#""type":"signal_received""#) && log.contains(r#""decision":"approved""#),
+        "worker serve must log the decision its drive honoured:\n{log}"
+    );
 
     let status = ok(&t
         .torii()
@@ -291,4 +305,83 @@ async fn config_push_refuses_a_gateway_config_file_on_postgres_and_writes_nothin
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("--gateway-config is not accepted"), "{err}");
     assert_eq!(t.generation().await, Some(0), "nothing was pushed");
+}
+
+/// AG-15: the tool-policy and escalation keys survive `config push` → torii's Postgres
+/// registry → load, exactly as authored — and a second push of the same directory is a no-op,
+/// so the durable form is byte-stable (a key dropped or reshaped on the way in would show up
+/// as a "changed" agent on every push).
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn ag15_agent_policy_keys_round_trip_through_the_postgres_registry() {
+    let Some(url) = db_url() else { return };
+    let t = Tenant::new(&url).await;
+    let dir = tempfile::tempdir().unwrap();
+    let reg = dir.path().join("registry-ag15");
+    std::fs::create_dir_all(reg.join("agents")).unwrap();
+    std::fs::create_dir_all(reg.join("tools")).unwrap();
+    std::fs::write(
+        reg.join("tools/deploy.json"),
+        r#"{"name":"deploy","description":"ship it","input_schema":{},"effect_class":"Pure","ttl_secs":null,"source":null}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join("agents/deployer.md"),
+        "---\nname: deployer\narea: ops\nkind: deploy\nchain: chat\ntools: [deploy]\nskills: []\n\
+         tool_limits: [deploy=2]\nconfirm_tools: [deploy]\nconfirm_timeout: 2h\n---\nYou deploy.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join("agents/reviewer.md"),
+        "---\nname: reviewer\narea: review\nkind: lead\ntools: []\nskills: []\n\
+         backed_by: human\ntimeout: 1h\nescalate_to: lead\n---\nYou review.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join("agents/lead.md"),
+        "---\nname: lead\narea: review\nkind: escalation\ntools: []\nskills: []\n\
+         backed_by: human\ntimeout: 2h\n---\nYou decide.\n",
+    )
+    .unwrap();
+
+    ok(&t
+        .torii()
+        .args(["config", "push", "--yes"])
+        .arg(&reg)
+        .output()
+        .expect("spawn"));
+
+    let pool = torii_core::connect(&url, 1).await.expect("connect");
+    let (cfg, _) = torii_core::TenantStores::open(&pool, t.id)
+        .config
+        .load_versioned()
+        .await
+        .expect("load");
+    let agent = |n: &str| {
+        cfg.agents
+            .iter()
+            .find(|a| a.name == n)
+            .unwrap_or_else(|| panic!("{n} was not stored: {cfg:?}"))
+            .clone()
+    };
+    let deployer = agent("deployer");
+    assert_eq!(deployer.tool_limits.get("deploy"), Some(&2), "{deployer:?}");
+    assert_eq!(deployer.confirm_tools, vec!["deploy".to_string()]);
+    assert_eq!(deployer.confirm_timeout, Some(chrono::Duration::hours(2)));
+    assert_eq!(agent("reviewer").escalate_to.as_deref(), Some("lead"));
+    assert_eq!(agent("lead").escalate_to, None);
+
+    let again = ok(&t
+        .torii()
+        .args(["config", "push", "--yes"])
+        .arg(&reg)
+        .output()
+        .expect("spawn"));
+    assert!(
+        again.contains("no changes"),
+        "the stored policy must compare equal to what was authored: {again}"
+    );
 }

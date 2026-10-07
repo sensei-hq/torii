@@ -306,6 +306,10 @@ pub async fn decide(
                  run agent answer {} --node {shown} --text '<answer>'",
                 run.0
             )
+        } else if let Some(refusal) =
+            crate::cmd::tool::pending_call_refusal(&events, &node, run, "a gate")
+        {
+            refusal
         } else {
             format!(
                 "not delivered: {shown} is not awaiting a decision. \

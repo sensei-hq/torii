@@ -86,6 +86,17 @@ enum RunAction {
         /// unbudgeted one.
         #[arg(long, value_parser = cmd::run::parse_budget_tokens)]
         budget_tokens: Option<u64>,
+        /// Cap this run's MONEY spend, in US dollars (e.g. 5 or 0.25; at most 6 decimal
+        /// places — a cap is kept in whole micro-dollars, and finer is refused, not rounded).
+        ///
+        /// Ledgered from the cost the gateway prices each call at, so every model on a chain
+        /// this run uses must declare pricing (an explicit zero for a free or local model):
+        /// under a money cap an unpriced model is refused. Independent of --budget-tokens;
+        /// give either, both or neither. Spend is shown by `run status`, and a run that stops
+        /// at its cap is raised with `run wake --budget-usd`. Only a run SUBMITTED with a
+        /// money cap has one — a later raise cannot introduce it.
+        #[arg(long, value_parser = cmd::run::parse_budget_usd)]
+        budget_usd: Option<u64>,
     },
     /// Show one run's schedule record
     Status {
@@ -270,6 +281,18 @@ enum RunAction {
         // doc comment for why that order is load-bearing.
         #[arg(long, value_parser = cmd::run::parse_budget_tokens)]
         budget_tokens: Option<u64>,
+        /// Move the run's MONEY cap, in US dollars, before waking it — the way to restart a
+        /// run that stopped at its money budget. Lowering it below what the run has spent
+        /// halts the run at its next model call.
+        ///
+        /// It moves an existing money cap and can never introduce one: on a run submitted
+        /// without --budget-usd this is REFUSED and nothing is written (spend is only
+        /// counted while a cap is in force, so a cap added now would be weighed against
+        /// spend it never saw).
+        //
+        // Recorded as `MoneyBudgetRaised` BEFORE the wake is queued, like `BudgetRaised`.
+        #[arg(long, value_parser = cmd::run::parse_budget_usd)]
+        budget_usd: Option<u64>,
     },
     /// Delete terminal run records (completed/failed/cancelled) older than a window
     ///
@@ -561,6 +584,7 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
             RunAction::Wake {
                 run_id,
                 budget_tokens,
+                budget_usd,
             } => {
                 let run = parse_run_id(&run_id)?;
                 let d = boot::light(&env).await?;
@@ -568,7 +592,8 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 let budget = orchestrator_core::RunBudget {
                     tokens: budget_tokens
                         .map(|total_tokens| orchestrator_core::TokenBudget { total_tokens }),
-                    money: None,
+                    money: budget_usd
+                        .map(|total_micro_usd| orchestrator_core::MoneyBudget { total_micro_usd }),
                 };
                 cmd::run::wake(
                     d.scheduler_store.as_ref(),
@@ -607,6 +632,7 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 gateway_config,
                 workspace_root,
                 budget_tokens,
+                budget_usd,
             } => {
                 let run = match run_id {
                     Some(s) => parse_run_id(&s)?,
@@ -623,7 +649,8 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 let budget = orchestrator_core::RunBudget {
                     tokens: budget_tokens
                         .map(|total_tokens| orchestrator_core::TokenBudget { total_tokens }),
-                    money: None,
+                    money: budget_usd
+                        .map(|total_micro_usd| orchestrator_core::MoneyBudget { total_micro_usd }),
                 };
                 // Print the id BEFORE driving: an operator who loses the terminal
                 // must still be able to find the run. `submit` calls this AFTER its

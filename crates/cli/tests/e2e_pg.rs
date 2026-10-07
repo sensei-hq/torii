@@ -1423,6 +1423,236 @@ async fn a_money_capped_run_is_raised_by_an_operator_and_completes_in_a_fresh_pr
     );
 }
 
+/// AG-15: a Pure `deploy` tool that counts its runs — the executable side of a
+/// confirm-before-run tool, shared by nothing across the two "processes".
+struct DeployTool(Arc<std::sync::atomic::AtomicUsize>);
+
+impl orchestrator::agent::tools::Tool for DeployTool {
+    fn spec(&self) -> orchestrator_core::ToolSpec {
+        orchestrator_core::ToolSpec {
+            name: "deploy".into(),
+            description: Some("ship it".into()),
+            input_schema: serde_json::json!({}),
+            effect_class: orchestrator_core::EffectClass::Pure,
+            ttl_secs: None,
+            source: None,
+            permissions: Default::default(),
+            activation: Default::default(),
+            credentials: vec![],
+        }
+    }
+    fn call(
+        &self,
+        _args: serde_json::Value,
+    ) -> Result<serde_json::Value, orchestrator_core::OrchestratorError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(serde_json::json!({ "deployed": true }))
+    }
+}
+
+/// A model-backed agent that must have each `deploy` call confirmed by a person.
+fn deployer_registry() -> Arc<orchestrator_core::Registry> {
+    let deployer = orchestrator_core::AgentDefinition {
+        default_planner: false,
+        name: "deployer".into(),
+        area: "ops".into(),
+        kind: "deploy".into(),
+        chain: Some("c".into()),
+        chains: Default::default(),
+        grants: Default::default(),
+        tools: vec!["deploy".into()],
+        skills: vec![],
+        system_prompt: "You deploy.".into(),
+        backed_by: orchestrator_core::AgentBacking::Model,
+        tool_limits: Default::default(),
+        confirm_tools: vec!["deploy".into()],
+        confirm_timeout: Some(Duration::hours(1)),
+        escalate_to: None,
+    };
+    let tool = DeployTool(Default::default());
+    Arc::new(
+        orchestrator_core::Registry::default()
+            .with_agent(deployer)
+            .with_tool(orchestrator::agent::tools::Tool::spec(&tool)),
+    )
+}
+
+/// One "process" that drives `deployer` over a scripted model, counting its tool runs.
+async fn deployer_worker(
+    db: &Db,
+    at: DateTime<Utc>,
+    script: Vec<kernel::types::io::ChatResponse>,
+) -> (Scheduler, Arc<std::sync::atomic::AtomicUsize>) {
+    let journal = Arc::new(PgJournal::new(db.pool().await, db.tenant));
+    let (gw, _calls) = orchestrator::test_support::scripted_gateway(script).await;
+    let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let clock = FakeClock::new(at);
+    let exec = Executor::new(Arc::new(gw), journal.clone(), "v1")
+        .with_content_store(Arc::new(PgContentStore::new(db.pool().await, db.tenant)))
+        .with_registry(deployer_registry())
+        .with_tools(Arc::new(
+            orchestrator::agent::tools::ToolRegistry::default()
+                .with_tool(Arc::new(DeployTool(runs.clone()))),
+        ))
+        .with_clock(clock.clone());
+    let store = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    (Scheduler::new(store, exec, journal, clock), runs)
+}
+
+/// AG-15 across a process boundary: process A's agent asks to call a confirm-before-run tool
+/// and the run pauses BEFORE the tool runs; the operator, from the durable journal alone,
+/// sees the pending call in `list-paused` and `status` and approves it with `run tool
+/// approve`; process B resumes, runs the tool exactly once and completes — and the call is no
+/// longer listed as pending.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+)]
+#[tokio::test]
+async fn a_confirm_before_run_tool_call_is_approved_by_an_operator_and_runs_in_a_fresh_process() {
+    let Some(db) = Db::new().await else { return };
+    let run = RunId(uuid::Uuid::new_v4());
+    let node = NodeId(format!("deploy-{}", run.0));
+    let graph = Graph {
+        nodes: vec![Node {
+            id: node.clone(),
+            kind: NodeKind::Agent {
+                agent: orchestrator_core::AgentRef("deployer".into()),
+                input: serde_json::json!("ship it"),
+                phase: None,
+            },
+            deps: vec![],
+        }],
+    };
+    let at = DateTime::<Utc>::from_timestamp(5_200_000, 0).unwrap();
+
+    // ---- Process A: the model asks for `deploy`; the run pauses before it runs ---------
+    let (sched_a, runs_a) = deployer_worker(
+        &db,
+        at,
+        vec![orchestrator::test_support::tool_call_response(
+            "t1",
+            "deploy",
+            r#"{"env":"prod"}"#,
+        )],
+    )
+    .await;
+    let submitted = torii::cmd::run::submit(
+        &sched_a,
+        run,
+        graph,
+        orchestrator_core::RunBudget::default(),
+        || {},
+    )
+    .await
+    .expect("submit");
+    assert!(submitted.text.starts_with("paused:"), "{}", submitted.text);
+    assert_eq!(
+        runs_a.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "nothing ran yet"
+    );
+
+    // ---- The operator, light tier, from the durable journal ----------------------------
+    let store_b = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_b = Arc::new(PgJournal::new(db.pool().await, db.tenant));
+    let call = journal_b
+        .load(run)
+        .await
+        .unwrap()
+        .into_iter()
+        .find_map(|(_, e)| match e {
+            JournalEvent::ToolConfirmAwaited { effect_id, .. } => Some(effect_id.0),
+            _ => None,
+        })
+        .expect("the call asked for confirmation");
+    let listed = torii::cmd::run::list_paused(store_b.as_ref(), journal_b.as_ref(), false)
+        .await
+        .expect("list-paused");
+    let row = listed
+        .text
+        .lines()
+        .find(|l| l.starts_with(&run.0.to_string()) && l.contains("tool: deploy"))
+        .unwrap_or_else(|| panic!("no tool row:\n{}", listed.text));
+    assert!(row.contains(&call) && row.contains("prod"), "{row}");
+    let shown = torii::cmd::run::status(
+        store_b.as_ref(),
+        &torii::cmd::run::NoWakeAttemptCounts,
+        journal_b.as_ref(),
+        run,
+        false,
+    )
+    .await
+    .expect("status");
+    assert!(
+        shown
+            .text
+            .contains(&format!("torii run tool approve {} --call {call}", run.0)),
+        "{}",
+        shown.text
+    );
+
+    // On the run's own (fake) clock, inside the confirmation's one-hour deadline.
+    let decided_at = at + Duration::seconds(60);
+    let approved = torii::cmd::tool::decide(
+        store_b.as_ref(),
+        journal_b.as_ref(),
+        run,
+        &call,
+        Some(node.clone()),
+        true,
+        "alice",
+        Some("looks fine"),
+        decided_at,
+    )
+    .await
+    .expect("approve");
+    assert_eq!(approved.code, torii::errors::EXIT_OK, "{}", approved.text);
+
+    // ---- Process B: a fresh worker runs the approved tool once and completes -----------
+    let (sched_b, runs_b) = deployer_worker(
+        &db,
+        decided_at + Duration::seconds(1),
+        vec![orchestrator::test_support::final_response("deployed")],
+    )
+    .await;
+    let served = serve_until_settled(&sched_b, store_b.as_ref(), run).await;
+    assert_eq!(served.code, torii::errors::EXIT_OK, "{}", served.text);
+    assert_eq!(
+        store_b.status(run).await.unwrap().unwrap().status,
+        RunStatus::Completed,
+        "{}",
+        served.text
+    );
+    assert_eq!(
+        runs_b.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "ran exactly once"
+    );
+    assert_eq!(runs_a.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    // A second decision on the settled call is refused, and nothing is written.
+    let again = torii::cmd::tool::decide(
+        store_b.as_ref(),
+        journal_b.as_ref(),
+        run,
+        &call,
+        None,
+        false,
+        "bob",
+        None,
+        decided_at,
+    )
+    .await
+    .expect("refusal");
+    assert_eq!(
+        again.code,
+        torii::errors::EXIT_PRECONDITION,
+        "{}",
+        again.text
+    );
+}
+
 /// SP-6 s1 AC7 — the HITL loop, end to end, across a process boundary.
 ///
 /// SP-DATA-4's e2e above proves the HOTL loop: an operator *outside* the run resumes it,

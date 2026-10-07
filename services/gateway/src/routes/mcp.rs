@@ -161,7 +161,7 @@ pub async fn register_server(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "mcp.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if body.transport == "stdio" {
         return (
@@ -234,7 +234,7 @@ pub async fn refresh_tools(
 ) -> Response {
     let (tenant, _actor) = match authorize(&state, &claims, "mcp.manage").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // The server must be visible to the caller's tenant (platform or own).
     let row = sqlx::query(

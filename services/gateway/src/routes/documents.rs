@@ -121,7 +121,7 @@ pub async fn create_document(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.write").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // No cross-space injection: registering INTO a space requires membership/ownership of it.
     if let Some(space) = body.space_id {
@@ -182,7 +182,7 @@ pub async fn ingest_document(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.write").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if !can_access_doc(&state.pool, tenant, actor, id).await {
         return (StatusCode::NOT_FOUND, "document not found").into_response();
@@ -227,7 +227,7 @@ pub async fn reingest_document(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.write").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if !can_access_doc(&state.pool, tenant, actor, id).await {
         return (StatusCode::NOT_FOUND, "document not found").into_response();
@@ -274,7 +274,7 @@ pub async fn get_document(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.read").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let sql = format!(
         "select json_build_object( \
@@ -338,7 +338,7 @@ pub async fn list_documents(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.read").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let sql = format!(
         "select coalesce(json_agg(t order by t.created_at desc), '[]'::json) from ( \
@@ -381,7 +381,7 @@ pub async fn get_assets(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.read").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // Read predicate on the parent doc FIRST (404 if excluded — assets inherit the doc's access).
     let readable_sql = format!(
@@ -466,7 +466,7 @@ pub async fn delete_document(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.delete").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // Can't delete a doc you can't see (narrows doc.delete from tenant-wide to accessible docs).
     if !can_access_doc(&state.pool, tenant, actor, id).await {

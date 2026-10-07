@@ -1854,6 +1854,82 @@ mod tests {
         );
     }
 
+    /// AG-4 x AG-5: a node that exhausts its transient retries is reported by `run results` with
+    /// the error the run actually stopped on — the one `run status` shows — not attempt 1's
+    /// "retrying" notice; and while it waits on a retry it is `retrying`, not `failed`.
+    #[tokio::test]
+    async fn run_results_reports_the_terminal_error_of_a_node_that_exhausted_its_retries() {
+        let provider = FakeProvider::start(500, std::time::Duration::ZERO).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (env, gw) = memory_env(
+            dir.path(),
+            &provider.gateway_json(),
+            &[("TORII_TRANSIENT_ATTEMPTS", "3")],
+        );
+        let d = boot(&env, &gw).await;
+        let run = submit_graph(&d, model_call()).await;
+        let results = || async {
+            torii_core::results::run_results(
+                d.light.scheduler_store.as_ref(),
+                d.light.journal.as_ref(),
+                d.light.content.as_ref(),
+                run,
+            )
+            .await
+            .expect("results")
+            .expect("the run exists")
+        };
+
+        let paused = results().await;
+        assert_eq!(
+            paused.status,
+            orchestrator_core::RunStatus::Paused,
+            "precondition"
+        );
+        assert_eq!(
+            serde_json::to_value(paused.nodes[0].state).unwrap(),
+            serde_json::json!("retrying"),
+            "a node waiting on its retry is not failed: {:?}",
+            paused.nodes
+        );
+
+        for _ in 0..4 {
+            let st = d.scheduler.status(run).await.unwrap().expect("row");
+            if st.status.is_terminal() {
+                break;
+            }
+            d.light
+                .scheduler_store
+                .force_wake(run, chrono::Utc::now())
+                .await
+                .expect("force_wake");
+            d.scheduler.tick().await.expect("tick");
+        }
+        let st = d.scheduler.status(run).await.unwrap().expect("row");
+        assert_eq!(
+            st.status,
+            orchestrator_core::RunStatus::Failed,
+            "precondition"
+        );
+        assert_eq!(provider.calls(), 3, "precondition: every attempt was made");
+        let failed = results().await;
+        assert_eq!(failed.nodes.len(), 1, "{:?}", failed.nodes);
+        assert_eq!(
+            failed.nodes[0].error.as_deref(),
+            st.reason.as_deref(),
+            "run results and run status must name the same failure"
+        );
+        assert!(
+            !failed.nodes[0]
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("retrying"),
+            "{:?}",
+            failed.nodes[0]
+        );
+    }
+
     fn signal_graph() -> orchestrator_core::Graph {
         orchestrator_core::Graph {
             nodes: vec![orchestrator_core::Node {

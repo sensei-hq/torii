@@ -142,7 +142,11 @@ async fn a_completed_runs_outputs_come_back_inline_cas_failed_and_skipped() {
 
     let b = row(&got.nodes, "b");
     assert_eq!(b.state, NodeState::Failed);
-    assert_eq!(b.error.as_deref(), Some("first failure"), "first wins");
+    assert_eq!(
+        b.error.as_deref(),
+        Some("second failure"),
+        "the LAST failure is the one the node stopped on"
+    );
     assert_eq!((b.stored.clone(), b.output.clone()), (None, None));
 
     let c = row(&got.nodes, "c");
@@ -265,4 +269,117 @@ async fn a_run_with_no_checkpoint_reports_its_failures_and_no_outputs() {
     assert_eq!(got.nodes.len(), 1, "{:?}", got.nodes);
     assert_eq!(got.nodes[0].state, NodeState::Failed);
     assert_eq!(got.nodes[0].error.as_deref(), Some("boom"));
+}
+
+/// The gateway's transient-retry shape (SP-OPS-1.3): each attempt with budget left appends a
+/// `NodeFailed` carrying "transient failure, retrying (attempt k of N): …" and a `RunPaused` with
+/// the SAME reason and a `resume_after`; the final attempt appends the bare terminal error.
+async fn retried(f: &Fixture, node: &str, attempt: u32, of: u32) {
+    let reason = format!("transient failure, retrying (attempt {attempt} of {of}): upstream blip");
+    f.append(JournalEvent::NodeFailed {
+        node: n(node),
+        error: reason.clone(),
+    })
+    .await;
+    f.append(JournalEvent::RunPaused {
+        reason,
+        resume_after: Some(chrono::Utc::now()),
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_node_that_exhausted_its_retries_reports_the_terminal_error_not_a_retry_notice() {
+    let f = Fixture::new().await;
+    retried(&f, "ask", 1, 3).await;
+    retried(&f, "ask", 2, 3).await;
+    f.append(JournalEvent::NodeFailed {
+        node: n("ask"),
+        error: "upstream blip (status 500)".into(),
+    })
+    .await;
+    f.scheduler
+        .record_terminal(f.run, RunStatus::Failed, Some("upstream blip (status 500)"))
+        .await
+        .unwrap();
+    let got = f.results().await.unwrap();
+    let ask = row(&got.nodes, "ask");
+    assert_eq!(ask.state, NodeState::Failed);
+    assert_eq!(ask.error.as_deref(), Some("upstream blip (status 500)"));
+}
+
+#[tokio::test]
+async fn a_node_waiting_on_a_retry_is_retrying_not_failed() {
+    let f = Fixture::new().await;
+    retried(&f, "ask", 1, 3).await;
+    f.scheduler
+        .record_paused(
+            f.run,
+            Some(chrono::Utc::now()),
+            "transient failure, retrying",
+        )
+        .await
+        .unwrap();
+    let got = f.results().await.unwrap();
+    let ask = row(&got.nodes, "ask");
+    // Through the wire name, which is what the API serves.
+    assert_eq!(
+        serde_json::to_value(ask.state).unwrap(),
+        json!("retrying"),
+        "{ask:?}"
+    );
+    assert!(
+        ask.error
+            .as_deref()
+            .is_some_and(|e| e.contains("attempt 1 of 3")),
+        "the pending retry's reason is still shown: {ask:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_retry_pending_when_the_run_was_cancelled_is_a_failure() {
+    let f = Fixture::new().await;
+    retried(&f, "ask", 1, 3).await;
+    f.scheduler.cancel(f.run).await.unwrap();
+    let got = f.results().await.unwrap();
+    assert_eq!(
+        row(&got.nodes, "ask").state,
+        NodeState::Failed,
+        "nothing will retry a node of a terminal run"
+    );
+}
+
+#[tokio::test]
+async fn a_nested_node_that_failed_and_then_completed_is_not_reported_failed() {
+    let f = Fixture::new().await;
+    // The outer checkpoint lists only the subgraph node `sub`; its inner nodes are namespaced
+    // (`sub/x`) and appear in the journal alone.
+    retried(&f, "sub/x", 1, 3).await;
+    f.append(JournalEvent::NodeCompleted { node: n("sub/x") })
+        .await;
+    let seq = f
+        .append(JournalEvent::NodeCompleted { node: n("sub") })
+        .await;
+    f.journal
+        .snapshot(
+            f.run,
+            Snapshot {
+                seq,
+                completed: vec![n("sub")],
+                outputs: vec![(n("sub"), EffectOutput::Inline(json!("done")))],
+                ..Snapshot::default()
+            },
+        )
+        .await
+        .unwrap();
+    f.scheduler
+        .record_terminal(f.run, RunStatus::Completed, None)
+        .await
+        .unwrap();
+    let got = f.results().await.unwrap();
+    assert!(
+        got.nodes.iter().all(|r| r.state != NodeState::Failed),
+        "{:?}",
+        got.nodes
+    );
 }

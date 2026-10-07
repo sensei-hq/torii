@@ -1773,7 +1773,7 @@ pub(crate) mod tests {
     use crate::cmd::human::tests::{THE_QUESTION, agent_journal, agent_journal_asking, reviewer};
     use crate::errors::{EXIT_OK, EXIT_PRECONDITION};
     use orchestrator_core::{
-        EffectClass, EffectId, EffectOutput, Graph, NodeId, TokenBudget, TokenUsage,
+        EffectClass, EffectId, EffectOutput, Graph, MoneyBudget, NodeId, TokenBudget, TokenUsage,
     };
     use orchestrator_store::{InMemoryJournal, InMemorySchedulerStore};
     use std::sync::Arc;
@@ -2464,6 +2464,215 @@ pub(crate) mod tests {
             "BudgetRaised must already be durable even though force_wake failed — proving \
              the append happens BEFORE force_wake is called, not after: {events:?}"
         );
+    }
+
+    /// A journal whose run STARTED with a money cap of `cap` micro-dollars (or none), plus one
+    /// priced call that cost `spent` micro-dollars.
+    async fn journal_with_money(run: RunId, cap: Option<u64>, spent: u64) -> InMemoryJournal {
+        let journal = empty_journal();
+        journal
+            .append(
+                run,
+                JournalEvent::RunStarted {
+                    version: "v1".into(),
+                    budget: None,
+                    money_budget: cap.map(|total_micro_usd| MoneyBudget { total_micro_usd }),
+                },
+            )
+            .await
+            .unwrap();
+        journal
+            .append(
+                run,
+                JournalEvent::EffectRecorded {
+                    node: NodeId("n1".into()),
+                    effect_id: EffectId("e1".into()),
+                    class: EffectClass::Pure,
+                    input_hash: "h".into(),
+                    seq: 0,
+                    output: EffectOutput::Inline(serde_json::Value::Null),
+                    observation: None,
+                    usage: Some(TokenUsage {
+                        input_tokens: 100,
+                        output_tokens: 50,
+                        total_tokens: 150,
+                        cost_micro_usd: cap.map(|_| spent),
+                    }),
+                },
+            )
+            .await
+            .unwrap();
+        journal
+    }
+
+    fn money(total_micro_usd: u64) -> RunBudget {
+        RunBudget {
+            tokens: None,
+            money: Some(MoneyBudget { total_micro_usd }),
+        }
+    }
+
+    fn money_raises(events: &[(Seq, JournalEvent)]) -> Vec<u64> {
+        events
+            .iter()
+            .filter_map(|(_, e)| match e {
+                JournalEvent::MoneyBudgetRaised {
+                    new_total_micro_usd,
+                } => Some(*new_total_micro_usd),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn wake_with_budget_usd_appends_money_budget_raised_to_the_journal() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let journal = journal_with_money(run, Some(1_000_000), 999_000).await;
+
+        let out = wake(&s, &journal, run, now(), money(5_000_000))
+            .await
+            .expect("wakes");
+        assert_eq!(out.code, EXIT_OK, "{}", out.text);
+        let events = journal.load(run).await.unwrap();
+        assert_eq!(money_raises(&events), vec![5_000_000], "{events:?}");
+        assert_eq!(
+            orchestrator::money_spend_of(&events),
+            (999_000, Some(5_000_000)),
+            "the raise is what the engine's own fold now reads as the cap"
+        );
+    }
+
+    #[tokio::test]
+    async fn wake_appends_money_budget_raised_before_calling_force_wake() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let store = FailingForceWakeStore(paused_store(run, None).await);
+        let journal = journal_with_money(run, Some(1_000_000), 999_000).await;
+
+        let result = wake(&store, &journal, run, now(), money(5_000_000)).await;
+        assert!(
+            result.is_err(),
+            "the injected force_wake failure must surface"
+        );
+        assert_eq!(
+            money_raises(&journal.load(run).await.unwrap()),
+            vec![5_000_000],
+            "MoneyBudgetRaised must already be durable when force_wake runs"
+        );
+    }
+
+    /// A raise MOVES a money cap and never introduces one: the engine's fold ignores a
+    /// `MoneyBudgetRaised` on a run that started without a money cap. Journaling it anyway
+    /// and reporting `queued` would tell the operator a cap is in force that nothing enforces.
+    #[tokio::test]
+    async fn wake_with_budget_usd_on_a_run_without_a_money_cap_is_refused_and_writes_nothing() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let journal = journal_with_money(run, None, 0).await;
+        let before = journal.load(run).await.unwrap().len();
+
+        let out = wake(
+            &s,
+            &journal,
+            run,
+            now(),
+            RunBudget {
+                tokens: Some(TokenBudget {
+                    total_tokens: 5_000,
+                }),
+                money: Some(MoneyBudget {
+                    total_micro_usd: 5_000_000,
+                }),
+            },
+        )
+        .await
+        .expect("a refusal, not an error");
+        assert_eq!(out.code, EXIT_PRECONDITION, "{}", out.text);
+        assert!(
+            out.text.contains("money cap") && out.text.contains("--budget-usd"),
+            "must say the run has no money cap to move and what to do instead: {}",
+            out.text
+        );
+        assert_eq!(
+            journal.load(run).await.unwrap().len(),
+            before,
+            "nothing is journaled — not the money raise, and not the token raise beside it"
+        );
+        let after = s.status(run).await.unwrap().unwrap();
+        assert_eq!(
+            (after.status, after.next_wake),
+            (RunStatus::Paused, None),
+            "and the run is not queued"
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_with_budget_usd_journals_the_money_cap_on_run_started() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let store = Arc::new(InMemorySchedulerStore::default());
+        let journal = Arc::new(InMemoryJournal::new());
+        let (gw, _calls) = orchestrator::test_support::recording_gateway().await;
+        let clock = orchestrator::test_support::FakeClock::new(now());
+        let exec = orchestrator::Executor::new(Arc::new(gw), journal.clone(), "v1");
+        let sched = orchestrator::Scheduler::new(store, exec, journal.clone(), clock);
+
+        let out = submit(&sched, run, empty_graph(), money(2_500_000), || {})
+            .await
+            .expect("submits");
+        assert_eq!(out.code, EXIT_OK, "{}", out.text);
+        let events = journal.load(run).await.unwrap();
+        assert!(
+            events.iter().any(|(_, e)| matches!(
+                e,
+                JournalEvent::RunStarted {
+                    money_budget: Some(MoneyBudget {
+                        total_micro_usd: 2_500_000
+                    }),
+                    ..
+                }
+            )),
+            "the money cap rides on RunStarted: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_shows_money_spent_and_cap_in_dollars() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let journal = journal_with_money(run, Some(5_000_000), 12_345).await;
+
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, false)
+            .await
+            .expect("status");
+        assert_eq!(out.code, EXIT_OK, "{}", out.text);
+        assert!(
+            out.text.contains("money spent: $0.012345 / budget: $5.00"),
+            "{}",
+            out.text
+        );
+
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, true)
+            .await
+            .expect("status");
+        let v: serde_json::Value = serde_json::from_str(&out.text).expect("valid json");
+        assert_eq!(v[0]["spent_micro_usd"], serde_json::json!(12_345));
+        assert_eq!(v[0]["money_budget_micro_usd"], serde_json::json!(5_000_000));
+    }
+
+    #[tokio::test]
+    async fn status_shows_no_money_line_for_a_run_without_a_money_cap() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let journal = journal_with_money(run, None, 0).await;
+
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, false)
+            .await
+            .expect("status");
+        assert!(!out.text.contains("money"), "{}", out.text);
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, true)
+            .await
+            .expect("status");
+        assert!(!out.text.contains("micro_usd"), "{}", out.text);
     }
 
     // ---- SP-DATA-4.1 #7: `torii run prune` -------------------------------------------

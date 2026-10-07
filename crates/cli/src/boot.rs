@@ -838,13 +838,37 @@ pub struct HeavyDeps {
 }
 
 impl HeavyDeps {
-    /// What `worker serve` ticks: the scheduler, behind a registry refresh (AG-5).
-    pub fn ticker(&self) -> crate::cmd::worker::Reloading<'_> {
-        crate::cmd::worker::Reloading {
-            inner: &self.scheduler,
-            registry: &self.registry,
-            gateway_chains: &self.gateway_chains,
-        }
+    /// `torii worker serve`, whole: the run-event log, the scheduler behind a registry refresh
+    /// before every tick (AG-5 — so a `config push` reaches a running worker without a
+    /// restart), the serve loop, and the log flushed once the loop returns.
+    ///
+    /// The ONE implementation: `main` dispatches `worker serve` here and the tests drive this,
+    /// so the ticker a test exercises cannot drift from the one production runs.
+    pub async fn serve_worker(
+        self,
+        opts: crate::cmd::worker::ServeOpts,
+        shutdown: tokio::sync::watch::Receiver<u64>,
+    ) -> Result<crate::cmd::Outcome, CliError> {
+        let HeavyDeps {
+            light,
+            scheduler,
+            clock,
+            events,
+            registry,
+            gateway_chains,
+        } = self;
+        drop((light, clock));
+        let log = log_run_events(events);
+        let ticker = crate::cmd::worker::Reloading {
+            inner: &scheduler,
+            registry: &registry,
+            gateway_chains: &gateway_chains,
+        };
+        let out = crate::cmd::worker::serve(&ticker, opts, shutdown).await;
+        // Closes the event channel, so the log drains everything the drives reported.
+        drop(scheduler);
+        flush_run_events(log).await;
+        out
     }
 }
 
@@ -2580,17 +2604,22 @@ mod tests {
         assert_eq!(out.code, crate::errors::EXIT_OK, "{}", out.text);
 
         let (_tx, shutdown) = tokio::sync::watch::channel(0u64);
-        crate::cmd::worker::serve(
-            &worker.ticker(),
-            crate::cmd::worker::ServeOpts {
-                interval: std::time::Duration::from_millis(10),
-                once: true,
-            },
-            shutdown,
-        )
-        .await
-        .expect("serve --once");
-        let st = worker.scheduler.status(run).await.unwrap().expect("row");
+        worker
+            .serve_worker(
+                crate::cmd::worker::ServeOpts {
+                    interval: std::time::Duration::from_millis(10),
+                    once: true,
+                },
+                shutdown,
+            )
+            .await
+            .expect("serve --once");
+        let st = operator
+            .scheduler_store
+            .status(run)
+            .await
+            .unwrap()
+            .expect("row");
         drop(t);
         assert_eq!(
             st.status,

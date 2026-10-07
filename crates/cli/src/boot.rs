@@ -40,6 +40,7 @@ pub const ENV_WAKE_MAX_BACKOFF: &str = "TORII_WAKE_MAX_BACKOFF";
 /// `TORII_WAKE_*`, parsed here and checked only by [`require_drive_policy`], so only the two
 /// commands that drive read them.
 pub const ENV_WAKE_LEASE: &str = "TORII_WAKE_LEASE";
+pub const ENV_MAP_CONCURRENCY: &str = "TORII_MAP_CONCURRENCY";
 
 /// The pool cap when `TORII_POOL_SIZE` is unset: one pool serves every store of a worker, so
 /// this is the worker's whole connection budget (`torii_core::connect`).
@@ -99,15 +100,28 @@ pub struct DrivePolicy {
     /// `Scheduler::with_lease`: how old a `waking` claim must be before `tick` treats its
     /// worker as lost and reclaims the run. Default [`DEFAULT_WAKE_LEASE_SECS`].
     pub wake_lease: chrono::Duration,
+    /// `Executor::with_concurrency`: the global ceiling on how many children of one `Map`
+    /// node are in flight at once (each `Map` asks for its own `concurrency`; the lower of the
+    /// two wins). Default [`DEFAULT_MAP_CONCURRENCY`].
+    pub map_concurrency: usize,
 }
 
 /// The wake lease when `TORII_WAKE_LEASE` is unset — the gateway's own default (60s).
 pub const DEFAULT_WAKE_LEASE_SECS: i64 = 60;
 
+/// The `Map` fan-out ceiling when `TORII_MAP_CONCURRENCY` is unset — the gateway's own default.
+pub const DEFAULT_MAP_CONCURRENCY: usize = 8;
+
+/// A typo ceiling on `TORII_MAP_CONCURRENCY`, not a capacity policy (see [`MAX_POOL_SIZE`]):
+/// every in-flight child journals over the one `TORII_POOL_SIZE` pool, so a value far past it
+/// only queues children on connections.
+const MAX_MAP_CONCURRENCY: usize = 256;
+
 impl Default for DrivePolicy {
     fn default() -> Self {
         Self {
             wake_lease: chrono::Duration::seconds(DEFAULT_WAKE_LEASE_SECS),
+            map_concurrency: DEFAULT_MAP_CONCURRENCY,
         }
     }
 }
@@ -206,6 +220,30 @@ fn drive_policy_from(non_empty: &impl Fn(&str) -> Option<String>) -> Result<Driv
             .map_err(|e| format!("{ENV_WAKE_LEASE}: {e}"))?;
         policy.wake_lease = chrono::Duration::from_std(d)
             .map_err(|_| format!("{ENV_WAKE_LEASE}: {:?} is out of range", raw.trim()))?;
+    }
+    if let Some(raw) = non_empty(ENV_MAP_CONCURRENCY) {
+        let s = raw.trim();
+        policy.map_concurrency = match s.parse::<usize>() {
+            Ok(0) => {
+                return Err(format!(
+                    "invalid {ENV_MAP_CONCURRENCY} {s:?}: a Map needs at least one child in \
+                     flight (1 runs them one at a time)"
+                ));
+            }
+            Ok(n) if n > MAX_MAP_CONCURRENCY => {
+                return Err(format!(
+                    "invalid {ENV_MAP_CONCURRENCY} {s:?}: exceeds the sanity ceiling of \
+                     {MAX_MAP_CONCURRENCY} (almost certainly a typo) — every in-flight child \
+                     journals over the {ENV_POOL_SIZE} pool"
+                ));
+            }
+            Ok(n) => n,
+            Err(_) => {
+                return Err(format!(
+                    "invalid {ENV_MAP_CONCURRENCY} {s:?}: {s:?} is not a positive whole number"
+                ));
+            }
+        };
     }
     Ok(policy)
 }
@@ -814,6 +852,8 @@ pub async fn heavy(
     let (sink, events) = RunEventSink::bounded(DEFAULT_EVENT_BUFFER);
     let mut executor = Executor::new(gateway, light.journal.clone(), fence)
         .with_hooks(sink)
+        // AG-5: the global `Map` fan-out ceiling (TORII_MAP_CONCURRENCY, default 8).
+        .with_concurrency(drive.map_concurrency)
         .with_content_store(content)
         .with_context_store(context)
         .with_registry_handle(handle)

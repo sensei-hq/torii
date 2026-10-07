@@ -1013,3 +1013,42 @@ fn both_run_submit_and_run_wake_take_budget_usd_through_the_exact_parser() {
         "`run wake --help` must say a raise cannot introduce a money cap:\n{text}"
     );
 }
+
+/// AG-15: `run tool approve|reject` is wired into the binary, states the trust boundary on
+/// `--as`, and parses the run id before any connection.
+#[test]
+fn run_tool_approve_and_reject_are_wired_and_state_the_trust_boundary() {
+    let out = torii().args(["run", "--help"]).output().expect("runs");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        help_command_names(&text).iter().any(|c| c == "tool"),
+        "`tool` must be a dispatchable `run` subcommand:\n{text}"
+    );
+    let out = torii()
+        .args(["run", "tool", "--help"])
+        .output()
+        .expect("runs");
+    let text = String::from_utf8_lossy(&out.stdout);
+    let verbs = help_command_names(&text);
+    for verb in ["approve", "reject"] {
+        assert!(verbs.iter().any(|c| c == verb), "{verb}:\n{text}");
+        let out = torii()
+            .args(["run", "tool", verb, "--help"])
+            .output()
+            .expect("runs");
+        let help = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            help.contains("--call") && help.contains("ATTRIBUTION, NOT AUTHENTICATION"),
+            "`run tool {verb} --help`:\n{help}"
+        );
+        let out = torii()
+            .env("DATABASE_URL", "postgres://nobody@127.0.0.1:1/none")
+            .env("TORII_TENANT", "platform")
+            .args(["run", "tool", verb, "not-a-uuid", "--call", "c"])
+            .output()
+            .expect("runs");
+        assert_eq!(out.status.code(), Some(1));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("invalid run id"), "{err}");
+    }
+}

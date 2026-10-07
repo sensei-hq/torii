@@ -41,6 +41,7 @@ pub const ENV_WAKE_MAX_BACKOFF: &str = "TORII_WAKE_MAX_BACKOFF";
 /// commands that drive read them.
 pub const ENV_WAKE_LEASE: &str = "TORII_WAKE_LEASE";
 pub const ENV_MAP_CONCURRENCY: &str = "TORII_MAP_CONCURRENCY";
+pub const ENV_TRANSIENT_ATTEMPTS: &str = "TORII_TRANSIENT_ATTEMPTS";
 
 /// The pool cap when `TORII_POOL_SIZE` is unset: one pool serves every store of a worker, so
 /// this is the worker's whole connection budget (`torii_core::connect`).
@@ -104,6 +105,10 @@ pub struct DrivePolicy {
     /// node are in flight at once (each `Map` asks for its own `concurrency`; the lower of the
     /// two wins). Default [`DEFAULT_MAP_CONCURRENCY`].
     pub map_concurrency: usize,
+    /// `Executor::with_max_transient_attempts`: total attempts a node gets at a model call the
+    /// gateway reports as retryable before the failure is terminal; `1` turns retry off.
+    /// Default [`DEFAULT_TRANSIENT_ATTEMPTS`] — ON, where the gateway's default is off (#34).
+    pub transient_attempts: u32,
 }
 
 /// The wake lease when `TORII_WAKE_LEASE` is unset — the gateway's own default (60s).
@@ -117,11 +122,24 @@ pub const DEFAULT_MAP_CONCURRENCY: usize = 8;
 /// only queues children on connections.
 const MAX_MAP_CONCURRENCY: usize = 256;
 
+/// Transient-failure attempts when `TORII_TRANSIENT_ATTEMPTS` is unset. The gateway defaults to
+/// 1 (off) because enabling it retries essentially EVERY provider failure the gateway does not
+/// classify as needing a person — auth and credit exhaustion pause for an operator instead and
+/// never reach this path — which costs latency and, against a permanently broken provider, a
+/// few wasted calls. torii decides that trade for its operators (#34): a single provider 500
+/// failing a whole run is the worse default, and 3 attempts bounds the waste.
+pub const DEFAULT_TRANSIENT_ATTEMPTS: u32 = 3;
+
+/// A typo ceiling on `TORII_TRANSIENT_ATTEMPTS`. The gateway's backoff between attempts is 2s,
+/// doubling, capped at 60s, so 20 attempts already waits out a provider for ~15 minutes.
+const MAX_TRANSIENT_ATTEMPTS: u32 = 20;
+
 impl Default for DrivePolicy {
     fn default() -> Self {
         Self {
             wake_lease: chrono::Duration::seconds(DEFAULT_WAKE_LEASE_SECS),
             map_concurrency: DEFAULT_MAP_CONCURRENCY,
+            transient_attempts: DEFAULT_TRANSIENT_ATTEMPTS,
         }
     }
 }
@@ -241,6 +259,31 @@ fn drive_policy_from(non_empty: &impl Fn(&str) -> Option<String>) -> Result<Driv
             Err(_) => {
                 return Err(format!(
                     "invalid {ENV_MAP_CONCURRENCY} {s:?}: {s:?} is not a positive whole number"
+                ));
+            }
+        };
+    }
+    if let Some(raw) = non_empty(ENV_TRANSIENT_ATTEMPTS) {
+        let s = raw.trim();
+        policy.transient_attempts = match s.parse::<u32>() {
+            // The gateway reads 0 as 1; an operator who wrote 0 may have meant "unlimited",
+            // which does not exist — so it is refused rather than silently read as "off".
+            Ok(0) => {
+                return Err(format!(
+                    "invalid {ENV_TRANSIENT_ATTEMPTS} {s:?}: a node needs at least one attempt \
+                     (1 turns retry off; there is no \"unlimited\")"
+                ));
+            }
+            Ok(n) if n > MAX_TRANSIENT_ATTEMPTS => {
+                return Err(format!(
+                    "invalid {ENV_TRANSIENT_ATTEMPTS} {s:?}: exceeds the sanity ceiling of \
+                     {MAX_TRANSIENT_ATTEMPTS} (almost certainly a typo)"
+                ));
+            }
+            Ok(n) => n,
+            Err(_) => {
+                return Err(format!(
+                    "invalid {ENV_TRANSIENT_ATTEMPTS} {s:?}: {s:?} is not a positive whole number"
                 ));
             }
         };
@@ -854,6 +897,9 @@ pub async fn heavy(
         .with_hooks(sink)
         // AG-5: the global `Map` fan-out ceiling (TORII_MAP_CONCURRENCY, default 8).
         .with_concurrency(drive.map_concurrency)
+        // AG-5: retry a transient provider failure (TORII_TRANSIENT_ATTEMPTS, default 3 — ON;
+        // see `DEFAULT_TRANSIENT_ATTEMPTS` for why torii overrides the gateway's off).
+        .with_max_transient_attempts(drive.transient_attempts)
         .with_content_store(content)
         .with_context_store(context)
         .with_registry_handle(handle)

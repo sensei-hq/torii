@@ -27,8 +27,23 @@ suite=(
   health_gates.sql # G4: durable cooldown/lockout; terminal locks must not fail open
   resilience_config.sql # G5: ResilienceConfig parity with the engine's defaults + guardrails
   orchestrator.sql # TM-6: registry.*/runs.* tenant isolation + registry generation CAS
+  org_onboarding.sql # M1: org-onboarding role grants + owner singularity
 )
 
+# Every suite in this directory runs — a harness that is not listed above is a failure, not a
+# silent skip (org_onboarding.sql once sat here unrun).
+missing=()
+for f in "$here"/*.sql; do
+  name="$(basename "$f")"
+  [[ " ${suite[*]} " == *" $name "* ]] || missing+=("$name")
+done
+if ((${#missing[@]})); then
+  echo "❌ not in run.sh's suite list: ${missing[*]}"
+  exit 1
+fi
+
+# Run EVERY suite to the end: one failing suite must not hide the verdict of the ones after it.
+failed=()
 for t in "${suite[@]}"; do
   echo "── $t ──"
   # Capture output so a psql failure (ON_ERROR_STOP → non-zero) fails the suite.
@@ -37,8 +52,13 @@ for t in "${suite[@]}"; do
   if ! out="$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$here/$t" 2>&1)"; then
     echo "$out"
     echo "❌ FAILED: $t"
-    exit 1
+    failed+=("$t")
+    continue
   fi
   echo "$out" | grep -E 'NOTICE|PASSED' || true
 done
-echo "✅ ALL DB SECURITY TESTS PASSED"
+if ((${#failed[@]})); then
+  echo "❌ ${#failed[@]} of ${#suite[@]} DB suites FAILED: ${failed[*]}"
+  exit 1
+fi
+echo "✅ ALL ${#suite[@]} DB SECURITY TESTS PASSED"

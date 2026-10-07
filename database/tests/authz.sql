@@ -3,6 +3,16 @@
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/authz.sql
 -- Every privileged mutation attempted as `authenticated` (or `anon`) MUST be
 -- denied (grant/RLS/trigger). A hole that reopens raises → non-zero exit.
+--
+-- Impersonation sets the caller's identity through BOTH JWT GUC forms: `request.jwt.claims`
+-- (the JSON PostgREST ≥ 9 sets) AND the legacy per-claim `request.jwt.claim.sub`. Which one
+-- `auth.uid()` reads depends on the auth schema's generation: a full Supabase stack (GoTrue
+-- migrated) reads either, but the bare supabase/postgres image ships the 2018 auth functions,
+-- which read ONLY `request.jwt.claim.sub`. With the JSON alone, `auth.uid()` is NULL there, the
+-- owner-scoped RLS (`profile_id = auth.uid()`) hides the member's own rows, and an UPDATE that
+-- should hit the guard trigger silently matches 0 rows — a vacuous result that once reported
+-- the declassify guard as a hole (AG-7, #36). Each block also asserts the identity resolved
+-- (`auth.uid()` = the member) before trusting any outcome.
 \set ON_ERROR_STOP on
 
 \echo '== RW12 adversarial authz — each privileged mutation must be DENIED =='
@@ -21,10 +31,15 @@ begin;
 
   set local role authenticated;
   set local request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111","tenant_id":"00000000-0000-0000-0000-000000000000"}';
+  set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
 
   do $$
-  declare ok boolean;
+  declare n int;
   begin
+    if auth.uid() is distinct from '11111111-1111-1111-1111-111111111111'::uuid then
+      raise exception 'SETUP: auth.uid() = % under impersonation (want the member 11111111…)', auth.uid();
+    end if;
+
     -- 1. Role escalation: grant self a role → DENIED (profile_roles SELECT-only).
     begin
       insert into core.profile_roles(tenant_id, profile_id, role_id)
@@ -48,12 +63,22 @@ begin;
     exception when insufficient_privilege then null; end;
 
     -- 4. Classification downgrade of OWN doc → DENIED (trigger; declassify → gateway).
+    -- Precondition: the member really reaches their own doc — an ordinary edit updates 1 row.
+    -- Without it, an UPDATE that RLS filtered to 0 rows would "lower" nothing, raise nothing,
+    -- and be indistinguishable from a reopened hole (or, inverted, from a working guard).
+    update public.documents set original_filename = 'own-renamed.pdf'
+      where id = 'd0cabc00-0000-0000-0000-0000000000aa';
+    get diagnostics n = row_count;
+    if n <> 1 then
+      raise exception 'SETUP declassify: member''s own doc updated % rows by an ordinary edit (want 1) — impersonation did not resolve', n;
+    end if;
     begin
       update public.documents set classification = 'public'
         where id = 'd0cabc00-0000-0000-0000-0000000000aa';
       raise exception 'FAIL declassify: member could lower classification on their own doc';
     exception when raise_exception then
-      if sqlerrm like 'FAIL%' then raise; end if;  -- re-raise our own failure
+      -- Only the guard's own refusal counts as DENIED; anything else (our FAIL included) re-raises.
+      if sqlerrm not like 'classification changes must go through the gateway%' then raise; end if;
     end;
 
     -- 5. Audit forgery: INSERT audit_events attributing another actor → DENIED (with-check).
@@ -233,6 +258,7 @@ begin;
 
   set local role authenticated;
   set local request.jwt.claims = '{"sub":"cccccccc-cccc-cccc-cccc-cccccccccccc","tenant_id":"00000000-0000-0000-0000-000000000000"}';
+  set local request.jwt.claim.sub = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
   do $$
   begin
     -- (b) cross-tenant isolation: tenant A sees ONLY its own rollup row, never tenant B's.
@@ -280,8 +306,12 @@ begin;
 
   set local role authenticated;
   set local request.jwt.claims = '{"sub":"11111111-1111-1111-1111-111111111111","tenant_id":"00000000-0000-0000-0000-000000000000"}';
+  set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
   do $$
   begin
+    if auth.uid() is distinct from '11111111-1111-1111-1111-111111111111'::uuid then
+      raise exception 'SETUP: auth.uid() = % under impersonation (want the member 11111111…)', auth.uid();
+    end if;
     -- (a) own-vs-manage: a member WITHOUT device.manage sees ONLY their own device.
     if (select count(*) from device.devices) <> 1 then
       raise exception 'FAIL O3-4: member sees % devices (expected 1 — own only; devices_read leak reopened?)',
@@ -327,6 +357,7 @@ begin;
     set local role authenticated;
     -- owner: holds device.manage via the shared-default owner role.
     set local request.jwt.claims = '{"sub":"e0e0e0e0-0000-0000-0000-0000000000a1","tenant_id":"00000000-0000-0000-0000-000000000000"}';
+    set local request.jwt.claim.sub = 'e0e0e0e0-0000-0000-0000-0000000000a1';
     if not core.has_capability('device.manage') then
       raise exception 'FAIL RW2: owner does NOT resolve device.manage — has_capability reads role_permissions not effective_role_permissions (shared-default bug reopened)'; end if;
     if core.has_capability('totally.bogus') then
@@ -335,6 +366,7 @@ begin;
     -- member: does NOT hold device.manage (own-vs-manage must discriminate).
     set local role authenticated;
     set local request.jwt.claims = '{"sub":"e0e0e0e0-0000-0000-0000-0000000000a2","tenant_id":"00000000-0000-0000-0000-000000000000"}';
+    set local request.jwt.claim.sub = 'e0e0e0e0-0000-0000-0000-0000000000a2';
     if core.has_capability('device.manage') then
       raise exception 'FAIL RW2: member wrongly resolves device.manage (own-vs-manage broken)'; end if;
     reset role;

@@ -4,6 +4,7 @@
 pub mod config;
 pub mod gate;
 pub mod human;
+pub mod results;
 pub mod run;
 pub mod tool;
 pub mod worker;

@@ -1052,3 +1052,136 @@ fn run_tool_approve_and_reject_are_wired_and_state_the_trust_boundary() {
         assert!(err.contains("invalid run id"), "{err}");
     }
 }
+
+/// `torii` with no database configuration AT ALL — not even a memory backend — run from `cwd`.
+fn torii_without_a_database(cwd: &std::path::Path) -> Command {
+    let mut c = torii();
+    c.env_remove("TORII_BACKEND")
+        .env_remove("TORII_REGISTRY_DIR")
+        .current_dir(cwd);
+    c
+}
+
+/// Every registry file under `dir`, relative to it, with its contents, in path order.
+fn registry_files(dir: &std::path::Path) -> Vec<(std::path::PathBuf, String)> {
+    torii_core::defaults::files()
+        .into_iter()
+        .filter_map(|(p, _)| std::fs::read_to_string(dir.join(&p)).ok().map(|c| (p, c)))
+        .collect()
+}
+
+fn shipped_files() -> Vec<(std::path::PathBuf, String)> {
+    torii_core::defaults::files()
+        .into_iter()
+        .map(|(p, c)| (p, c.to_string()))
+        .collect()
+}
+
+/// AG-9 (#46), SP-REG-1 D9 + gate item 8: `config init --dir` is a local file operation over
+/// defaults COMPILED INTO the binary — it needs no `DATABASE_URL` (dispatch used to read the
+/// environment before matching the command), and run from a directory with no source tree
+/// beside it, it still writes every shipped file.
+#[test]
+fn config_init_dir_writes_the_embedded_defaults_with_no_database_and_no_source_tree() {
+    let cwd = tempfile::tempdir().unwrap();
+    let out = torii_without_a_database(cwd.path())
+        .args(["config", "init", "--dir", "registry"])
+        .output()
+        .expect("runs");
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert_eq!(
+        registry_files(&cwd.path().join("registry")),
+        shipped_files()
+    );
+    let cfg = torii_core::defaults::config().unwrap();
+    assert!(
+        stdout.contains(&format!("{} agents", cfg.agents.len()))
+            && stdout.contains("torii config push"),
+        "{stdout}"
+    );
+}
+
+/// D9: a non-empty directory — here, an earlier `init` the operator has since edited — is
+/// refused at exit 2 with nothing written; `--force` restores the defaults.
+#[test]
+fn config_init_dir_refuses_a_non_empty_directory_unless_forced() {
+    let cwd = tempfile::tempdir().unwrap();
+    let init = |force: bool| {
+        let mut c = torii_without_a_database(cwd.path());
+        c.args(["config", "init", "--dir", "registry"]);
+        if force {
+            c.arg("--force");
+        }
+        c.output().expect("runs")
+    };
+    assert_eq!(init(false).status.code(), Some(0), "precondition");
+    let planner = cwd.path().join("registry/agents/planner.md");
+    std::fs::write(&planner, "edited").unwrap();
+
+    let out = init(false);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("--force"),
+        "the refusal names the way through: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(std::fs::read_to_string(&planner).unwrap(), "edited");
+
+    assert_eq!(init(true).status.code(), Some(0));
+    assert_eq!(
+        registry_files(&cwd.path().join("registry")),
+        shipped_files()
+    );
+}
+
+/// Exactly one destination: `init` alone is a usage error that names both.
+#[test]
+fn config_init_takes_exactly_one_of_dir_and_push() {
+    let cwd = tempfile::tempdir().unwrap();
+    for args in [
+        &["config", "init"][..],
+        &["config", "init", "--dir", "x", "--push"][..],
+    ] {
+        let out = torii_without_a_database(cwd.path())
+            .args(args)
+            .output()
+            .expect("runs");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {err}");
+        assert!(
+            err.contains("--dir") && err.contains("--push"),
+            "{args:?}: {err}"
+        );
+    }
+    assert!(
+        std::fs::read_dir(cwd.path()).unwrap().next().is_none(),
+        "a usage error writes nothing"
+    );
+}
+
+/// `--push` writes the durable config, so unlike `--dir` it does need the database — and says
+/// which variable is missing.
+#[test]
+fn config_init_push_needs_the_database_and_names_the_variable() {
+    let cwd = tempfile::tempdir().unwrap();
+    let out = torii_without_a_database(cwd.path())
+        .args(["config", "init", "--push"])
+        .output()
+        .expect("runs");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("DATABASE_URL"), "{err}");
+}

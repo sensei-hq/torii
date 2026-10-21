@@ -281,7 +281,9 @@ node per org unit, `hard` or `soft` (Budgets & billing) — and the engine enfor
   to: the new cap less what the run has spent must fit their headroom (its own reservation
   counting as its own), or the raise is refused and nothing is written. Lowering is always
   allowed. A run submitted before AG-13 has no charge
-  and cannot be money-raised.
+  and cannot be money-raised. One raise of a run at a time: a second `run wake --budget-usd` of
+  the same run while the first is still moving its cap is refused (exit 2, nothing written) —
+  retry once the first has finished.
 - **Reserved.** The limit is a reservation: admitting a run adds it to `reserved` on every `hard`
   node it is charged to, under the node locks, so a second run (or a question) sees only the
   headroom the first left — two runs are never admitted the same dollars. As the run's spend is

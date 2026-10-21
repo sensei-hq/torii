@@ -262,15 +262,41 @@ type ChargeRow = (Vec<Uuid>, i64, Vec<Uuid>, i64, bool);
 /// A held per-run raise lock ([`RunCharges::try_lock_raise`]): while it is held no other
 /// `run wake --budget-usd` of the same run can move its money cap. Release it with
 /// [`release`](Self::release).
+///
+/// A session advisory lock on a DETACHED connection, as the drive lock is
+/// (`PgSchedulerStore::try_lock_run`): a pooled connection would keep the lock past its use,
+/// while dropping a detached one closes its session — a panic or a killed process frees the run.
 pub struct RaiseLock {
-    _run: RunId,
+    conn: Option<sqlx::PgConnection>,
+    key: (i32, i32),
 }
 
 impl RaiseLock {
     /// Give the lock back.
-    pub async fn release(self) -> Result<(), ChargeError> {
+    pub async fn release(mut self) -> Result<(), ChargeError> {
+        if let Some(mut conn) = self.conn.take() {
+            sqlx::query("select pg_advisory_unlock($1, $2)")
+                .bind(self.key.0)
+                .bind(self.key.1)
+                .execute(&mut conn)
+                .await?;
+        }
         Ok(())
     }
+}
+
+/// The raise lock's key: the run AND the tenant folded into 64 bits, as the drive lock's is, but
+/// as Postgres's TWO-`int4` advisory key — a lock space of its own (`pg_locks.objsubid` 2), apart
+/// from every single-`bigint` key (the drive lock's, `registry.bump_generation`'s), so a raise
+/// never contends with the run's drive. Lossy: a collision makes two runs' raises exclusive — a
+/// refused raise to retry, never an interleaving.
+fn raise_key(tenant: Uuid, run: RunId) -> (i32, i32) {
+    let fold = |id: Uuid| {
+        let bits = id.as_u128();
+        (bits >> 64) as u64 ^ (bits as u64)
+    };
+    let key = fold(run.0) ^ fold(tenant);
+    ((key >> 32) as u32 as i32, key as u32 as i32)
 }
 
 /// One tenant's run charges, over torii's database.
@@ -285,9 +311,24 @@ impl RunCharges {
         Self { pool, tenant }
     }
 
-    /// Take `run`'s raise lock without waiting: `None` when another raise of it holds it.
+    /// Take `run`'s raise lock without waiting: `None` when another raise of it holds it (G5-4).
+    /// `run wake --budget-usd` holds it from [`check_raise`](Self::check_raise) through
+    /// [`release_to_cap`](Self::release_to_cap), so one raise's release can never give back
+    /// another's increment before that one's cap is written.
     pub async fn try_lock_raise(&self, run: RunId) -> Result<Option<RaiseLock>, ChargeError> {
-        Ok(Some(RaiseLock { _run: run }))
+        // Acquire BEFORE locking, so a pool failure is an error, not "another raise holds it".
+        let mut conn = self.pool.acquire().await?.detach();
+        let key = raise_key(self.tenant, run);
+        let got: bool = sqlx::query_scalar("select pg_try_advisory_lock($1, $2)")
+            .bind(key.0)
+            .bind(key.1)
+            .fetch_one(&mut conn)
+            .await?;
+        // Not taken ⇒ the connection drops here, closing its session.
+        Ok(got.then(|| RaiseLock {
+            conn: Some(conn),
+            key,
+        }))
     }
 
     /// The issuer a run is submitted as: a `core.profiles` id that belongs to this tenant — by a

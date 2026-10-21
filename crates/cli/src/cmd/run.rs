@@ -2367,33 +2367,70 @@ pub async fn wake_charged(
             .1
             .is_some();
         if capped {
-            match c.charges.check_raise(journal, run, m.total_micro_usd).await {
-                Ok(()) => {}
-                Err(e @ (ChargeError::OverHeadroom { .. } | ChargeError::NotCharged(_))) => {
-                    return Ok(Outcome::precondition(format!(
-                        "not queued: {} — {e}. Nothing was written.",
-                        run.0
-                    )));
-                }
-                Err(e) => return Err(CliError::error(e.to_string())),
-            }
-            let out = wake(store, journal, run, now, budget).await;
-            // G2-4: the reservation follows the cap the journal now holds — a lowering that
-            // landed gives its difference back; a raise that did not land gives back the
-            // increment `check_raise` reserved for it. A failure here never hides the wake's own
-            // outcome: the next settle (a `worker serve` tick) brings the reservation to the cap
-            // in force (G4-3).
-            if let Err(e) = c.charges.release_to_cap(c.journal, run).await {
-                tracing::warn!(
-                    run = %run.0,
-                    "the run's reservation could not be brought to its money cap ({e}); the next \
-                     worker tick's settle does"
-                );
+            // G5-4: one raise of a run at a time, from its check through its release — another's
+            // release could otherwise give back this one's increment before its cap is written.
+            let Some(lock) = c
+                .charges
+                .try_lock_raise(run)
+                .await
+                .map_err(|e| CliError::error(e.to_string()))?
+            else {
+                return Ok(Outcome::precondition(format!(
+                    "not queued: {} — another raise of this run is in progress; retry once it \
+                     has finished. Nothing was written.",
+                    run.0
+                )));
+            };
+            let out =
+                raise_under_lock(c, store, journal, run, now, budget, m.total_micro_usd).await;
+            if let Err(e) = lock.release().await {
+                // Its detached session still closes when the lock drops, freeing the run.
+                tracing::warn!(run = %run.0, "the run's raise lock was not released ({e})");
             }
             return out;
         }
     }
     wake(store, journal, run, now, budget).await
+}
+
+/// [`wake_charged`]'s raise, while it holds the run's raise lock: check the move against the
+/// caps, wake (journaling the new cap), and bring the reservation to the cap in force.
+async fn raise_under_lock(
+    c: &Charging<'_>,
+    store: &dyn SchedulerStore,
+    journal: &dyn ExecutionJournal,
+    run: RunId,
+    now: DateTime<Utc>,
+    budget: RunBudget,
+    new_total_micro_usd: u64,
+) -> Result<Outcome, CliError> {
+    match c
+        .charges
+        .check_raise(journal, run, new_total_micro_usd)
+        .await
+    {
+        Ok(()) => {}
+        Err(e @ (ChargeError::OverHeadroom { .. } | ChargeError::NotCharged(_))) => {
+            return Ok(Outcome::precondition(format!(
+                "not queued: {} — {e}. Nothing was written.",
+                run.0
+            )));
+        }
+        Err(e) => return Err(CliError::error(e.to_string())),
+    }
+    let out = wake(store, journal, run, now, budget).await;
+    // G2-4: the reservation follows the cap the journal now holds — a lowering that landed gives
+    // its difference back; a raise that did not land gives back the increment `check_raise`
+    // reserved for it. A failure here never hides the wake's own outcome: the next settle (a
+    // `worker serve` tick) brings the reservation to the cap in force (G4-3).
+    if let Err(e) = c.charges.release_to_cap(c.journal, run).await {
+        tracing::warn!(
+            run = %run.0,
+            "the run's reservation could not be brought to its money cap ({e}); the next worker \
+             tick's settle does"
+        );
+    }
+    out
 }
 
 /// `pub(crate)` **only so `cmd::gate`'s tests can reuse four fixtures** — `now`,

@@ -2203,6 +2203,7 @@ pub async fn submit_charged(
         Ok(m) => m,
         Err(
             e @ (ChargeError::OverHeadroom { .. }
+            | ChargeError::NoHeadroom { .. }
             | ChargeError::NoBudgetNode
             | ChargeError::AlreadyScheduled(_)),
         ) => {

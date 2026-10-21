@@ -7759,6 +7759,7 @@ dependencies = [
  "chrono",
  "include_dir",
  "sensei-gateway",
+ "sensei-orchestrator",
  "sensei-orchestrator-core",
  "sensei-orchestrator-store",
  "serde",

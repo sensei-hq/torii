@@ -1,6 +1,6 @@
 -- RLS · orchestrator state (TM-6, torii#24; gateway epic #76 — "Gateway is a library; torii owns
 -- persistence", DECISIONS §11). registry.* (agent/skill/tool definitions + chain bindings) and
--- runs.* (schedule, journal, snapshots, blobs, blackboard) are PRIVILEGED: the torii worker writes
+-- runs.* (schedule, journal, snapshots, blobs, blackboard, run charges) are PRIVILEGED: the torii worker writes
 -- them as service_role (or as owner, filtering by tenant_id); `authenticated` may only read its own
 -- tenant's rows, for observability. Idempotent (drop+create).
 do $$
@@ -16,7 +16,8 @@ begin
     ('runs',     'journal_events'),
     ('runs',     'run_snapshots'),
     ('runs',     'cas_blobs'),
-    ('runs',     'context_refs')
+    ('runs',     'context_refs'),
+    ('runs',     'run_charges')
   ) as x(sch, tbl)
   loop
     execute format('alter table %I.%I enable row level security', r.sch, r.tbl);

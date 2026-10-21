@@ -23,7 +23,8 @@ begin
       ('registry','agents'), ('registry','skills'), ('registry','tools'),
       ('registry','chain_bindings'),
       ('runs','scheduled_runs'), ('runs','journal_events'), ('runs','run_snapshots'),
-      ('runs','cas_blobs'), ('runs','context_refs'), ('runs','runs')
+      ('runs','cas_blobs'), ('runs','context_refs'), ('runs','runs'),
+      ('runs','run_charges')
     ) as v(sch, tbl)
   loop
     if to_regclass(format('%I.%I', t.sch, t.tbl)) is null then
@@ -63,6 +64,10 @@ insert into runs.cas_blobs (tenant_id, digest, bytes) values
   ('99999999-9999-9999-9999-999999999999', 'd1', '\x00');
 insert into runs.context_refs (tenant_id, run_id, scope_kind, scope_id, ctx_key, ctx_ref) values
   ('99999999-9999-9999-9999-999999999999', 'aaaaaaaa-0000-0000-0000-000000000001', 'run', '', 'k', '{}');
+-- AG-13 (torii#49): which budget nodes a run is charged to, and how much of its spend is recorded.
+insert into runs.run_charges (tenant_id, run_id, issuer_profile_id, node_ids, limit_micro_usd) values
+  ('99999999-9999-9999-9999-999999999999', 'aaaaaaaa-0000-0000-0000-000000000001',
+   'cccccccc-cccc-cccc-cccc-cccccccccccc', '{}', 1000000);
 
 -- The same digest in two tenants is two rows: the CAS is per tenant, not shared.
 insert into runs.cas_blobs (tenant_id, digest, bytes) values
@@ -85,7 +90,8 @@ begin
      or exists (select 1 from runs.scheduled_runs where tenant_id = '99999999-9999-9999-9999-999999999999')
      or exists (select 1 from runs.journal_events where tenant_id = '99999999-9999-9999-9999-999999999999')
      or exists (select 1 from runs.cas_blobs where tenant_id = '99999999-9999-9999-9999-999999999999')
-     or exists (select 1 from runs.context_refs where tenant_id = '99999999-9999-9999-9999-999999999999') then
+     or exists (select 1 from runs.context_refs where tenant_id = '99999999-9999-9999-9999-999999999999')
+     or exists (select 1 from runs.run_charges where tenant_id = '99999999-9999-9999-9999-999999999999') then
     raise exception 'FAIL isolation: a tenant B run/registry row is visible to tenant A';
   end if;
   raise notice 'isolation OK';
@@ -109,6 +115,11 @@ begin
   begin
     update runs.scheduled_runs set status = 'cancelled';
     raise exception 'FAIL authz: authenticated updated runs.scheduled_runs';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    update runs.run_charges set recorded_micro_usd = 0;
+    raise exception 'FAIL authz: authenticated updated runs.run_charges';
   exception when insufficient_privilege then null;
   end;
   begin

@@ -292,6 +292,17 @@ it needs a screen.
 { runs: { runId, spent, cap, status }[], onRaiseCap }
 ```
 
+**Backed since AG-13 (torii#49, decision C5).** On Postgres every run is charged to the user who
+submits it (`TORII_USER` for the CLI): its money cap is that user's headroom — the tightest `hard`
+cap over their unit, their groups and every unit above — an explicit limit may only lower it, and a
+raise must fit the headroom of the nodes the run is charged to. The run's spend is recorded on
+those nodes (idempotently, by `run submit` when its drive returns and by `worker serve` after every
+tick), so the Budgets & billing tree is one number for questions and runs. All of it is
+`torii_core::run_budget::RunCharges` (`admit`, `settle`, `settle_pending`, `check_raise`) — the
+API's submit and raise call the same four. `onRaiseCap` must surface the refusal it can now get
+("exceeds the headroom of $X under unit Y"). The limit is not a reservation: concurrent runs on one
+node are each bounded, their sum is not.
+
 ---
 
 ## 7. What the code cannot back yet
@@ -306,6 +317,7 @@ Honest gaps between these screens and the engine, so nobody designs against a fi
 | 6.2 timeline | The journal is durable and complete, but there is no read API shaped for a timeline view. What a run PRODUCED is readable: `torii run results <id>` (AG-4, torii#33) returns each node's state and output — the executor's round checkpoint, with CAS refs resolved through the tenant's content store — from `torii_core::results::run_results`, the read the API will share. The ordered event timeline is still missing. |
 | 6.3 plan review | Plans are journaled; approving or rejecting one interactively is not a mechanism that exists. |
 | 6.4 interventions | Best-supported screen — `list-paused`, `signal`, `gate`, `agent`, `wake`, `cancel` all exist as commands. |
+| 6.5 budget and spend | Backed (AG-13): a run's money cap comes from the submitter's caps and its spend is recorded on their budget nodes. Missing: a per-node list of the runs charged to it (`runs.run_charges` holds it; nothing reads it out yet), and reserving a run's limit against the cap. |
 | planner quality | No longer a code or content gap: the five discovery tools are composed per run (gateway v0.11.0), and since AG-9 (torii#46) the shipped `planner` declares all five and the shipped `tools/*.json` define them (byte-for-byte the executables' specs). What remains is model quality — the defaults bind every role to the catalog's local chain. |
 
 **Revised assessment.** The default content is no longer absent (AG-9, torii#46):

@@ -117,6 +117,14 @@ impl Drop for Db {
             rt.block_on(async move {
                 use sqlx::Connection;
                 if let Ok(mut c) = sqlx::PgConnection::connect(&url).await {
+                    // Its users first (AG-13 issuers): a membership holds the tenant.
+                    let _ = sqlx::query(
+                        "delete from core.profiles where id in \
+                           (select profile_id from core.memberships where tenant_id = $1)",
+                    )
+                    .bind(tenant)
+                    .execute(&mut c)
+                    .await;
                     let _ = sqlx::query("delete from core.tenants where id = $1")
                         .bind(tenant)
                         .execute(&mut c)
@@ -2955,5 +2963,248 @@ async fn a_loop_gate_decided_in_another_process_resumes_and_converges() {
         vec!["ship".to_string()],
         "the drive that honoured the decision settled it durably, once, naming the option \
          it honoured"
+    );
+}
+
+/// AG-13: an issuer for `db`'s tenant — a user in a `hard`-capped team (`cap` dollars) under an
+/// uncapped org root. Returns `(user, team, root)`.
+async fn capped_issuer(db: &Db, cap: &str) -> (uuid::Uuid, uuid::Uuid, uuid::Uuid) {
+    let pool = db.pool().await;
+    let (user, team, root) = (
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+    );
+    sqlx::query(
+        "insert into core.unit_levels (tenant_id, level, label) \
+         select $1, l, 'L' || l from generate_series(0, 4) l",
+    )
+    .bind(db.tenant)
+    .execute(&pool)
+    .await
+    .unwrap();
+    for (unit, parent, level, name, cap) in [
+        (root, None, 0, "Org", None),
+        (team, Some(root), 2, "Team", Some(cap)),
+    ] {
+        sqlx::query(
+            "insert into core.org_units (tenant_id, id, parent_id, level, name) \
+             values ($1, $2, $3, $4, $5)",
+        )
+        .bind(db.tenant)
+        .bind(unit)
+        .bind(parent)
+        .bind(level)
+        .bind(name)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into governance.nodes (tenant_id, id, org_unit_id, cap_amount, modified_by) \
+             values ($1, $2, $2, $3::numeric, 'torii-e2e')",
+        )
+        .bind(db.tenant)
+        .bind(unit)
+        .bind(cap)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query("insert into core.profiles (id, display_name) values ($1, 'torii-e2e')")
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into core.memberships (profile_id, tenant_id, assigned_by) values ($1, $2, 't')",
+    )
+    .bind(user)
+    .bind(db.tenant)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into core.unit_members (tenant_id, unit_id, profile_id) values ($1, $2, $3)",
+    )
+    .bind(db.tenant)
+    .bind(team)
+    .bind(user)
+    .execute(&pool)
+    .await
+    .unwrap();
+    (user, team, root)
+}
+
+async fn node_spent(db: &Db, node: uuid::Uuid) -> String {
+    sqlx::query_scalar(
+        "select spent_amount::text from governance.nodes where tenant_id = $1 and id = $2",
+    )
+    .bind(db.tenant)
+    .bind(node)
+    .fetch_one(&db.pool().await)
+    .await
+    .unwrap()
+}
+
+/// AG-13 (#49), done-when: a run submitted by a user whose unit has $1 of headroom gets a limit of
+/// $1, the engine pauses it there, and the unit's budget node — and every node above it — records
+/// what the run spent. A raise past the headroom is refused; once finance raises the unit's cap
+/// the run's limit can follow, and the worker that finishes it records the rest. Postgres, per
+/// tenant.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+)]
+#[tokio::test]
+async fn a_run_is_limited_to_its_issuers_headroom_paused_there_and_its_spend_recorded_on_the_nodes()
+{
+    let Some(db) = Db::new().await else { return };
+    let (user, team, root) = capped_issuer(&db, "1").await;
+    let charges = torii_core::run_budget::RunCharges::new(db.pool().await, db.tenant);
+
+    // $1 per 1k tokens on both sides, 1500 tokens a call ⇒ every call costs $1.50.
+    const PER_CALL: u32 = 1_500;
+    const USD_PER_1K: f64 = 1.0;
+    let run = RunId(uuid::Uuid::new_v4());
+    let marker = run.0.to_string();
+    let (first, second) = (format!("{marker}#n1"), format!("{marker}#n2"));
+    let at = DateTime::<Utc>::from_timestamp(5_200_000, 0).unwrap();
+
+    // ---- Process A: submitted as the user, no explicit limit -------------------------
+    let (sched_a, calls_a) = fresh_priced_worker(&db, at, PER_CALL, USD_PER_1K).await;
+    let journal_a = PgJournal::new(db.pool().await, db.tenant);
+    let issuer = user.to_string();
+    let charging_a = torii::cmd::run::Charging {
+        charges: &charges,
+        journal: &journal_a,
+        user: Some(&issuer),
+    };
+    let submitted = torii::cmd::run::submit_charged(
+        Some(&charging_a),
+        &sched_a,
+        run,
+        two_node_graph(&marker),
+        orchestrator_core::RunBudget::default(),
+        torii::cmd::run::StoreLifetime::Durable,
+        || {},
+    )
+    .await
+    .expect("a money-paused run is not an error");
+    assert!(
+        submitted.text.starts_with("paused:") && submitted.text.contains("n2"),
+        "the engine pauses the run at its issuer's headroom: {}",
+        submitted.text
+    );
+    assert_eq!(
+        (calls_for(&calls_a, &first), calls_for(&calls_a, &second)),
+        (1, 0)
+    );
+    assert_eq!(
+        orchestrator::money_spend_of(&journal_a.load(run).await.unwrap()),
+        (1_500_000, Some(1_000_000)),
+        "the run's limit is the unit's $1 of headroom"
+    );
+    assert_eq!(
+        (node_spent(&db, team).await, node_spent(&db, root).await),
+        ("1.500000".to_string(), "1.500000".to_string()),
+        "the run's spend is on the unit's node and every node above it"
+    );
+
+    // ---- The operator raises it: past the (now exhausted) headroom is refused --------
+    let store_b = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
+    let journal_b = Arc::new(PgJournal::new(db.pool().await, db.tenant));
+    let charging_b = torii::cmd::run::Charging {
+        charges: &charges,
+        journal: journal_b.as_ref(),
+        user: None,
+    };
+    let queued_at = store_b.status(run).await.unwrap().unwrap().updated_at + Duration::seconds(600);
+    let money = |usd: &str| orchestrator_core::RunBudget {
+        tokens: None,
+        money: Some(orchestrator_core::MoneyBudget {
+            total_micro_usd: torii::cmd::run::parse_budget_usd(usd).unwrap(),
+        }),
+    };
+    let refused = torii::cmd::run::wake_charged(
+        Some(&charging_b),
+        store_b.as_ref(),
+        journal_b.as_ref(),
+        run,
+        queued_at,
+        money("2"),
+    )
+    .await
+    .expect("a refusal is an outcome");
+    assert_eq!(
+        refused.code,
+        torii::errors::EXIT_PRECONDITION,
+        "{}",
+        refused.text
+    );
+    assert!(
+        refused.text.contains("exceeds the headroom"),
+        "{}",
+        refused.text
+    );
+    assert_eq!(
+        orchestrator::money_spend_of(&journal_b.load(run).await.unwrap()).1,
+        Some(1_000_000),
+        "a refused raise writes nothing"
+    );
+
+    // ---- Finance raises the unit's cap to $5; the run's limit may follow --------------
+    sqlx::query("update governance.nodes set cap_amount = 5 where tenant_id = $1 and id = $2")
+        .bind(db.tenant)
+        .bind(team)
+        .execute(&db.pool().await)
+        .await
+        .unwrap();
+    let woken = torii::cmd::run::wake_charged(
+        Some(&charging_b),
+        store_b.as_ref(),
+        journal_b.as_ref(),
+        run,
+        queued_at,
+        money("4"),
+    )
+    .await
+    .expect("wake");
+    assert_eq!(woken.code, torii::errors::EXIT_OK, "{}", woken.text);
+
+    // ---- Process B: a worker finishes it and records the rest -------------------------
+    let (sched_b, calls_b) =
+        fresh_priced_worker(&db, queued_at + Duration::seconds(1), PER_CALL, USD_PER_1K).await;
+    let settling = torii::cmd::worker::Settling {
+        inner: &sched_b,
+        charging: &charging_b,
+    };
+    for _ in 0..16 {
+        let (_tx, rx) = tokio::sync::watch::channel(0u64);
+        torii::cmd::worker::serve(
+            &settling,
+            torii::cmd::worker::ServeOpts {
+                interval: std::time::Duration::from_millis(10),
+                once: true,
+            },
+            rx,
+        )
+        .await
+        .expect("one tick");
+        if store_b.status(run).await.unwrap().unwrap().status != RunStatus::Paused {
+            break;
+        }
+    }
+    assert_eq!(
+        store_b.status(run).await.unwrap().unwrap().status,
+        RunStatus::Completed
+    );
+    assert_eq!(
+        (calls_for(&calls_b, &first), calls_for(&calls_b, &second)),
+        (0, 1)
+    );
+    assert_eq!(
+        (node_spent(&db, team).await, node_spent(&db, root).await),
+        ("3.000000".to_string(), "3.000000".to_string()),
+        "the worker recorded the rest of the run's spend, once"
     );
 }

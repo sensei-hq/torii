@@ -1308,3 +1308,42 @@ async fn interleaved_cap_moves_leave_the_cap_in_force_fully_reserved() {
     );
     o.drop_all().await;
 }
+
+/// G5-1 (wave B re-review): a settle, a raise check and a release each hold the charge's row lock
+/// on one connection while the journal is read on another — so `TORII_POOL_SIZE`'s floor of two
+/// must be enough for every one of them (one connection times out; the CLI refuses it at boot).
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn a_two_connection_pool_settles_raises_and_releases() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
+    let two = torii_core::connect(&std::env::var("DATABASE_URL").unwrap(), 2)
+        .await
+        .expect("connect");
+    let c = RunCharges::new(two.clone(), o.tenant);
+    let j = PgJournal::new(two.clone(), o.tenant);
+    let run = RunId(Uuid::new_v4());
+    c.admit(run, u, Some(2 * DOLLAR)).await.unwrap();
+    priced_run(&j, run, 2 * DOLLAR, &[DOLLAR]).await;
+    let within = std::time::Duration::from_secs(10);
+    let settled = tokio::time::timeout(within, c.settle(&j, run)).await;
+    assert_eq!(settled.expect("settle hung").unwrap(), DOLLAR);
+    tokio::time::timeout(within, c.check_raise(&j, run, 3 * DOLLAR))
+        .await
+        .expect("check_raise hung")
+        .expect("a raise within the headroom");
+    tokio::time::timeout(within, commit_cap(&c, &j, run, 3 * DOLLAR))
+        .await
+        .expect("release_to_cap hung");
+    assert_eq!(
+        o.reserved(o.team_a).await,
+        "2.000000",
+        "$3 cap less $1 spent"
+    );
+    two.close().await;
+    o.drop_all().await;
+}

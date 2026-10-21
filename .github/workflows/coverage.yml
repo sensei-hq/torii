@@ -90,7 +90,7 @@ jobs:
     env:
       # The dbd release torii's schema is applied with (crates.io `dbd-cli`); bootstrap.sh refuses
       # any other version on PATH.
-      DBD_VERSION: 0.24.1
+      DBD_VERSION: 0.27.5
       # The service below. supabase_admin is the image's superuser, as on the local scratch.
       DATABASE_URL: postgresql://supabase_admin:postgres@localhost:5432/postgres
     services:

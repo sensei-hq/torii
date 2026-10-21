@@ -935,3 +935,57 @@ async fn a_retry_of_a_run_whose_enqueue_never_happened_re_admits_over_the_orphan
     assert_eq!(o.reserved(o.team_a).await, "2.000000");
     o.drop_all().await;
 }
+
+/// G1-3 (wave B review): `cancel` can flip a run that is still being driven (`waking`), and that
+/// drive keeps spending until it ends. Its charge must not be closed while the drive may still
+/// run: the spend it makes after the cancel is recorded, and the reservation is released only
+/// once the run truly is final.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn spend_a_cancelled_runs_live_drive_makes_after_the_cancel_is_still_recorded() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
+    let c = o.charges();
+    let j = o.journal();
+    let sched = PgSchedulerStore::new(pool.clone(), o.tenant);
+    let run = RunId(Uuid::new_v4());
+    let limit = c.admit(run, u, None).await.unwrap().total_micro_usd;
+    sched
+        .enqueue(run, &Graph { nodes: vec![] }, chrono::Utc::now())
+        .await
+        .unwrap();
+    priced_run(&j, run, limit, &[DOLLAR]).await;
+    sched.cancel(run).await.unwrap(); // … while the drive is still running
+
+    assert_eq!(c.settle_pending(&j).await.unwrap(), 1);
+    assert_eq!(o.spent(o.org).await, "1.000000");
+    assert_eq!(
+        o.reserved(o.team_a).await,
+        "3.000000",
+        "the drive may still spend: its reservation is held"
+    );
+
+    // The drive spends once more, then ends — its record is a no-op on a cancelled row.
+    spend(&j, run, DOLLAR).await;
+    sched
+        .record_terminal(run, RunStatus::Completed, None)
+        .await
+        .unwrap();
+    c.settle_pending(&j).await.unwrap();
+    assert_eq!(
+        o.spent(o.org).await,
+        "2.000000",
+        "the org's spend equals the run's journal spend"
+    );
+    assert_eq!(
+        o.reserved(o.team_a).await,
+        "0.000000",
+        "released once final"
+    );
+    assert_eq!(c.settle_pending(&j).await.unwrap(), 0, "and closed");
+    o.drop_all().await;
+}

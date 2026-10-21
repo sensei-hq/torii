@@ -102,8 +102,9 @@ enum RunAction {
         /// TORII_BACKEND=memory there are no caps and this flag alone is the cap.
         ///
         /// Ledgered from the cost the gateway prices each call at, so every model on a chain
-        /// this run uses must declare pricing (an explicit zero for a free or local model):
-        /// under a money cap an unpriced model is refused. Independent of --budget-tokens;
+        /// this run can use must declare pricing (an explicit zero for a free or local model):
+        /// a graph that can reach an unpriced one is refused before it is submitted, naming the
+        /// chain and the model. Independent of --budget-tokens;
         /// give either, both or neither. Spend is shown by `run status`, and a run that stops
         /// at its cap is raised with `run wake --budget-usd`. Only a run SUBMITTED with a
         /// money cap has one — a later raise cannot introduce it.
@@ -795,15 +796,27 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                     light,
                     scheduler,
                     events,
+                    registry,
+                    gateway_pricing,
+                    gateway_source,
                     ..
                 } = boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
-                let log = boot::log_run_events(events);
                 let budget = orchestrator_core::RunBudget {
                     tokens: budget_tokens
                         .map(|total_tokens| orchestrator_core::TokenBudget { total_tokens }),
                     money: budget_usd
                         .map(|total_micro_usd| orchestrator_core::MoneyBudget { total_micro_usd }),
                 };
+                // #55: a money cap the gateway could not meter is refused here, before
+                // anything is submitted — against the registry this run would pin.
+                cmd::run::require_priced_for_money_cap(
+                    &budget,
+                    &g,
+                    &registry.handle().snapshot().0,
+                    &gateway_pricing,
+                    &gateway_source,
+                )?;
+                let log = boot::log_run_events(events);
                 // Print the id BEFORE driving: an operator who loses the terminal
                 // must still be able to find the run. `submit` calls this AFTER its
                 // duplicate pre-check, so a rejected submit no longer announces an

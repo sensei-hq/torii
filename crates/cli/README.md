@@ -242,8 +242,14 @@ run`, `null` under `--json`. Light tier: no gateway config, no credentials.
 neither. A run that stops at a cap pauses, `run status` shows the spend against it, and `run wake
 --budget-tokens`/`--budget-usd` moves the cap before re-queueing. A money raise only moves a cap the
 run was SUBMITTED with — on a run without one it is refused and nothing is written. Under a money
-cap every model on the chains the run uses must declare pricing (an explicit zero for a free or
-local model); an unpriced one is refused.
+cap every model on the chains the run can use must declare pricing (an explicit zero for a free or
+local model): `run submit --budget-usd` checks that before anything is submitted and refuses
+(exit `1`, nothing submitted) naming each chain, who uses it and its unpriced models. "Can use"
+is the graph's `ModelCall` chains, the chain each model-backed agent it names resolves to, and —
+when the graph has an `Expand` anywhere — every route of every model-backed agent in the
+registry, since a plan may run any of them. A chain only a planned `ModelCall` names is still
+refused by the engine at call time. `config push` does not check pricing: an unpriced model is
+fine for every run without a money cap.
 
 **Runs are charged to torii's caps (AG-13, Postgres).** torii configures the caps — one budget
 node per org unit, `hard` or `soft` (Budgets & billing) — and the engine enforces a run's limit:
@@ -278,6 +284,17 @@ with `run tool approve|reject <id> --call <effect_id>`. A call past its deadline
 or already settled is refused before anything is written. An escalated question shows its current
 holder (`agent (escalated to <agent>):`) and that hop's deadline, and is answered with `run agent
 answer` as before. `--as` on every verb is attribution, not authentication.
+
+**When an answer half-lands.** `run signal`, `run gate decide`, `run agent answer` and `run tool
+approve|reject` journal the answer first, then queue the wake, then read both back. A fault after
+the answer is journaled never prints a bare error — the answer is durable either way — and the
+first word says how far it got (exit `2` for both):
+
+- `not queued: …` — the wake itself failed. The answer is on the journal but nothing will read it
+  until the run is woken: run `torii run wake <id>`.
+- `wake sent: …` — the wake went through and only reading the outcome back failed, so the run is
+  probably queued already (or a worker has picked it up). Check `torii run status <id>`; do not
+  wake it again on the strength of this message.
 
 Exit codes: `0` ok · `1` error, including a run that executed and failed · `2` not-found,
 precondition-not-met, or a result printable but not the unqualified success you asked for (among
@@ -324,3 +341,9 @@ With `DATABASE_URL` pointing at a torii database (schema applied **and** seeded 
 bind the catalog's `chat` chain), every test runs: each creates a tenant of its own and removes it
 afterwards, so they run in parallel with no shared lock. `tests/postgres_backend.rs` drives the real
 binary end to end; `tests/e2e_pg.rs` the cross-process operator loop.
+
+CI runs both halves (`.github/workflows/coverage.yml`): `rust-tests` with no database, and
+`rust-tests-db` against a `supabase/postgres` service with the schema, seeds and RLS policies
+applied by `database/ci/bootstrap.sh` (pinned `dbd`), followed by the SQL suite
+`database/tests/run.sh`. To reproduce that job locally against a throwaway container, follow the
+recipe at the top of `database/ci/bootstrap.sh`.

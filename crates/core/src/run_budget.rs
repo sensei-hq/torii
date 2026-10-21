@@ -3,7 +3,8 @@
 //!
 //! torii configures the caps — `governance.nodes`, one per org unit, `hard` or `soft` — and the
 //! engine enforces a run's limit (`RunBudget.money`: the run pauses when it is reached and resumes
-//! when it is raised). This module is the torii half, shared by `torii run submit` and the API:
+//! when it is raised). This module is the torii half — called by `torii run submit`, `run wake`
+//! and `worker serve`; the API should call it too, but no route does yet:
 //!
 //! - **Who** — [`RunCharges::resolve_issuer`]: the operator a run is submitted as (a
 //!   `core.profiles` id), who must belong to the tenant.

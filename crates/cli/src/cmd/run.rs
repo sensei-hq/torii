@@ -2218,6 +2218,20 @@ pub async fn submit_charged(
         ..budget
     };
     let out = submit(scheduler, run, graph, budget, lifetime, announce).await;
+    // G1-2: a submit that failed before its `enqueue` committed leaves a charge (and a reservation)
+    // on a run that does not exist; drop it, so a retry of this --run-id is not refused and the
+    // issuer's headroom is not held. A charge whose run IS scheduled is left alone.
+    if let Err(e) = &out
+        && let Err(cleanup) = c.charges.abandon(run).await
+    {
+        return Err(CliError::error(format!(
+            "{}\nAND the run's budget charge could not be cleaned up ({cleanup}): it still \
+                 reserves its limit on the issuer's budget nodes. Submitting the same --run-id \
+                 again as the same {} releases it.",
+            e.message,
+            crate::boot::ENV_USER
+        )));
+    }
     // Whatever the drive ended in — paused, failed or completed — what it spent is recorded on
     // the issuer's nodes now. A failure here loses nothing: the journal holds the spend and the
     // next `worker serve` tick records it (`RunCharges::settle_pending`).

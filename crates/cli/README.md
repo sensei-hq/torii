@@ -279,7 +279,9 @@ node per org unit, `hard` or `soft` (Budgets & billing) — and the engine enfor
   headroom the first left — two runs are never admitted the same dollars. As the run's spend is
   recorded it takes its reservation's place; when the run ends, what it did not spend is released.
   A raise reserves only its increment, a lowering releases the difference. A paused run keeps its
-  reservation until it ends or is lowered.
+  reservation until it ends or is lowered. A submit that fails before its run is scheduled drops
+  its charge and releases the reservation, and a retry of the same `--run-id` by the same user
+  is admitted afresh.
 - Every Postgres run now carries a money limit, so its model calls run one at a time, as any
   budgeted run's do (a wide `Map` is slower than an unbudgeted one).
 

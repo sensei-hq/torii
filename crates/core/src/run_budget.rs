@@ -215,6 +215,24 @@ fn as_bigint(micro: u64) -> i64 {
     i64::try_from(micro).unwrap_or(i64::MAX)
 }
 
+/// Delete `run`'s charge row and release the `held` micro-dollars it reserved on `reserve` (the
+/// caller holds the row and node locks).
+async fn drop_charge(
+    conn: &mut sqlx::PgConnection,
+    tenant: Uuid,
+    run: RunId,
+    reserve: &[Uuid],
+    held: i64,
+) -> Result<(), ChargeError> {
+    move_reservation(&mut *conn, tenant, reserve, -held.max(0)).await?;
+    sqlx::query("delete from runs.run_charges where tenant_id = $1 and run_id = $2")
+        .bind(tenant)
+        .bind(run.0)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
 /// One tenant's run charges, over torii's database.
 #[derive(Clone)]
 pub struct RunCharges {
@@ -356,6 +374,23 @@ impl RunCharges {
         if scheduled {
             return Err(ChargeError::AlreadyScheduled(run));
         }
+        // A charge with no schedule row is an orphan: its submit died before `enqueue` (a store
+        // fault, Ctrl-C). The same issuer's retry takes it over — releasing its reservation —
+        // rather than finding the run id "already" taken; another issuer's is not theirs to take.
+        let orphan: Option<(Uuid, Vec<Uuid>, i64)> = sqlx::query_as(
+            "select issuer_profile_id, reserve_node_ids, reserved_micro_usd from runs.run_charges \
+              where tenant_id = $1 and run_id = $2 for update",
+        )
+        .bind(self.tenant)
+        .bind(run.0)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if orphan
+            .as_ref()
+            .is_some_and(|(owner, _, _)| *owner != issuer)
+        {
+            return Err(ChargeError::AlreadyScheduled(run));
+        }
         let ids: Vec<Uuid> = self
             .issuer_nodes(&mut tx, issuer)
             .await?
@@ -365,8 +400,17 @@ impl RunCharges {
         if ids.is_empty() {
             return Err(ChargeError::NoBudgetNode);
         }
-        // Under the locks a second statement reads what every earlier admission committed.
-        lock_nodes(&mut tx, self.tenant, &ids).await?;
+        // Under the locks a second statement reads what every earlier admission committed. The
+        // orphan's nodes are locked in the same (id-ordered) statement, so no two admissions can
+        // take them in different orders.
+        let mut locked = ids.clone();
+        if let Some((_, reserve, _)) = &orphan {
+            locked.extend(reserve.iter().filter(|id| !ids.contains(id)));
+        }
+        lock_nodes(&mut tx, self.tenant, &locked).await?;
+        if let Some((_, reserve, held)) = &orphan {
+            drop_charge(&mut tx, self.tenant, run, reserve, *held).await?;
+        }
         let rows = self.nodes(&mut tx, &ids, &[], 0).await?;
         let reserve: Vec<Uuid> = rows
             .iter()
@@ -421,6 +465,33 @@ impl RunCharges {
         Ok(MoneyBudget {
             total_micro_usd: limit,
         })
+    }
+
+    /// Drop `run`'s charge if its submit never reached `enqueue` — no schedule row exists —
+    /// releasing its reservation. Returns whether one was dropped. A charge whose run IS
+    /// scheduled is never touched: its spend is still to be recorded. `run submit` calls this
+    /// whenever `submit` fails, so a failed submit leaves neither an orphan charge nor a held
+    /// reservation behind.
+    pub async fn abandon(&self, run: RunId) -> Result<bool, ChargeError> {
+        let mut tx = self.pool.begin().await?;
+        let orphan: Option<(Vec<Uuid>, i64)> = sqlx::query_as(
+            "select c.reserve_node_ids, c.reserved_micro_usd from runs.run_charges c \
+              where c.tenant_id = $1 and c.run_id = $2 \
+                and not exists (select 1 from runs.scheduled_runs sr \
+                                 where sr.tenant_id = c.tenant_id and sr.run_id = c.run_id) \
+              for update",
+        )
+        .bind(self.tenant)
+        .bind(run.0)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((reserve, held)) = orphan else {
+            return Ok(false);
+        };
+        lock_nodes(&mut tx, self.tenant, &reserve).await?;
+        drop_charge(&mut tx, self.tenant, run, &reserve, held).await?;
+        tx.commit().await?;
+        Ok(true)
     }
 
     /// Record `run`'s spend so far on every node it is charged to — only what is not recorded yet.

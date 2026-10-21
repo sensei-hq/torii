@@ -283,6 +283,13 @@ difference between a system that pauses safely and one a human can unblock.
   onSignal, onGate, onAnswer, onCancel, onWake }
 ```
 
+An answer can half-land, and the screen must say which half. Every answering verb journals the
+answer, then queues the wake, then reads both back; a fault after the journal write is reported,
+never raised, because the answer is already durable. `not queued` means the wake failed — offer
+`onWake`. `wake sent` means the wake went through and only the read-back failed — the run is
+probably queued or already being driven, so show it as delivered-pending and send the user to the
+run's status, not to wake it again (torii#55).
+
 ### 6.5 Budget and spend
 Token spend per run and against a cap, with the pause-on-exhaustion state surfaced. A budgeted run
 pauses durably when it hits its cap and can be resumed with a raised one — that is a workflow, and
@@ -302,6 +309,13 @@ tick), so the Budgets & billing tree is one number for questions and runs. All o
 API's submit and raise call the same four. `onRaiseCap` must surface the refusal it can now get
 ("exceeds the headroom of $X under unit Y"). The limit is not a reservation: concurrent runs on one
 node are each bounded, their sum is not.
+
+A money cap needs a price for every model the run can reach. `torii_core::pricing::
+unpriced_chains(graph, registry, gateway_config)` returns each reachable chain that cannot be
+priced, who uses it and why (its unpriced models, no defined model, or an unknown chain). The
+CLI's `run submit --budget-usd` refuses on it before submitting (torii#55); the API's submit
+should call the same function, so the submit screen can say which model needs a price before
+the user commits a cap.
 
 ---
 

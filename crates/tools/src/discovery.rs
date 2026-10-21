@@ -78,18 +78,21 @@ mod tests {
 
     async fn pool() -> PgPool {
         let url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgresql://postgres:postgres@127.0.0.1:55322/postgres".into());
+            .expect("DATABASE_URL (these tests are ignored without it)");
         PgPoolOptions::new()
             .max_connections(2)
             .connect(&url)
             .await
-            .expect("connect local Supabase (55322)")
+            .expect("connect to $DATABASE_URL")
     }
 
     /// Discovery upserts the discovered tools active, and a later discovery that no longer lists
     /// a tool deactivates it (soft) while keeping the still-present ones active.
     #[tokio::test]
-    #[ignore = "requires local Supabase (55322)"]
+    #[cfg_attr(
+        not(have_database_url),
+        ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+    )]
     async fn discovery_upserts_then_reconciles_removed_tools() {
         let pool = pool().await;
         let tenant = Uuid::new_v4();

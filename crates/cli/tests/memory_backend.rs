@@ -402,3 +402,108 @@ async fn a_provider_429_does_not_exit_0_from_run_submit_on_the_memory_backend() 
         "stdout: {stdout}\nstderr: {stderr}"
     );
 }
+
+/// #55 (AG-12): a money cap needs a price for every model a chain the graph can use may land
+/// on — the gateway refuses an unpriced one mid-run ("unpriced model call"), after the run was
+/// submitted. `run submit --budget-usd` refuses that UP FRONT, before anything is submitted,
+/// naming the chain and the model, and saying what fixes it.
+#[test]
+fn run_submit_with_a_money_cap_refuses_a_graph_whose_chain_has_an_unpriced_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let (reg, _, _) = fixtures(dir.path());
+    let gw = dir.path().join("gateway-unpriced.json");
+    std::fs::write(
+        &gw,
+        r#"{"routers":{"ollama":{"url":"http://127.0.0.1:11434"}},
+            "models":{"local-llama":{"id":"local-llama","provider":"ollama",
+                "capabilities":["text_chat"],"context_window":8192,"max_output_tokens":1024}},
+            "chains":{"c":{"id":"c","capability":"text_chat",
+                "models":[{"model":"local-llama","router":"ollama","priority":1}],
+                "fallback_triggers":[]}}}"#,
+    )
+    .unwrap();
+    let graph = dir.path().join("agent-graph.json");
+    let g = Graph {
+        nodes: vec![Node {
+            id: NodeId("research".into()),
+            kind: NodeKind::Agent {
+                agent: orchestrator_core::AgentRef("researcher".into()),
+                input: serde_json::json!("go"),
+                phase: None,
+            },
+            deps: vec![],
+        }],
+    };
+    std::fs::write(&graph, serde_json::to_string(&g).unwrap()).unwrap();
+
+    let out = torii()
+        .env("TORII_BACKEND", "memory")
+        .env("TORII_REGISTRY_DIR", &reg)
+        .env("TORII_FENCE_VERSION", "v1")
+        .args(["run", "submit", "--budget-usd", "1", "--graph"])
+        .arg(&graph)
+        .arg("--gateway-config")
+        .arg(&gw)
+        .output()
+        .expect("spawn torii");
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        !stdout.contains("submitted"),
+        "refused BEFORE anything is submitted: {stdout}\nstderr: {stderr}"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("--budget-usd")
+            && stderr.contains("chain \"c\"")
+            && stderr.contains("local-llama")
+            && stderr.contains("agent \"researcher\"")
+            && stderr.contains("pricing"),
+        "names the cap, the chain, the model, who uses it, and the fix: {stderr}"
+    );
+}
+
+/// #55: the check is about the chains THIS graph can use — an unpriced chain the graph never
+/// reaches does not block a money cap. The graph here only waits for a person.
+#[test]
+fn run_submit_with_a_money_cap_ignores_an_unpriced_chain_the_graph_cannot_reach() {
+    let dir = tempfile::tempdir().unwrap();
+    let (reg, _, graph) = fixtures(dir.path());
+    let gw = dir.path().join("gateway-unpriced.json");
+    std::fs::write(
+        &gw,
+        r#"{"routers":{"ollama":{"url":"http://127.0.0.1:11434"}},
+            "models":{"local-llama":{"id":"local-llama","provider":"ollama",
+                "capabilities":["text_chat"],"context_window":8192,"max_output_tokens":1024}},
+            "chains":{"c":{"id":"c","capability":"text_chat",
+                "models":[{"model":"local-llama","router":"ollama","priority":1}],
+                "fallback_triggers":[]}}}"#,
+    )
+    .unwrap();
+
+    let out = torii()
+        .env("TORII_BACKEND", "memory")
+        .env("TORII_REGISTRY_DIR", &reg)
+        .env("TORII_FENCE_VERSION", "v1")
+        .args(["run", "submit", "--budget-usd", "1", "--graph"])
+        .arg(&graph)
+        .arg("--gateway-config")
+        .arg(&gw)
+        .output()
+        .expect("spawn torii");
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        stdout.contains("submitted: ") && stdout.contains("paused: "),
+        "an AwaitSignal-only graph uses no chain, so the cap is accepted: {stdout}\nstderr: \
+         {stderr}"
+    );
+}

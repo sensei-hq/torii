@@ -3522,6 +3522,13 @@ pub(crate) mod tests {
             "must say the run has no money cap to move and what to do instead: {}",
             out.text
         );
+        // Wave B review D1: the remedy must be true per backend — on Postgres every new run is
+        // money-capped without --budget-usd, so "submit with --budget-usd" is memory-only advice.
+        assert!(
+            out.text.contains("TORII_BACKEND=memory") && out.text.contains("Postgres"),
+            "the remedy must say what a new run needs on each backend: {}",
+            out.text
+        );
         assert_eq!(
             journal.load(run).await.unwrap().len(),
             before,

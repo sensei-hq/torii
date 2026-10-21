@@ -243,13 +243,15 @@ neither. A run that stops at a cap pauses, `run status` shows the spend against 
 --budget-tokens`/`--budget-usd` moves the cap before re-queueing. A money raise only moves a cap the
 run was SUBMITTED with — on a run without one it is refused and nothing is written. Under a money
 cap every model on the chains the run can use must declare pricing (an explicit zero for a free or
-local model): `run submit --budget-usd` checks that before anything is submitted and refuses
-(exit `1`, nothing submitted) naming each chain, who uses it and its unpriced models. "Can use"
+local model): `run submit` checks that before anything is submitted — under `--budget-usd` on the
+memory backend, and always on Postgres, where every run is capped by its issuer's headroom — and
+refuses (exit `1`, nothing submitted, no charge left) naming each chain, who uses it and its
+unpriced models. "Can use"
 is the graph's `ModelCall` chains, the chain each model-backed agent it names resolves to, and —
 when the graph has an `Expand` anywhere — every route of every model-backed agent in the
 registry, since a plan may run any of them. A chain only a planned `ModelCall` names is still
 refused by the engine at call time. `config push` does not check pricing: an unpriced model is
-fine for every run without a money cap.
+fine for every memory-backend run without `--budget-usd`.
 
 **Runs are charged to torii's caps (AG-13, Postgres).** torii configures the caps — one budget
 node per org unit, `hard` or `soft` (Budgets & billing) — and the engine enforces a run's limit:
@@ -279,7 +281,8 @@ node per org unit, `hard` or `soft` (Budgets & billing) — and the engine enfor
   node it is charged to, under the node locks, so a second run (or a question) sees only the
   headroom the first left — two runs are never admitted the same dollars. As the run's spend is
   recorded it takes its reservation's place; when the run ends, what it did not spend is released.
-  A raise reserves only its increment, a lowering releases the difference. A paused run keeps its
+  A raise reserves only its increment, and gives it back if the raise then fails to be written; a
+  lowering releases the difference once the lower cap is written. A paused run keeps its
   reservation until it ends or is lowered. A submit that fails before its run is scheduled drops
   its charge and releases the reservation, and a retry of the same `--run-id` by the same user
   is admitted afresh.

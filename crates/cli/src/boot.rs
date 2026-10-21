@@ -1350,6 +1350,18 @@ mod tests {
         assert!(err.message.contains(ENV_POOL_SIZE), "{}", err.message);
     }
 
+    /// G5-1: a settle holds its `run_charges` row lock inside a transaction while it reads the
+    /// journal over a second connection of the same pool, so a one-connection pool waits out
+    /// sqlx's acquire timeout on every settle, release and raise. Two is the floor.
+    #[test]
+    fn a_pool_size_of_one_is_rejected_naming_why() {
+        let err = parse_pool_size("1").expect_err("a one-connection pool must be refused");
+        assert!(err.contains(ENV_POOL_SIZE), "{err}");
+        assert!(err.contains("at least 2"), "{err}");
+        assert!(err.contains("row lock"), "{err}");
+        assert_eq!(parse_pool_size("2"), Ok(2));
+    }
+
     #[test]
     fn an_unparseable_pool_size_is_rejected() {
         let err = env_config_from(getter(&[

@@ -308,7 +308,9 @@ tick), so the Budgets & billing tree is one number for questions and runs. All o
 `torii_core::run_budget::RunCharges` (`admit`, `abandon`, `settle`, `settle_pending`,
 `check_raise`, `release_to_cap`) — the API's submit and raise call the same functions. A raise is
 `check_raise` (which only reserves), then the cap write, then `release_to_cap` whether the write
-landed or not, so a lowering never releases before it is committed. `onRaiseCap` must surface the refusal it can now get
+landed or not, so a lowering never releases before it is committed; `release_to_cap` and every
+settle bring an open charge's reservation to what the cap in force still leaves the run, so a lost
+release, or two cap moves interleaved, are reconciled. `onRaiseCap` must surface the refusal it can now get
 ("exceeds the headroom of $X under unit Y"). The limit is a reservation: an admitted run's limit
 is held in the nodes' `reserved_amount` until its spend replaces it or it ends, so concurrent runs
 on one node can never together be admitted more than its headroom.

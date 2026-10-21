@@ -18,10 +18,12 @@
 //!   headroom.
 //! - **Recorded back** — [`RunCharges::settle`]: the run's spend, folded from its journal with the
 //!   engine's own fold, is added to every charged node, idempotently, and converts as much of the
-//!   reservation into spend; the final settle releases what is left of it.
+//!   reservation into spend; an open charge's reservation is kept at what the money cap in force
+//!   still leaves the run (`cap − recorded`), and the final settle releases what is left of it.
 //! - **Raised** — [`RunCharges::check_raise`]: a paused run's new limit goes through the same cap
-//!   check against the nodes it is charged to, reserving only the increment (a lowering releases
-//!   the difference).
+//!   check against the nodes it is charged to, reserving only the increment; once the move is
+//!   written, [`RunCharges::release_to_cap`] brings the reservation to the cap in force (a
+//!   lowering releases the difference).
 
 use crate::stores::PgSchedulerStore;
 use orchestrator_core::{ExecutionJournal, MoneyBudget, RunId, SchedulerStore, MICRO_USD_PER_USD};
@@ -224,6 +226,16 @@ fn as_bigint(micro: u64) -> i64 {
     i64::try_from(micro).unwrap_or(i64::MAX)
 }
 
+/// What an open charge's reservation must be under the money cap in force: `cap − recorded`,
+/// never below zero (a run past its cap holds nothing). `None` when there is nothing to reconcile
+/// to — no hard-capped node is reserved on (`reserve` empty), or the journal names no cap yet.
+fn reservation_for(reserve: &[Uuid], cap: Option<u64>, recorded: u64) -> Option<u64> {
+    if reserve.is_empty() {
+        return None;
+    }
+    cap.map(|cap| cap.saturating_sub(recorded))
+}
+
 /// Delete `run`'s charge row and release the `held` micro-dollars it reserved on `reserve` (the
 /// caller holds the row and node locks).
 async fn drop_charge(
@@ -241,6 +253,10 @@ async fn drop_charge(
         .await?;
     Ok(())
 }
+
+/// A locked `runs.run_charges` row, as a settle reads it: `node_ids`, `recorded_micro_usd`,
+/// `reserve_node_ids`, `reserved_micro_usd`, `settled`.
+type ChargeRow = (Vec<Uuid>, i64, Vec<Uuid>, i64, bool);
 
 /// One tenant's run charges, over torii's database.
 #[derive(Clone)]
@@ -520,10 +536,26 @@ impl RunCharges {
     /// call twice. The recorded spend converts as much of the run's reservation (reserved −=
     /// delta, never below zero); a terminal run's charge is closed once its final spend is
     /// recorded, releasing what is left of the reservation.
+    ///
+    /// G4-3: an open charge's reservation is also brought to what the money cap in force still
+    /// leaves the run (see [`record`](Self::record)), so a cap move whose `release_to_cap` was
+    /// lost is repaired by the next settle.
     pub async fn settle(
         &self,
         journal: &dyn ExecutionJournal,
         run: RunId,
+    ) -> Result<u64, ChargeError> {
+        self.settle_with(journal, run, true).await
+    }
+
+    /// [`settle`](Self::settle); with `reconcile` false the reservation only converts into spend
+    /// and is never brought to the cap in force — what `check_raise` needs, since another move of
+    /// the same run may have reserved an increment whose cap is not journaled yet.
+    async fn settle_with(
+        &self,
+        journal: &dyn ExecutionJournal,
+        run: RunId,
+        reconcile: bool,
     ) -> Result<u64, ChargeError> {
         // The schedule row BEFORE the journal: a terminal status read here means the journal read
         // after it holds the run's final spend, and an `updated_at` that moves after this read
@@ -561,7 +593,7 @@ impl RunCharges {
             _ => false,
         };
         let settled = self
-            .record(journal, run, schedule.map(|s| s.1), terminal)
+            .record(journal, run, schedule.map(|s| s.1), terminal, reconcile)
             .await;
         if let Some(lock) = drive_lock {
             lock.release()
@@ -573,22 +605,22 @@ impl RunCharges {
 
     /// The body of [`settle`](Self::settle): fold `run`'s journal and record what is new, closing
     /// the charge when `terminal`.
+    ///
+    /// G4-3/G4-4: the journal is read AFTER the charge row is locked, and with `reconcile` the
+    /// reservation is set to what the cap in force (that same fold) still leaves the run —
+    /// `cap − recorded`, released or re-reserved ([`reservation_for`]) — so a lost
+    /// `release_to_cap` is repaired by the next settle.
     async fn record(
         &self,
         journal: &dyn ExecutionJournal,
         run: RunId,
         seen: Option<chrono::DateTime<chrono::Utc>>,
         terminal: bool,
+        reconcile: bool,
     ) -> Result<u64, ChargeError> {
-        let events = journal
-            .load(run)
-            .await
-            .map_err(|e| ChargeError::Journal(e.to_string()))?;
-        let (spent, _) = orchestrator::money_spend_of(&events);
-
         let mut tx = self.pool.begin().await?;
-        let charge: Option<(Vec<Uuid>, i64, Vec<Uuid>, i64)> = sqlx::query_as(
-            "select node_ids, recorded_micro_usd, reserve_node_ids, reserved_micro_usd \
+        let charge: Option<ChargeRow> = sqlx::query_as(
+            "select node_ids, recorded_micro_usd, reserve_node_ids, reserved_micro_usd, settled \
                from runs.run_charges \
               where tenant_id = $1 and run_id = $2 for update",
         )
@@ -596,20 +628,35 @@ impl RunCharges {
         .bind(run.0)
         .fetch_optional(&mut *tx)
         .await?;
-        let Some((nodes, recorded, reserve, held)) = charge else {
+        let Some((nodes, recorded, reserve, held, settled)) = charge else {
             return Ok(0);
         };
-        let delta = spent.saturating_sub(recorded.max(0) as u64);
+        let events = journal
+            .load(run)
+            .await
+            .map_err(|e| ChargeError::Journal(e.to_string()))?;
+        let (spent, cap) = orchestrator::money_spend_of(&events);
+        let recorded = recorded.max(0) as u64;
+        let delta = spent.saturating_sub(recorded);
         let held = held.max(0) as u64;
-        // The spend takes its own reservation's place; the final settle frees the remainder.
-        let converted = delta.min(held);
-        let freed = if terminal { held } else { converted };
-        if delta > 0 || freed > 0 {
+        // The final settle frees what is left; otherwise the reservation is what the cap in force
+        // still leaves the run — or, before the journal names a cap, the spend takes its own
+        // reservation's place.
+        let converted = held - delta.min(held);
+        let target = if terminal || settled {
+            0
+        } else if reconcile {
+            reservation_for(&reserve, cap, recorded.max(spent)).unwrap_or(converted)
+        } else {
+            converted
+        };
+        let moved = as_bigint(target) - as_bigint(held);
+        if delta > 0 || moved != 0 {
             let mut locked = nodes.clone();
             locked.extend(reserve.iter().filter(|id| !nodes.contains(id)));
             lock_nodes(&mut tx, self.tenant, &locked).await?;
         }
-        move_reservation(&mut tx, self.tenant, &reserve, -as_bigint(freed)).await?;
+        move_reservation(&mut tx, self.tenant, &reserve, moved).await?;
         if delta > 0 {
             sqlx::query(
                 "update governance.nodes \
@@ -636,7 +683,7 @@ impl RunCharges {
         .bind(as_bigint(spent))
         .bind(seen)
         .bind(terminal)
-        .bind(as_bigint(held - freed))
+        .bind(as_bigint(target))
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -723,7 +770,7 @@ impl RunCharges {
         if !charged {
             return Err(ChargeError::NotCharged(run));
         }
-        self.settle(journal, run).await?;
+        self.settle_with(journal, run, false).await?;
         let events = journal
             .load(run)
             .await
@@ -787,24 +834,22 @@ impl RunCharges {
         Ok(())
     }
 
-    /// Release what `run`'s reservation holds beyond what the money cap IN FORCE (the journal's
-    /// fold) still leaves it to spend — `cap − recorded spend`, both read in the reservation's own
-    /// frame. Only ever releases, so it needs no headroom and cannot fail for want of it. Call it
+    /// Bring `run`'s reservation to what the money cap IN FORCE (the journal's fold) still leaves
+    /// it to spend — `cap − recorded spend`, both read in the reservation's own frame. Call it
     /// after a limit move [`check_raise`](Self::check_raise) admitted has been written — or has
     /// failed to be: a committed lowering gives its difference back, a raise that never landed
     /// gives back the increment reserved for it, and a committed raise changes nothing.
+    ///
+    /// G4-4: the journal is read while the charge row is locked, so of two cap moves the last
+    /// one here sees both, and a shortfall — a raise whose increment a concurrent lowering's
+    /// release gave back before the raise's cap was written — is reserved again. That raise's
+    /// `check_raise` already admitted the headroom, and the engine lets the run spend to its cap,
+    /// so the cap in force is always covered, never left under-reserved.
     pub async fn release_to_cap(
         &self,
         journal: &dyn ExecutionJournal,
         run: RunId,
     ) -> Result<(), ChargeError> {
-        let events = journal
-            .load(run)
-            .await
-            .map_err(|e| ChargeError::Journal(e.to_string()))?;
-        let Some(cap) = orchestrator::money_spend_of(&events).1 else {
-            return Ok(());
-        };
         let mut tx = self.pool.begin().await?;
         let charge: Option<(Vec<Uuid>, i64, i64, bool)> = sqlx::query_as(
             "select reserve_node_ids, reserved_micro_usd, recorded_micro_usd, settled \
@@ -817,9 +862,16 @@ impl RunCharges {
         let Some((reserve, held, recorded, false)) = charge else {
             return Ok(());
         };
+        let events = journal
+            .load(run)
+            .await
+            .map_err(|e| ChargeError::Journal(e.to_string()))?;
+        let cap = orchestrator::money_spend_of(&events).1;
         let held = held.max(0) as u64;
-        let target = cap.saturating_sub(recorded.max(0) as u64);
-        if reserve.is_empty() || target >= held {
+        let Some(target) = reservation_for(&reserve, cap, recorded.max(0) as u64) else {
+            return Ok(());
+        };
+        if target == held {
             return Ok(());
         }
         lock_nodes(&mut tx, self.tenant, &reserve).await?;

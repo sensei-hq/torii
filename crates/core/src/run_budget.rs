@@ -383,12 +383,20 @@ impl RunCharges {
         if scheduled {
             return Err(ChargeError::AlreadyScheduled(run));
         }
-        // A charge with no schedule row is an orphan: its submit died before `enqueue` (a store
-        // fault, Ctrl-C). The same issuer's retry takes it over — releasing its reservation —
-        // rather than finding the run id "already" taken; another issuer's is not theirs to take.
-        let orphan: Option<(Uuid, Vec<Uuid>, i64)> = sqlx::query_as(
-            "select issuer_profile_id, reserve_node_ids, reserved_micro_usd from runs.run_charges \
-              where tenant_id = $1 and run_id = $2 for update",
+        // A charge with no schedule row is an orphan when its submit died before `enqueue` (a
+        // store fault, Ctrl-C): still open, nothing recorded, and no journal — the run never
+        // started. The same issuer's retry takes it over — releasing its reservation — rather
+        // than finding the run id "already" taken; another issuer's is not theirs to take.
+        // G4-1: a charge with no schedule row is ALSO a run `torii run prune` removed, and that
+        // one ran: its spend is recorded (or still to be) from its journal, which a re-admitted
+        // run would append to and have folded again. Anything but a true orphan is taken.
+        let orphan: Option<(Uuid, Vec<Uuid>, i64, bool)> = sqlx::query_as(
+            "select c.issuer_profile_id, c.reserve_node_ids, c.reserved_micro_usd, \
+                    not c.settled and c.recorded_micro_usd = 0 \
+                      and not exists (select 1 from runs.journal_events e \
+                                       where e.tenant_id = c.tenant_id and e.run_id = c.run_id) \
+               from runs.run_charges c \
+              where c.tenant_id = $1 and c.run_id = $2 for update of c",
         )
         .bind(self.tenant)
         .bind(run.0)
@@ -396,7 +404,7 @@ impl RunCharges {
         .await?;
         if orphan
             .as_ref()
-            .is_some_and(|(owner, _, _)| *owner != issuer)
+            .is_some_and(|(owner, _, _, never_ran)| *owner != issuer || !never_ran)
         {
             return Err(ChargeError::AlreadyScheduled(run));
         }
@@ -413,11 +421,11 @@ impl RunCharges {
         // orphan's nodes are locked in the same (id-ordered) statement, so no two admissions can
         // take them in different orders.
         let mut locked = ids.clone();
-        if let Some((_, reserve, _)) = &orphan {
+        if let Some((_, reserve, _, _)) = &orphan {
             locked.extend(reserve.iter().filter(|id| !ids.contains(id)));
         }
         lock_nodes(&mut tx, self.tenant, &locked).await?;
-        if let Some((_, reserve, held)) = &orphan {
+        if let Some((_, reserve, held, _)) = &orphan {
             drop_charge(&mut tx, self.tenant, run, reserve, *held).await?;
         }
         let rows = self.nodes(&mut tx, &ids, &[], 0).await?;

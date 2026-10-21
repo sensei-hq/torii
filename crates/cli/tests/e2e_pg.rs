@@ -3472,3 +3472,138 @@ async fn a_raise_of_a_money_capped_run_with_no_charge_is_refused_as_a_preconditi
         "the run was not woken"
     );
 }
+
+/// A journal that delegates everything except a `MoneyBudgetRaised` append, which fails — a
+/// `run wake --budget-usd` whose raise never reaches the journal, so the run's cap does not move.
+struct FailsTheMoneyRaise(PgJournal);
+
+#[async_trait::async_trait]
+impl ExecutionJournal for FailsTheMoneyRaise {
+    async fn append(
+        &self,
+        run: RunId,
+        event: JournalEvent,
+    ) -> Result<orchestrator_core::Seq, orchestrator_core::JournalError> {
+        if matches!(event, JournalEvent::MoneyBudgetRaised { .. }) {
+            return Err(orchestrator_core::JournalError::Backend(
+                "connection reset by peer".into(),
+            ));
+        }
+        self.0.append(run, event).await
+    }
+    async fn load(
+        &self,
+        run: RunId,
+    ) -> Result<Vec<(orchestrator_core::Seq, JournalEvent)>, orchestrator_core::JournalError> {
+        self.0.load(run).await
+    }
+}
+
+/// A run charged to a user of a `hard`-capped $5 team with a $4 limit, paused at a signal gate
+/// after one $1.50 call — so, once settled, it holds $2.50 of the team's reservation. Then
+/// `run wake --budget-usd <usd>` on it, whose money raise FAILS to journal (the cap stays $4).
+/// Returns the team's reserved amount afterwards.
+async fn reserved_after_a_failed_cap_move(usd: &str, at: i64) -> String {
+    let db = Db::new().await.expect("a database");
+    let (user, team, _root) = capped_issuer(&db, "5").await;
+    let charges = torii_core::run_budget::RunCharges::new(db.pool().await, db.tenant);
+    let at = DateTime::<Utc>::from_timestamp(at, 0).unwrap();
+    let (sched, _calls) = fresh_priced_worker(&db, at, 1_500, 1.0).await;
+    let journal = PgJournal::new(db.pool().await, db.tenant);
+    let run = RunId(uuid::Uuid::new_v4());
+    let issuer = user.to_string();
+    let charging = torii::cmd::run::Charging {
+        charges: &charges,
+        journal: &journal,
+        user: Some(&issuer),
+    };
+    let money = |usd: &str| orchestrator_core::RunBudget {
+        tokens: None,
+        money: Some(orchestrator_core::MoneyBudget {
+            total_micro_usd: torii::cmd::run::parse_budget_usd(usd).unwrap(),
+        }),
+    };
+    let out = torii::cmd::run::submit_charged(
+        Some(&charging),
+        &sched,
+        run,
+        signal_graph(&run.0.to_string(), None),
+        money("4"),
+        torii::cmd::run::StoreLifetime::Durable,
+        &pricing(true),
+        || {},
+    )
+    .await
+    .expect("paused at the gate");
+    assert!(out.text.starts_with("paused:"), "{}", out.text);
+    assert_eq!(
+        orchestrator::money_spend_of(&journal.load(run).await.unwrap()),
+        (1_500_000, Some(4_000_000))
+    );
+    assert_eq!(
+        node_reserved(&db, team).await,
+        "2.500000",
+        "the $4 limit less the $1.50 spent"
+    );
+
+    let store = PgSchedulerStore::new(db.pool().await, db.tenant);
+    let failing = FailsTheMoneyRaise(PgJournal::new(db.pool().await, db.tenant));
+    let queued_at = store.status(run).await.unwrap().unwrap().updated_at + Duration::seconds(600);
+    let out = torii::cmd::run::wake_charged(
+        Some(&charging),
+        &store,
+        &failing,
+        run,
+        queued_at,
+        money(usd),
+    )
+    .await;
+    assert!(
+        out.is_err(),
+        "the failed raise is reported: {:?}",
+        out.map(|o| o.text)
+    );
+    assert_eq!(
+        orchestrator::money_spend_of(&journal.load(run).await.unwrap()).1,
+        Some(4_000_000),
+        "the cap in force is still $4"
+    );
+    node_reserved(&db, team).await
+}
+
+/// G2-4 (wave B review, introduced by G1): a LOWERING whose wake fails leaves the run at its old
+/// cap, so its reservation must still cover that cap — releasing the difference before the new
+/// cap is committed let the run over-commit the team by it.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+)]
+#[tokio::test]
+async fn a_lowering_whose_wake_fails_keeps_the_reservation_its_cap_needs() {
+    if db_url().is_none() {
+        return;
+    }
+    assert_eq!(
+        reserved_after_a_failed_cap_move("3", 5_600_000).await,
+        "2.500000",
+        "the run may still spend $4 − $1.50, so $2.50 stays reserved"
+    );
+}
+
+/// G2-4: the symmetric raise — the increment reserved for a raise whose wake fails is given back,
+/// rather than held (unusable by anyone) until the run ends.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+)]
+#[tokio::test]
+async fn a_raise_whose_wake_fails_gives_its_increment_back() {
+    if db_url().is_none() {
+        return;
+    }
+    assert_eq!(
+        reserved_after_a_failed_cap_move("4.5", 5_700_000).await,
+        "2.500000",
+        "the cap is still $4, so the $0.50 increment is released"
+    );
+}

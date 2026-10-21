@@ -1073,6 +1073,22 @@ async fn a_postgres_run_is_limited_to_its_issuers_headroom_and_a_raise_past_it_i
         "the run's limit is its issuer's remaining headroom:\n{shown}"
     );
 
+    // Nothing left at all: refused (G1-4) — a $0 limit would pause on the first priced call with
+    // nothing to raise it — and nothing is submitted.
+    let empty = uuid::Uuid::new_v4().to_string();
+    let out = submit(&empty, &[]);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(
+        text.contains("not submitted: ") && text.contains("no headroom"),
+        "{text}"
+    );
+    assert_eq!(status(&empty).status.code(), Some(2), "no run was created");
+
     // No TORII_USER on Postgres: refused before anything is written.
     let anon = uuid::Uuid::new_v4().to_string();
     let out = torii()

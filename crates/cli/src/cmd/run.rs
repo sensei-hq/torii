@@ -3988,7 +3988,18 @@ pub(crate) mod tests {
         .await
         .expect("prunes");
         assert_eq!(out.code, EXIT_OK, "{}", out.text);
-        assert!(out.text.contains("nothing to prune"), "{}", out.text);
+        let first = out.text.lines().next().unwrap_or_default();
+        assert!(
+            first.starts_with("nothing to prune: no eligible run"),
+            "{}",
+            out.text
+        );
+        // G5-3: a completed run older than the cutoff DOES exist — it is kept, not absent.
+        assert!(
+            !first.contains("no completed, failed or cancelled run"),
+            "the first line must not deny the run it then reports keeping: {}",
+            out.text
+        );
         assert!(
             out.text.contains("kept 1") && out.text.contains("charge is still open"),
             "the run kept for its open charge must be reported: {}",

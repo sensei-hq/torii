@@ -3000,4 +3000,204 @@ mod tests {
         drop(d);
         drop(t);
     }
+
+    /// G2-2 (wave B review): the AG-9 (#46) done-when through the path `run submit` really takes
+    /// on Postgres — CHARGED to `TORII_USER` (`submit_charged`), with no `--budget-usd`, so the
+    /// run's money limit is the issuer's headroom and its graph is checked against the shipped
+    /// defaults' pricing (G2-1). On a fresh tenant whose only structure is an org root and a
+    /// `hard`-capped team holding the issuer, `config init --push` then a planning run produces a
+    /// plan; afterwards the charge is closed and consistent: the run's spend (zero, on the
+    /// defaults' local model) is what the nodes record, and the $5 its admission reserved on the
+    /// team is released.
+    #[cfg_attr(
+        not(have_database_url),
+        ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+    )]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn config_init_then_a_charged_planning_run_produces_a_plan_on_a_fresh_tenant() {
+        let Some(url) = crate::test_guard::db_url() else {
+            return;
+        };
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let (root, team, user) = (
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+        for (q, binds) in [
+            (
+                "insert into core.unit_levels (tenant_id, level, label) \
+                 select $1, l, 'L' || l from generate_series(0, 4) l",
+                vec![],
+            ),
+            (
+                "insert into core.org_units (tenant_id, id, parent_id, level, name) \
+                 values ($1, $2, null, 0, 'Org')",
+                vec![root],
+            ),
+            (
+                "insert into governance.nodes (tenant_id, id, org_unit_id, modified_by) \
+                 values ($1, $2, $2, 'torii-cli-test')",
+                vec![root],
+            ),
+            (
+                "insert into core.org_units (tenant_id, id, parent_id, level, name) \
+                 values ($1, $2, $3, 2, 'Team')",
+                vec![team, root],
+            ),
+            (
+                "insert into governance.nodes \
+                   (tenant_id, id, org_unit_id, cap_amount, enforcement, modified_by) \
+                 values ($1, $2, $2, 5, 'hard', 'torii-cli-test')",
+                vec![team],
+            ),
+        ] {
+            let mut q = sqlx::query(q).bind(t.id);
+            for b in binds {
+                q = q.bind(b);
+            }
+            q.execute(&t.pool).await.expect("seed the tenant's units");
+        }
+        sqlx::query("insert into core.profiles (id, display_name) values ($1, 'torii-cli-test')")
+            .bind(user)
+            .execute(&t.pool)
+            .await
+            .unwrap();
+        for q in [
+            "insert into core.memberships (profile_id, tenant_id, assigned_by) \
+             values ($1, $2, 'torii-cli-test')",
+            "insert into core.unit_members (tenant_id, unit_id, profile_id) values ($2, $3, $1)",
+        ] {
+            sqlx::query(q)
+                .bind(user)
+                .bind(t.id)
+                .bind(team)
+                .execute(&t.pool)
+                .await
+                .expect("the issuer");
+        }
+
+        let stores = t.stores();
+        let catalog = CatalogGatewayConfigSource::new(t.pool.clone());
+        crate::cmd::config::init_push(
+            &stores.config,
+            &stores.scheduler,
+            Some(&catalog),
+            false,
+            &mut |text: &str| panic!("a fresh tenant's first push asks nothing: {text}"),
+        )
+        .await
+        .expect("config init --push");
+
+        let plan = serde_json::json!({
+            "graph": {"nodes": [{"id": "summary", "deps": [],
+                "kind": {"Agent": {"agent": "writer",
+                                    "input": {"task": "Summarize the report in one line"}}}}]},
+            "node_plans": {"summary": {"label": "Summarize the report"}}
+        });
+        let (fake, _tool_answers, calls) = planning_provider(plan).await;
+        let env = tenant_env(&url, t.id, "torii-g2-2-charged-plan-fence");
+        let d = heavy_with(&env, None, None, |mut gw| {
+            for r in gw.routers.values_mut() {
+                r.url = fake.clone();
+            }
+            gw
+        })
+        .await
+        .unwrap_or_else(|e| panic!("heavy boots on the defaults: {}", e.message));
+
+        let run = RunId(uuid::Uuid::new_v4());
+        let graph = graph_of(
+            "goal",
+            orchestrator_core::NodeKind::Expand {
+                input: serde_json::json!({"goal": "Summarize the quarterly report"}),
+                planner: orchestrator_core::PlannerRef::Select,
+            },
+        );
+        let registry = d.registry.handle().snapshot().0;
+        let pricing = crate::cmd::run::Pricing {
+            registry: &registry,
+            gateway: &d.gateway_pricing,
+            source: &d.gateway_source,
+        };
+        let issuer = user.to_string();
+        let out = crate::cmd::run::submit_charged(
+            d.light.charging(Some(&issuer)).as_ref(),
+            &d.scheduler,
+            run,
+            graph,
+            orchestrator_core::RunBudget::default(),
+            crate::cmd::run::StoreLifetime::Process,
+            &pricing,
+            || {},
+        )
+        .await;
+        let st = d.scheduler.status(run).await.unwrap();
+        let events: Vec<_> = d
+            .light
+            .journal
+            .load(run)
+            .await
+            .expect("journal")
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
+        let out = out.unwrap_or_else(|e| panic!("{}\n{events:#?}", e.message));
+        assert!(out.text.starts_with("completed: "), "{}", out.text);
+        assert_eq!(
+            st.expect("row").status,
+            orchestrator_core::RunStatus::Completed
+        );
+        assert!(
+            events.iter().any(|e| matches!(e,
+                orchestrator_core::JournalEvent::PlanExpanded { subgraph, .. }
+                    if subgraph.nodes.iter().any(|n| n.id.0 == "summary"))),
+            "the planner's plan was expanded: {events:#?}"
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+        let (spent, cap) = orchestrator::money_spend_of(&d.light.journal.load(run).await.unwrap());
+        assert_eq!(
+            cap,
+            Some(5_000_000),
+            "the limit is the team's $5 of headroom"
+        );
+        // The defaults bind the local model, priced at an explicit zero: the run spends $0, so
+        // what this pins is the charge's bookkeeping — the $5 reserved at admission is released
+        // when the run completes — not a non-zero spend (the e2e suite covers that).
+        assert_eq!(
+            spent, 0,
+            "the shipped local model is priced at an explicit zero"
+        );
+        let (recorded, reserved, settled): (i64, i64, bool) = sqlx::query_as(
+            "select recorded_micro_usd, reserved_micro_usd, settled from runs.run_charges \
+              where tenant_id = $1 and run_id = $2",
+        )
+        .bind(t.id)
+        .bind(run.0)
+        .fetch_one(&t.pool)
+        .await
+        .expect("the run is charged");
+        assert_eq!(
+            (recorded as u64, reserved, settled),
+            (spent, 0, true),
+            "the completed run's spend is recorded and its charge closed"
+        );
+        let nodes: Vec<(uuid::Uuid, i64, i64)> = sqlx::query_as(
+            "select id, (spent_amount * 1000000)::bigint, (reserved_amount * 1000000)::bigint \
+               from governance.nodes where tenant_id = $1 order by id",
+        )
+        .bind(t.id)
+        .fetch_all(&t.pool)
+        .await
+        .unwrap();
+        let mut want = vec![(root, spent as i64, 0), (team, spent as i64, 0)];
+        want.sort();
+        assert_eq!(
+            nodes, want,
+            "spend on the team and the root, nothing left reserved"
+        );
+        drop(d);
+        drop(t);
+    }
 }

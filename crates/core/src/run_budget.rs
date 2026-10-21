@@ -53,6 +53,11 @@ pub enum ChargeError {
         headroom_micro_usd: u64,
         node: String,
     },
+    /// The tightest `hard` cap has no headroom left at all: a `$0` limit would pause the run on
+    /// its first priced call, with nothing that could raise it.
+    NoHeadroom {
+        node: String,
+    },
     /// A raise on a run with no charge record (one submitted before caps were applied).
     NotCharged(RunId),
     /// The run id is already scheduled — a charge must never attach to someone else's run.
@@ -84,6 +89,12 @@ impl std::fmt::Display for ChargeError {
                  node {node:?}; a run's limit may only be at most its issuer's headroom",
                 usd(*requested_micro_usd),
                 usd(*headroom_micro_usd)
+            ),
+            ChargeError::NoHeadroom { node } => write!(
+                f,
+                "no headroom is left under the hard cap of budget node {node:?} (its spend and \
+                 the limits of the runs still holding it use all of it), so a run would pause \
+                 before its first priced call"
             ),
             ChargeError::NotCharged(run) => write!(
                 f,
@@ -372,6 +383,11 @@ impl RunCharges {
                 });
             }
             (Some(r), _) => r,
+            (None, Some(0)) => {
+                return Err(ChargeError::NoHeadroom {
+                    node: h.tightest.unwrap_or_default(),
+                });
+            }
             (None, Some(room)) => room,
             (None, None) => UNBOUNDED_MICRO_USD,
         };

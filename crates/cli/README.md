@@ -258,7 +258,8 @@ node per org unit, `hard` or `soft` (Budgets & billing) — and the engine enfor
   `hard` cap (`cap − spent − reserved`) over every unit the user is a member of (their personal
   unit, their groups) and every unit above those. `soft` caps never limit. `--budget-usd` may
   only lower it; above the headroom the submit is refused (exit 2, naming the headroom and the
-  unit) and nothing is written. With no `hard` cap anywhere the run still gets a money limit — one
+  unit) and nothing is written — as it is when no headroom is left at all (a `$0` limit would
+  pause the run before its first priced call). With no `hard` cap anywhere the run still gets a money limit — one
   it cannot reach, shown by `run status` as `none (no hard cap over the issuer)` — because the
   engine ledgers a call's cost only under a money cap. A user covered by no budget node at all
   (not even the tenant's root) is refused, as a question is.

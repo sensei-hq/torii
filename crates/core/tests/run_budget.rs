@@ -896,3 +896,42 @@ async fn zero_headroom_refuses_the_run_and_writes_nothing() {
     assert_eq!(written, 0, "a refused admission writes nothing");
     o.drop_all().await;
 }
+
+/// G1-2 (wave B review): a charge whose submit never reached `enqueue` (a store fault, Ctrl-C)
+/// is an orphan — no schedule row exists — and must not poison its run id: the same issuer's
+/// retry re-admits over it, releasing the orphan's reservation first, so nothing is counted twice.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn a_retry_of_a_run_whose_enqueue_never_happened_re_admits_over_the_orphan_charge() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
+    let other = o.user(&[o.personal_u]).await;
+    let c = o.charges();
+    let run = RunId(Uuid::new_v4());
+    c.admit(run, u, Some(3 * DOLLAR)).await.unwrap();
+    // … the submit dies before `enqueue`; the operator retries the same --run-id.
+    let again = c.admit(run, u, Some(2 * DOLLAR)).await;
+    assert_eq!(
+        again
+            .expect("an orphan charge must not poison its run id")
+            .total_micro_usd,
+        2 * DOLLAR
+    );
+    assert_eq!(
+        o.reserved(o.team_a).await,
+        "2.000000",
+        "the orphan's $3 was released, not double-counted"
+    );
+    // Someone else's orphan is not theirs to take over.
+    let err = c.admit(run, other, None).await;
+    assert!(
+        matches!(err, Err(ChargeError::AlreadyScheduled(r)) if r == run),
+        "{err:?}"
+    );
+    assert_eq!(o.reserved(o.team_a).await, "2.000000");
+    o.drop_all().await;
+}

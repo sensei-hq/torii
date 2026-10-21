@@ -3208,3 +3208,70 @@ async fn a_run_is_limited_to_its_issuers_headroom_paused_there_and_its_spend_rec
         "the worker recorded the rest of the run's spend, once"
     );
 }
+
+/// G1-2 (wave B review): a charged submit whose `submit` fails before `enqueue` commits (here:
+/// its scheduler's store answers the duplicate pre-check but refuses the insert) leaves no orphan charge behind — the charge row is deleted
+/// and its reservation released, so the run id and the issuer's headroom are both free again.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+)]
+#[tokio::test]
+async fn a_charged_submit_that_fails_before_its_enqueue_leaves_no_charge_and_no_reservation() {
+    let Some(db) = Db::new().await else { return };
+    let (user, team, _root) = capped_issuer(&db, "1").await;
+    let charges = torii_core::run_budget::RunCharges::new(db.pool().await, db.tenant);
+    let at = DateTime::<Utc>::from_timestamp(5_300_000, 0).unwrap();
+    let journal = Arc::new(PgJournal::new(db.pool().await, db.tenant));
+    let (gw, _calls) = metered_gateway(Some(usage(1_500))).await;
+    price_single_chain(&gw, 1.0, 1.0).await;
+    let clock = FakeClock::new(at);
+    let exec = Executor::new(Arc::new(gw), journal.clone(), "v1").with_clock(clock.clone());
+    // A tenant that does not exist: `status` reads nothing, `enqueue` violates the tenant FK.
+    let store = Arc::new(PgSchedulerStore::new(db.pool().await, uuid::Uuid::new_v4()));
+    let sched = Scheduler::new(store, exec, journal.clone(), clock);
+
+    let run = RunId(uuid::Uuid::new_v4());
+    let issuer = user.to_string();
+    let charging = torii::cmd::run::Charging {
+        charges: &charges,
+        journal: journal.as_ref(),
+        user: Some(&issuer),
+    };
+    let out = torii::cmd::run::submit_charged(
+        Some(&charging),
+        &sched,
+        run,
+        two_node_graph(&run.0.to_string()),
+        orchestrator_core::RunBudget::default(),
+        torii::cmd::run::StoreLifetime::Durable,
+        || {},
+    )
+    .await;
+    assert!(
+        out.is_err(),
+        "the store fault is reported: {:?}",
+        out.map(|o| o.text)
+    );
+    let left: i64 = sqlx::query_scalar(
+        "select count(*) from runs.run_charges where tenant_id = $1 and run_id = $2",
+    )
+    .bind(db.tenant)
+    .bind(run.0)
+    .fetch_one(&db.pool().await)
+    .await
+    .unwrap();
+    assert_eq!(
+        left, 0,
+        "no orphan charge is left on a run that was never enqueued"
+    );
+    let reserved: String = sqlx::query_scalar(
+        "select reserved_amount::text from governance.nodes where tenant_id = $1 and id = $2",
+    )
+    .bind(db.tenant)
+    .bind(team)
+    .fetch_one(&db.pool().await)
+    .await
+    .unwrap();
+    assert_eq!(reserved, "0.000000", "its reservation is released");
+}

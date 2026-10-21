@@ -623,3 +623,188 @@ async fn a_raise_is_admitted_only_within_the_charged_nodes_headroom() {
     );
     o.drop_all().await;
 }
+
+impl Org {
+    /// A node's `reserved_amount`, as text.
+    async fn reserved(&self, node: Uuid) -> String {
+        sqlx::query_scalar::<_, String>(
+            "select reserved_amount::text from governance.nodes where tenant_id = $1 and id = $2",
+        )
+        .bind(self.tenant)
+        .bind(node)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap()
+    }
+}
+
+/// G1-1 (wave B review): an admitted limit RESERVES the headroom it was given, so a second run
+/// admitted for the same issuer gets only what the first left — never the same headroom again.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn back_to_back_admits_reserve_so_their_limits_never_sum_past_the_headroom() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
+    let c = o.charges();
+
+    let a = c
+        .admit(RunId(Uuid::new_v4()), u, Some(3 * DOLLAR))
+        .await
+        .unwrap();
+    assert_eq!(a.total_micro_usd, 3 * DOLLAR);
+    let b = c.admit(RunId(Uuid::new_v4()), u, None).await.unwrap();
+    assert_eq!(
+        b.total_micro_usd, DOLLAR,
+        "the second run gets only the $1 the first left"
+    );
+    let err = c
+        .admit(RunId(Uuid::new_v4()), u, Some(DOLLAR / 2))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            ChargeError::OverHeadroom { headroom_micro_usd, node, .. }
+                if *headroom_micro_usd == 0 && node == "Team A"
+        ),
+        "{err}"
+    );
+    // The reservation is held on every hard-capped node the runs are charged to.
+    for node in [o.team_a, o.personal_u, o.org] {
+        assert_eq!(o.reserved(node).await, "4.000000", "node {node}");
+    }
+    o.drop_all().await;
+}
+
+/// G1-1: concurrent admissions for one issuer serialize on the node locks — the admitted limits
+/// together never exceed the headroom.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn concurrent_admits_never_admit_more_than_the_headroom_between_them() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
+    let mut tasks = Vec::new();
+    for _ in 0..4 {
+        let c = o.charges();
+        tasks.push(tokio::spawn(async move {
+            c.admit(RunId(Uuid::new_v4()), u, Some(3 * DOLLAR / 2))
+                .await
+        }));
+    }
+    let mut admitted = 0u64;
+    for t in tasks {
+        match t.await.unwrap() {
+            Ok(m) => admitted += m.total_micro_usd,
+            Err(ChargeError::OverHeadroom { .. }) => {}
+            Err(e) => panic!("unexpected refusal: {e}"),
+        }
+    }
+    assert_eq!(admitted, 3 * DOLLAR, "two of four $1.50 runs fit $4");
+    assert_eq!(o.reserved(o.team_a).await, "3.000000");
+    o.drop_all().await;
+}
+
+/// G1-1: settling converts the reservation into spend, and a terminal settle releases what is
+/// left — the node ends with exactly the run's spend and no reservation.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn settle_converts_the_reservation_to_spend_and_a_terminal_settle_releases_the_rest() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
+    let c = o.charges();
+    let j = o.journal();
+    let sched = PgSchedulerStore::new(pool.clone(), o.tenant);
+    let run = RunId(Uuid::new_v4());
+    c.admit(run, u, Some(3 * DOLLAR)).await.unwrap();
+    sched
+        .enqueue(run, &Graph { nodes: vec![] }, chrono::Utc::now())
+        .await
+        .unwrap();
+    priced_run(&j, run, 3 * DOLLAR, &[DOLLAR]).await;
+
+    assert_eq!(c.settle(&j, run).await.unwrap(), DOLLAR);
+    assert_eq!(o.spent(o.team_a).await, "7.000000");
+    assert_eq!(o.reserved(o.team_a).await, "2.000000", "$1 of $3 converted");
+
+    spend(&j, run, DOLLAR / 2).await;
+    sched
+        .record_terminal(run, RunStatus::Completed, None)
+        .await
+        .unwrap();
+    assert_eq!(c.settle(&j, run).await.unwrap(), DOLLAR / 2);
+    for node in [o.team_a, o.personal_u, o.org] {
+        assert_eq!(
+            o.reserved(node).await,
+            "0.000000",
+            "released at node {node}"
+        );
+    }
+    assert_eq!(
+        o.spent(o.team_a).await,
+        "7.500000",
+        "spent == the run's $1.50"
+    );
+
+    // A run that overshoots its limit (the call that crosses it is ledgered) never drives the
+    // reservation negative.
+    let over = RunId(Uuid::new_v4());
+    c.admit(over, u, Some(DOLLAR)).await.unwrap();
+    priced_run(&j, over, DOLLAR, &[3 * DOLLAR / 2]).await;
+    assert_eq!(c.settle(&j, over).await.unwrap(), 3 * DOLLAR / 2);
+    assert_eq!(o.reserved(o.team_a).await, "0.000000");
+    assert_eq!(o.spent(o.team_a).await, "9.000000");
+    o.drop_all().await;
+}
+
+/// G1-1: a raise reserves only its increment, and only out of the headroom other runs'
+/// reservations leave; a lowering releases the difference.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn a_raise_reserves_its_increment_out_of_what_other_runs_reservations_leave() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
+    let c = o.charges();
+    let j = o.journal();
+    let a = RunId(Uuid::new_v4());
+    let b = RunId(Uuid::new_v4());
+    c.admit(a, u, Some(DOLLAR)).await.unwrap();
+    c.admit(b, u, Some(2 * DOLLAR)).await.unwrap();
+    priced_run(&j, a, DOLLAR, &[3 * DOLLAR / 2]).await; // a paused past its $1
+    priced_run(&j, b, 2 * DOLLAR, &[]).await;
+
+    // Team A: cap 10 − spent 7.5 − b's $2 reserved = $0.50 for a's raise.
+    let err = c.check_raise(&j, a, 4 * DOLLAR).await.unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            ChargeError::OverHeadroom { headroom_micro_usd, node, .. }
+                if *headroom_micro_usd == DOLLAR / 2 && node == "Team A"
+        ),
+        "{err}"
+    );
+    c.check_raise(&j, a, 2 * DOLLAR)
+        .await
+        .expect("$1.50 spent + $0.50 fits");
+    assert_eq!(o.reserved(o.team_a).await, "2.500000");
+
+    // Lowering b to $1 releases $1.
+    c.check_raise(&j, b, DOLLAR).await.expect("a lowering");
+    assert_eq!(o.reserved(o.team_a).await, "1.500000");
+    o.drop_all().await;
+}

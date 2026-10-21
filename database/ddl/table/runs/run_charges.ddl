@@ -11,7 +11,9 @@ set search_path to runs, core, extensions;
 -- and moves the watermark in the same transaction, under a row lock, so a re-drive or a repeated
 -- settle never double-counts. `seen_updated_at` is the `scheduled_runs.updated_at` the last settle
 -- read before folding the journal — a run whose schedule row has not moved since has no new spend
--- to record. `settled` is set once a terminal run's final spend is recorded.
+-- to record. `settled` is set once a terminal run's final spend is recorded — for a `cancelled` run
+-- only once no drive can still be spending (its claim released, or long abandoned with no drive
+-- holding the run's lock).
 --
 -- The limit is a RESERVATION (wave B review G1-1): admission adds it to `reserved_amount` on every
 -- hard-capped node in `reserve_node_ids` (under the node locks, in the same transaction as this

@@ -2323,6 +2323,19 @@ pub async fn wake_charged(
                 }
                 Err(e) => return Err(CliError::error(e.to_string())),
             }
+            let out = wake(store, journal, run, now, budget).await;
+            // G2-4: the reservation follows the cap the journal now holds — a lowering that
+            // landed gives its difference back; a raise that did not land gives back the
+            // increment `check_raise` reserved for it. A failure here only over-reserves (the
+            // run's end releases the rest), so it never hides the wake's own outcome.
+            if let Err(e) = c.charges.release_to_cap(c.journal, run).await {
+                tracing::warn!(
+                    run = %run.0,
+                    "the run's reservation could not be brought down to its money cap ({e}); it \
+                     is released when the run ends"
+                );
+            }
+            return out;
         }
     }
     wake(store, journal, run, now, budget).await

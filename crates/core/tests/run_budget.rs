@@ -595,6 +595,7 @@ async fn a_raise_is_admitted_only_within_the_charged_nodes_headroom() {
     c.check_raise(&j, run, 4 * DOLLAR)
         .await
         .expect("within headroom");
+    commit_cap(&c, &j, run, 4 * DOLLAR).await;
     assert_eq!(o.spent(o.team_a).await, "7.500000");
     let err = c.check_raise(&j, run, 4 * DOLLAR + 1).await.unwrap_err();
     assert!(
@@ -605,11 +606,18 @@ async fn a_raise_is_admitted_only_within_the_charged_nodes_headroom() {
         ),
         "{err}"
     );
-    // The $4 raise reserved Team A's last $2.50; lowering the run back to its spend releases it.
+    // The $4 raise reserved Team A's last $2.50; lowering the run back to its spend releases it
+    // — once the lower cap is committed (G2-4), not when it is checked.
     assert_eq!(o.reserved(o.team_a).await, "2.500000");
     c.check_raise(&j, run, 3 * DOLLAR / 2)
         .await
         .expect("a lowering");
+    assert_eq!(
+        o.reserved(o.team_a).await,
+        "2.500000",
+        "nothing is released before the lower cap is committed"
+    );
+    commit_cap(&c, &j, run, 3 * DOLLAR / 2).await;
     assert_eq!(o.reserved(o.team_a).await, "0.000000");
     // Lowering is always admitted — even with no headroom left at all.
     let low = RunId(Uuid::new_v4());
@@ -818,6 +826,20 @@ async fn settle_converts_the_reservation_to_spend_and_a_terminal_settle_releases
     o.drop_all().await;
 }
 
+/// What `run wake --budget-usd` does once `check_raise` admitted a move: journal the new cap, then
+/// bring the reservation down to what the cap in force needs.
+async fn commit_cap(c: &RunCharges, j: &PgJournal, run: RunId, total: u64) {
+    j.append(
+        run,
+        JournalEvent::MoneyBudgetRaised {
+            new_total_micro_usd: total,
+        },
+    )
+    .await
+    .unwrap();
+    c.release_to_cap(j, run).await.expect("release_to_cap");
+}
+
 /// G1-1: a raise reserves only its increment, and only out of the headroom other runs'
 /// reservations leave; a lowering releases the difference.
 #[cfg_attr(
@@ -853,8 +875,17 @@ async fn a_raise_reserves_its_increment_out_of_what_other_runs_reservations_leav
         .expect("$1.50 spent + $0.50 fits");
     assert_eq!(o.reserved(o.team_a).await, "2.500000");
 
-    // Lowering b to $1 releases $1.
+    commit_cap(&c, &j, a, 2 * DOLLAR).await;
+    assert_eq!(
+        o.reserved(o.team_a).await,
+        "2.500000",
+        "a committed raise keeps it"
+    );
+
+    // Lowering b to $1 releases $1 — once it is committed.
     c.check_raise(&j, b, DOLLAR).await.expect("a lowering");
+    assert_eq!(o.reserved(o.team_a).await, "2.500000");
+    commit_cap(&c, &j, b, DOLLAR).await;
     assert_eq!(o.reserved(o.team_a).await, "1.500000");
     o.drop_all().await;
 }

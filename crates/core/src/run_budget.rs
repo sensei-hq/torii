@@ -12,10 +12,16 @@
 //!   personal unit, the groups) and every ancestor of those (the hierarchy). The run's limit is
 //!   that headroom; an explicit limit may only lower it. No budget node at all refuses
 //!   (fail-closed, as a question is refused).
+//! - **Reserved** — the admitted limit is added to `reserved_amount` on every `hard`-capped node
+//!   the run is charged to, under the node locks and in the same transaction as the charge row,
+//!   so no two runs (and no run and a question's `budget_reserve`) are ever given the same
+//!   headroom.
 //! - **Recorded back** — [`RunCharges::settle`]: the run's spend, folded from its journal with the
-//!   engine's own fold, is added to every charged node, idempotently.
+//!   engine's own fold, is added to every charged node, idempotently, and converts as much of the
+//!   reservation into spend; the final settle releases what is left of it.
 //! - **Raised** — [`RunCharges::check_raise`]: a paused run's new limit goes through the same cap
-//!   check against the nodes it is charged to.
+//!   check against the nodes it is charged to, reserving only the increment (a lowering releases
+//!   the difference).
 
 use orchestrator_core::{ExecutionJournal, MoneyBudget, RunId, MICRO_USD_PER_USD};
 use sqlx::PgPool;
@@ -123,9 +129,58 @@ struct NodeRow {
 
 /// A node's headroom in whole micro-dollars, floored (never rounded up past the cap) and never
 /// negative; `NULL` for a soft or uncapped node, which never limits a run.
+///
+/// `$3`/`$4` credit a run's OWN reservation back: `$4` micro-dollars on every node in `$3` — the
+/// headroom a raise of that run sees (its reservation is already in `reserved_amount`). Added
+/// before the floor, so an over-committed node is not credited past what it really has.
 const HEADROOM_MICRO_SQL: &str = "case when n.enforcement = 'hard' and n.cap_amount is not null \
-     then greatest(0, floor((n.cap_amount - n.spent_amount - n.reserved_amount) * 1000000))::bigint \
+     then greatest(0, floor((n.cap_amount - n.spent_amount - n.reserved_amount \
+       + case when n.id = any($3) then $4::bigint::numeric / 1000000 else 0 end) \
+       * 1000000))::bigint \
      end";
+
+/// Lock the budget nodes `ids` in one order (by id), so two transactions sharing nodes cannot
+/// deadlock; every reservation and settle takes them this way.
+async fn lock_nodes(
+    conn: &mut sqlx::PgConnection,
+    tenant: Uuid,
+    ids: &[Uuid],
+) -> Result<(), ChargeError> {
+    sqlx::query(
+        "select 1 from governance.nodes where tenant_id = $1 and id = any($2) \
+          order by id for update",
+    )
+    .bind(tenant)
+    .bind(ids)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// Move `reserved_amount` by `micro` (positive reserves, negative releases) on the nodes `ids`;
+/// a release never takes a node below zero.
+async fn move_reservation(
+    conn: &mut sqlx::PgConnection,
+    tenant: Uuid,
+    ids: &[Uuid],
+    micro: i64,
+) -> Result<(), ChargeError> {
+    if ids.is_empty() || micro == 0 {
+        return Ok(());
+    }
+    sqlx::query(
+        "update governance.nodes \
+            set reserved_amount = greatest(0, reserved_amount + $3::bigint::numeric / 1000000), \
+                modified_at = now() \
+          where tenant_id = $1 and id = any($2)",
+    )
+    .bind(tenant)
+    .bind(ids)
+    .bind(micro)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
 
 /// The tightest of `rows`, and every node they cover.
 fn tightest(rows: Vec<NodeRow>) -> Headroom {
@@ -189,7 +244,11 @@ impl RunCharges {
     /// Every budget node over the issuer: each unit they are a member of (their personal unit and
     /// their groups) and every ancestor of those, each once. An issuer in no unit falls back to the
     /// tenant's root, as a question's budget does (`services/gateway` `budgets::resolve_node`).
-    async fn issuer_nodes(&self, issuer: Uuid) -> Result<Vec<NodeRow>, ChargeError> {
+    async fn issuer_nodes(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        issuer: Uuid,
+    ) -> Result<Vec<NodeRow>, ChargeError> {
         let rows: Vec<(Uuid, String, Option<i64>)> = sqlx::query_as(&format!(
             "with recursive mine as ( \
                select unit_id from core.unit_members where tenant_id = $1 and profile_id = $2 \
@@ -213,7 +272,9 @@ impl RunCharges {
         ))
         .bind(self.tenant)
         .bind(issuer)
-        .fetch_all(&self.pool)
+        .bind(Vec::<Uuid>::new())
+        .bind(0i64)
+        .fetch_all(conn)
         .await?;
         Ok(rows
             .into_iter()
@@ -221,8 +282,15 @@ impl RunCharges {
             .collect())
     }
 
-    /// The budget nodes `ids`, as they stand now.
-    async fn nodes(&self, ids: &[Uuid]) -> Result<Vec<NodeRow>, ChargeError> {
+    /// The budget nodes `ids`, as they stand now — `own_micro` credited back on `own_ids` (see
+    /// [`HEADROOM_MICRO_SQL`]).
+    async fn nodes(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        ids: &[Uuid],
+        own_ids: &[Uuid],
+        own_micro: i64,
+    ) -> Result<Vec<NodeRow>, ChargeError> {
         let rows: Vec<(Uuid, String, Option<i64>)> = sqlx::query_as(&format!(
             "select n.id, ou.name, {HEADROOM_MICRO_SQL} \
                from governance.nodes n \
@@ -232,7 +300,9 @@ impl RunCharges {
         ))
         .bind(self.tenant)
         .bind(ids)
-        .fetch_all(&self.pool)
+        .bind(own_ids)
+        .bind(own_micro)
+        .fetch_all(conn)
         .await?;
         Ok(rows
             .into_iter()
@@ -242,12 +312,18 @@ impl RunCharges {
 
     /// The issuer's headroom: the tightest `hard` cap over their units and every ancestor.
     pub async fn headroom(&self, issuer: Uuid) -> Result<Headroom, ChargeError> {
-        Ok(tightest(self.issuer_nodes(issuer).await?))
+        let mut conn = self.pool.acquire().await?;
+        Ok(tightest(self.issuer_nodes(&mut conn, issuer).await?))
     }
 
     /// Admit `run` for `issuer`: its money limit is the headroom, or `requested` when that is
     /// lower; a `requested` above the headroom is refused and nothing is written. With no `hard`
     /// cap anywhere the limit is `requested`, else [`UNBOUNDED_MICRO_USD`].
+    ///
+    /// The limit is RESERVED: in one transaction the issuer's nodes are locked (by id), the
+    /// headroom is read under the locks, the limit is added to `reserved_amount` on every
+    /// `hard`-capped one and the charge row is written — so concurrent admissions serialize and
+    /// never share headroom. Nothing is reserved where no `hard` cap binds.
     ///
     /// Records the run's charge — the issuer and the nodes its spend will be recorded on — so call
     /// it BEFORE the run is submitted: a run id already scheduled is refused, so a charge can never
@@ -258,20 +334,34 @@ impl RunCharges {
         issuer: Uuid,
         requested: Option<u64>,
     ) -> Result<MoneyBudget, ChargeError> {
+        let mut tx = self.pool.begin().await?;
         let scheduled: bool = sqlx::query_scalar(
             "select exists (select 1 from runs.scheduled_runs where tenant_id = $1 and run_id = $2)",
         )
         .bind(self.tenant)
         .bind(run.0)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
         if scheduled {
             return Err(ChargeError::AlreadyScheduled(run));
         }
-        let rows = self.issuer_nodes(issuer).await?;
-        if rows.is_empty() {
+        let ids: Vec<Uuid> = self
+            .issuer_nodes(&mut tx, issuer)
+            .await?
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        if ids.is_empty() {
             return Err(ChargeError::NoBudgetNode);
         }
+        // Under the locks a second statement reads what every earlier admission committed.
+        lock_nodes(&mut tx, self.tenant, &ids).await?;
+        let rows = self.nodes(&mut tx, &ids, &[], 0).await?;
+        let reserve: Vec<Uuid> = rows
+            .iter()
+            .filter(|r| r.headroom.is_some())
+            .map(|r| r.id)
+            .collect();
         let h = tightest(rows);
         let limit = match (requested, h.micro_usd) {
             (Some(r), Some(room)) if r > room => {
@@ -285,21 +375,33 @@ impl RunCharges {
             (None, Some(room)) => room,
             (None, None) => UNBOUNDED_MICRO_USD,
         };
+        // Only a `hard` cap bounds the limit, so the reservation always fits the nodes it is on.
+        let held = if reserve.is_empty() {
+            0
+        } else {
+            as_bigint(limit)
+        };
+        move_reservation(&mut tx, self.tenant, &reserve, held).await?;
         let inserted = sqlx::query(
             "insert into runs.run_charges \
-               (tenant_id, run_id, issuer_profile_id, node_ids, limit_micro_usd) \
-             values ($1, $2, $3, $4, $5) on conflict do nothing",
+               (tenant_id, run_id, issuer_profile_id, node_ids, limit_micro_usd, \
+                reserve_node_ids, reserved_micro_usd) \
+             values ($1, $2, $3, $4, $5, $6, $7) on conflict do nothing",
         )
         .bind(self.tenant)
         .bind(run.0)
         .bind(issuer)
         .bind(&h.nodes)
         .bind(as_bigint(limit))
-        .execute(&self.pool)
+        .bind(&reserve)
+        .bind(held)
+        .execute(&mut *tx)
         .await?;
         if inserted.rows_affected() == 0 {
+            // Dropping the transaction rolls the reservation back with it.
             return Err(ChargeError::AlreadyScheduled(run));
         }
+        tx.commit().await?;
         Ok(MoneyBudget {
             total_micro_usd: limit,
         })
@@ -311,7 +413,9 @@ impl RunCharges {
     /// The spend is the engine's own fold of the journal (`orchestrator::money_spend_of`), never a
     /// second sum. Idempotent: the charge row is locked, only `spend − recorded` is added, and the
     /// watermark moves in the same transaction — a re-drive or a concurrent settle cannot count a
-    /// call twice. A terminal run's charge is closed once its final spend is recorded.
+    /// call twice. The recorded spend converts as much of the run's reservation (reserved −=
+    /// delta, never below zero); a terminal run's charge is closed once its final spend is
+    /// recorded, releasing what is left of the reservation.
     pub async fn settle(
         &self,
         journal: &dyn ExecutionJournal,
@@ -338,28 +442,30 @@ impl RunCharges {
             .is_some_and(|(s, _)| matches!(s.as_str(), "completed" | "failed" | "cancelled"));
 
         let mut tx = self.pool.begin().await?;
-        let charge: Option<(Vec<Uuid>, i64)> = sqlx::query_as(
-            "select node_ids, recorded_micro_usd from runs.run_charges \
+        let charge: Option<(Vec<Uuid>, i64, Vec<Uuid>, i64)> = sqlx::query_as(
+            "select node_ids, recorded_micro_usd, reserve_node_ids, reserved_micro_usd \
+               from runs.run_charges \
               where tenant_id = $1 and run_id = $2 for update",
         )
         .bind(self.tenant)
         .bind(run.0)
         .fetch_optional(&mut *tx)
         .await?;
-        let Some((nodes, recorded)) = charge else {
+        let Some((nodes, recorded, reserve, held)) = charge else {
             return Ok(0);
         };
         let delta = spent.saturating_sub(recorded.max(0) as u64);
+        let held = held.max(0) as u64;
+        // The spend takes its own reservation's place; the final settle frees the remainder.
+        let converted = delta.min(held);
+        let freed = if terminal { held } else { converted };
+        if delta > 0 || freed > 0 {
+            let mut locked = nodes.clone();
+            locked.extend(reserve.iter().filter(|id| !nodes.contains(id)));
+            lock_nodes(&mut tx, self.tenant, &locked).await?;
+        }
+        move_reservation(&mut tx, self.tenant, &reserve, -as_bigint(freed)).await?;
         if delta > 0 {
-            // Lock the nodes in one order, so two settles sharing nodes cannot deadlock.
-            sqlx::query(
-                "select 1 from governance.nodes where tenant_id = $1 and id = any($2) \
-                  order by id for update",
-            )
-            .bind(self.tenant)
-            .bind(&nodes)
-            .execute(&mut *tx)
-            .await?;
             sqlx::query(
                 "update governance.nodes \
                     set spent_amount = spent_amount + $3::bigint::numeric / 1000000, \
@@ -376,7 +482,8 @@ impl RunCharges {
             "update runs.run_charges \
                 set recorded_micro_usd = greatest(recorded_micro_usd, $3), \
                     seen_updated_at = coalesce($4, seen_updated_at), \
-                    settled = settled or $5 \
+                    settled = settled or $5, \
+                    reserved_micro_usd = $6 \
               where tenant_id = $1 and run_id = $2",
         )
         .bind(self.tenant)
@@ -384,6 +491,7 @@ impl RunCharges {
         .bind(as_bigint(spent))
         .bind(schedule.map(|(_, at)| at))
         .bind(terminal)
+        .bind(as_bigint(held - freed))
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -423,44 +531,86 @@ impl RunCharges {
         }
     }
 
-    /// Whether `run`'s money limit may move to `new_total_micro_usd`. Lowering it always may. A
-    /// raise may only leave the run at most the headroom of the nodes it is charged to: its
-    /// spend so far is settled onto them first, so `new_total − spent ≤ headroom`.
+    /// Whether `run`'s money limit may move to `new_total_micro_usd`, reserving for it. Lowering
+    /// always may, and releases the reservation it no longer needs. A raise may only leave the run
+    /// at most the headroom of the nodes it is charged to — its spend so far is settled onto them
+    /// first, and its own reservation counts as its own — so `new_total − spent ≤ headroom`; the
+    /// increment is reserved under the node locks.
     pub async fn check_raise(
         &self,
         journal: &dyn ExecutionJournal,
         run: RunId,
         new_total_micro_usd: u64,
     ) -> Result<(), ChargeError> {
-        let nodes: Option<Vec<Uuid>> = sqlx::query_scalar(
-            "select node_ids from runs.run_charges where tenant_id = $1 and run_id = $2",
+        let charged: bool = sqlx::query_scalar(
+            "select exists (select 1 from runs.run_charges where tenant_id = $1 and run_id = $2)",
         )
         .bind(self.tenant)
         .bind(run.0)
-        .fetch_optional(&self.pool)
+        .fetch_one(&self.pool)
         .await?;
-        let Some(nodes) = nodes else {
+        if !charged {
             return Err(ChargeError::NotCharged(run));
-        };
+        }
         self.settle(journal, run).await?;
         let events = journal
             .load(run)
             .await
             .map_err(|e| ChargeError::Journal(e.to_string()))?;
         let (spent, cap) = orchestrator::money_spend_of(&events);
-        if cap.is_some_and(|c| new_total_micro_usd <= c) {
+        let lowering = cap.is_some_and(|c| new_total_micro_usd <= c);
+        let needed = new_total_micro_usd.saturating_sub(spent);
+
+        let mut tx = self.pool.begin().await?;
+        let (nodes, reserve, held, settled): (Vec<Uuid>, Vec<Uuid>, i64, bool) = sqlx::query_as(
+            "select node_ids, reserve_node_ids, reserved_micro_usd, settled from runs.run_charges \
+              where tenant_id = $1 and run_id = $2 for update",
+        )
+        .bind(self.tenant)
+        .bind(run.0)
+        .fetch_one(&mut *tx)
+        .await?;
+        if settled {
+            // A closed charge holds nothing, and a finished run cannot be raised (`wake` refuses).
             return Ok(());
         }
-        let h = tightest(self.nodes(&nodes).await?);
-        match h.micro_usd {
-            Some(room) if new_total_micro_usd.saturating_sub(spent) > room => {
-                Err(ChargeError::OverHeadroom {
+        let held = held.max(0) as u64;
+        lock_nodes(&mut tx, self.tenant, &nodes).await?;
+        // The run keeps reserved exactly what its new limit leaves it to spend: an increment is
+        // checked first; a lowering only ever releases (it needs no headroom).
+        if !lowering && needed > held {
+            let h = tightest(
+                self.nodes(&mut tx, &nodes, &reserve, as_bigint(held))
+                    .await?,
+            );
+            if let Some(room) = h.micro_usd.filter(|room| needed > *room) {
+                return Err(ChargeError::OverHeadroom {
                     requested_micro_usd: new_total_micro_usd,
                     headroom_micro_usd: room,
                     node: h.tightest.unwrap_or_default(),
-                })
+                });
             }
-            _ => Ok(()),
         }
+        let target = if lowering { needed.min(held) } else { needed };
+        if !reserve.is_empty() && target != held {
+            move_reservation(
+                &mut tx,
+                self.tenant,
+                &reserve,
+                as_bigint(target) - as_bigint(held),
+            )
+            .await?;
+            sqlx::query(
+                "update runs.run_charges set reserved_micro_usd = $3 \
+                  where tenant_id = $1 and run_id = $2",
+            )
+            .bind(self.tenant)
+            .bind(run.0)
+            .bind(as_bigint(target))
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 }

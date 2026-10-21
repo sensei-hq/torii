@@ -1000,8 +1000,9 @@ fn signal_graph(dir: &std::path::Path) -> std::path::PathBuf {
 
 /// AG-13 (#49) at the binary: on Postgres a run is submitted AS `TORII_USER`, its money limit is
 /// that user's headroom (here a $3 team with $0.50 spent: $2.50), `--budget-usd` may only lower
-/// it, and a raise through `run wake --budget-usd` is checked against the same caps. Each refusal
-/// writes nothing.
+/// it, and a raise through `run wake --budget-usd` is checked against the same caps. The limit is
+/// RESERVED (wave B review G1-1): each admitted run takes its limit out of the headroom the next
+/// one sees, and a lowering gives it back. Each refusal writes nothing.
 #[cfg_attr(
     not(have_database_url),
     ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
@@ -1036,16 +1037,7 @@ async fn a_postgres_run_is_limited_to_its_issuers_headroom_and_a_raise_past_it_i
             .expect("spawn")
     };
 
-    // The headroom is the limit.
-    let run = uuid::Uuid::new_v4().to_string();
-    ok(&submit(&run, &[]));
-    let shown = ok(&status(&run));
-    assert!(
-        shown.contains("money spent: $0.00 / budget: $2.50"),
-        "the run's limit is its issuer's headroom:\n{shown}"
-    );
-
-    // An explicit limit below it is the limit.
+    // An explicit limit below the headroom is the limit — and it is reserved.
     let lower = uuid::Uuid::new_v4().to_string();
     ok(&submit(&lower, &["--budget-usd", "1"]));
     assert!(
@@ -1053,7 +1045,7 @@ async fn a_postgres_run_is_limited_to_its_issuers_headroom_and_a_raise_past_it_i
         "--budget-usd lowers the limit"
     );
 
-    // Above it: refused, naming the headroom, and nothing is submitted.
+    // Above what is left: refused, naming the headroom, and nothing is submitted.
     let over = uuid::Uuid::new_v4().to_string();
     let out = submit(&over, &["--budget-usd", "3"]);
     let text = format!(
@@ -1063,14 +1055,23 @@ async fn a_postgres_run_is_limited_to_its_issuers_headroom_and_a_raise_past_it_i
     );
     assert_eq!(out.status.code(), Some(2), "{text}");
     assert!(
-        text.contains("exceeds the headroom of $2.50") && text.contains("Capped Team"),
-        "{text}"
+        text.contains("exceeds the headroom of $1.50") && text.contains("Capped Team"),
+        "the $1 run's reservation is out of the $2.50: {text}"
     );
     assert!(
         !text.lines().any(|l| l.starts_with("submitted: ")),
         "a refused run is never announced: {text}"
     );
     assert_eq!(status(&over).status.code(), Some(2), "no run was created");
+
+    // No explicit limit: the headroom that is left is the limit.
+    let run = uuid::Uuid::new_v4().to_string();
+    ok(&submit(&run, &[]));
+    let shown = ok(&status(&run));
+    assert!(
+        shown.contains("money spent: $0.00 / budget: $1.50"),
+        "the run's limit is its issuer's remaining headroom:\n{shown}"
+    );
 
     // No TORII_USER on Postgres: refused before anything is written.
     let anon = uuid::Uuid::new_v4().to_string();
@@ -1090,23 +1091,31 @@ async fn a_postgres_run_is_limited_to_its_issuers_headroom_and_a_raise_past_it_i
     );
     assert_eq!(status(&anon).status.code(), Some(2), "no run was created");
 
-    // A raise goes through the same check: past the headroom is refused and nothing moves …
+    // A raise goes through the same check: the two runs hold the whole $2.50, so raising the $1
+    // run by even a cent is refused and nothing moves …
     let out = t
         .torii()
-        .args(["run", "wake", &lower, "--budget-usd", "2.51"])
+        .args(["run", "wake", &lower, "--budget-usd", "1.01"])
         .output()
         .expect("spawn");
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     assert_eq!(out.status.code(), Some(2), "{text}");
-    assert!(text.contains("exceeds the headroom of $2.50"), "{text}");
+    assert!(text.contains("exceeds the headroom of $1.00"), "{text}");
     assert!(ok(&status(&lower)).contains("budget: $1.00"), "unmoved");
-    // … within it, the cap moves.
+    // … a lowering gives its reservation back …
     ok(&t
         .torii()
-        .args(["run", "wake", &lower, "--budget-usd", "2.5"])
+        .args(["run", "wake", &run, "--budget-usd", "1"])
         .output()
         .expect("spawn"));
-    assert!(ok(&status(&lower)).contains("budget: $2.50"));
+    assert!(ok(&status(&run)).contains("budget: $1.00"));
+    // … and within what that left, the cap moves.
+    ok(&t
+        .torii()
+        .args(["run", "wake", &lower, "--budget-usd", "1.5"])
+        .output()
+        .expect("spawn"));
+    assert!(ok(&status(&lower)).contains("budget: $1.50"));
 }
 
 /// AG-9 (#46): `config init --push` seeds a fresh tenant with the shipped registry through the

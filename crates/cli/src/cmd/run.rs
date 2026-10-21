@@ -2013,7 +2013,15 @@ pub async fn prune(
             " — the preview counted {counted}; the eligible set changed in between"
         ));
     }
-    text.push_str(&kept_line(kept_for_open_charges(charges, cutoff).await?));
+    // G5-2: the delete is committed, so a fault counting what was kept is reported beside it —
+    // never propagated over the count of rows that are already gone.
+    match kept_for_open_charges(charges, cutoff).await {
+        Ok(kept) => text.push_str(&kept_line(kept)),
+        Err(e) => text.push_str(&format!(
+            "\nwarning: could not count the terminal runs kept for an open budget charge: {}",
+            e.message
+        )),
+    }
     Ok(Outcome::ok(text))
 }
 

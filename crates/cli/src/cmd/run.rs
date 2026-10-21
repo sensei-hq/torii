@@ -1971,12 +1971,19 @@ pub async fn prune(
     let counted = store.count_terminal_before(cutoff).await?;
     if counted == 0 {
         // Nothing to consent to, so nothing is asked. Exit 0: the state the operator asked
-        // for already holds.
+        // for already holds. G5-3: a terminal run kept for its open charge does exist, so the
+        // first line then says none was ELIGIBLE rather than that none was terminal.
+        let kept = kept_for_open_charges(charges, cutoff).await?;
+        let none = if kept == 0 {
+            "no completed, failed or cancelled run"
+        } else {
+            "no eligible run"
+        };
         let mut text = format!(
-            "nothing to prune: no completed, failed or cancelled run last changed before {}",
+            "nothing to prune: {none} last changed before {}",
             fmt_cutoff(cutoff)
         );
-        text.push_str(&kept_for_open_charges(charges, cutoff).await?);
+        text.push_str(&kept_line(kept));
         return Ok(Outcome::ok(text));
     }
 
@@ -2006,24 +2013,28 @@ pub async fn prune(
             " — the preview counted {counted}; the eligible set changed in between"
         ));
     }
-    text.push_str(&kept_for_open_charges(charges, cutoff).await?);
+    text.push_str(&kept_line(kept_for_open_charges(charges, cutoff).await?));
     Ok(Outcome::ok(text))
 }
 
-/// The line `prune` adds for the terminal runs it kept because their budget charge is still open
-/// (G4-2) — empty when there are none, or on the memory backend, which has no charges.
+/// How many terminal runs `prune` keeps because their budget charge is still open (G4-2) — zero
+/// on the memory backend, which has no charges.
 async fn kept_for_open_charges(
     charges: Option<&torii_core::run_budget::RunCharges>,
     cutoff: DateTime<Utc>,
-) -> Result<String, CliError> {
+) -> Result<u64, CliError> {
     let Some(charges) = charges else {
-        return Ok(String::new());
+        return Ok(0);
     };
-    let kept = charges
+    charges
         .open_terminal_before(cutoff)
         .await
-        .map_err(|e| CliError::error(e.to_string()))?;
-    Ok(if kept == 0 {
+        .map_err(|e| CliError::error(e.to_string()))
+}
+
+/// The line `prune` adds for the `kept` runs of [`kept_for_open_charges`] — empty when none.
+fn kept_line(kept: u64) -> String {
+    if kept == 0 {
         String::new()
     } else {
         format!(
@@ -2031,7 +2042,7 @@ async fn kept_for_open_charges(
              spend is not recorded yet (or a cancelled run's drive may still be spending). \
              `torii worker serve` records it; a later prune removes them."
         )
-    })
+    }
 }
 
 /// How long the run state `run submit` drives into outlives the `run submit` process — which

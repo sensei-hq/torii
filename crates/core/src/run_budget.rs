@@ -670,10 +670,15 @@ impl RunCharges {
     }
 
     /// Whether `run`'s money limit may move to `new_total_micro_usd`, reserving for it. Lowering
-    /// always may, and releases the reservation it no longer needs. A raise may only leave the run
-    /// at most the headroom of the nodes it is charged to — its spend so far is settled onto them
-    /// first, and its own reservation counts as its own — so `new_total − spent ≤ headroom`; the
-    /// increment is reserved under the node locks.
+    /// always may. A raise may only leave the run at most the headroom of the nodes it is charged
+    /// to — its spend so far is settled onto them first, and its own reservation counts as its
+    /// own — so `new_total − spent ≤ headroom`; the increment is reserved under the node locks.
+    ///
+    /// This only ever RESERVES: nothing is released until the new limit is committed (G2-4) — a
+    /// lowering whose journal write then fails leaves the run at its old, higher cap, which its
+    /// reservation must still cover. Once the move is written (or failed to be),
+    /// [`release_to_cap`](Self::release_to_cap) gives back whatever the cap in force no longer
+    /// needs: a lowering's difference, or a failed raise's increment.
     pub async fn check_raise(
         &self,
         journal: &dyn ExecutionJournal,
@@ -714,23 +719,25 @@ impl RunCharges {
         }
         let held = held.max(0) as u64;
         lock_nodes(&mut tx, self.tenant, &nodes).await?;
-        // The run keeps reserved exactly what its new limit leaves it to spend: an increment is
-        // checked first; a lowering only ever releases (it needs no headroom).
-        if !lowering && needed > held {
-            let h = tightest(
-                self.nodes(&mut tx, &nodes, &reserve, as_bigint(held))
-                    .await?,
-            );
-            if let Some(room) = h.micro_usd.filter(|room| needed > *room) {
-                return Err(ChargeError::OverHeadroom {
-                    requested_micro_usd: new_total_micro_usd,
-                    headroom_micro_usd: room,
-                    node: h.tightest.unwrap_or_default(),
-                });
-            }
+        // A raise past what the run holds reserves the increment, checked first. Anything else
+        // — a lowering, or a raise its reservation already covers — changes nothing here: a
+        // release waits for the new limit to be committed (`release_to_cap`).
+        if lowering || needed <= held {
+            return Ok(());
         }
-        let target = if lowering { needed.min(held) } else { needed };
-        if !reserve.is_empty() && target != held {
+        let h = tightest(
+            self.nodes(&mut tx, &nodes, &reserve, as_bigint(held))
+                .await?,
+        );
+        if let Some(room) = h.micro_usd.filter(|room| needed > *room) {
+            return Err(ChargeError::OverHeadroom {
+                requested_micro_usd: new_total_micro_usd,
+                headroom_micro_usd: room,
+                node: h.tightest.unwrap_or_default(),
+            });
+        }
+        let target = needed;
+        if !reserve.is_empty() {
             move_reservation(
                 &mut tx,
                 self.tenant,
@@ -748,6 +755,62 @@ impl RunCharges {
             .execute(&mut *tx)
             .await?;
         }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Release what `run`'s reservation holds beyond what the money cap IN FORCE (the journal's
+    /// fold) still leaves it to spend — `cap − recorded spend`, both read in the reservation's own
+    /// frame. Only ever releases, so it needs no headroom and cannot fail for want of it. Call it
+    /// after a limit move [`check_raise`](Self::check_raise) admitted has been written — or has
+    /// failed to be: a committed lowering gives its difference back, a raise that never landed
+    /// gives back the increment reserved for it, and a committed raise changes nothing.
+    pub async fn release_to_cap(
+        &self,
+        journal: &dyn ExecutionJournal,
+        run: RunId,
+    ) -> Result<(), ChargeError> {
+        let events = journal
+            .load(run)
+            .await
+            .map_err(|e| ChargeError::Journal(e.to_string()))?;
+        let Some(cap) = orchestrator::money_spend_of(&events).1 else {
+            return Ok(());
+        };
+        let mut tx = self.pool.begin().await?;
+        let charge: Option<(Vec<Uuid>, i64, i64, bool)> = sqlx::query_as(
+            "select reserve_node_ids, reserved_micro_usd, recorded_micro_usd, settled \
+               from runs.run_charges where tenant_id = $1 and run_id = $2 for update",
+        )
+        .bind(self.tenant)
+        .bind(run.0)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((reserve, held, recorded, false)) = charge else {
+            return Ok(());
+        };
+        let held = held.max(0) as u64;
+        let target = cap.saturating_sub(recorded.max(0) as u64);
+        if reserve.is_empty() || target >= held {
+            return Ok(());
+        }
+        lock_nodes(&mut tx, self.tenant, &reserve).await?;
+        move_reservation(
+            &mut tx,
+            self.tenant,
+            &reserve,
+            as_bigint(target) - as_bigint(held),
+        )
+        .await?;
+        sqlx::query(
+            "update runs.run_charges set reserved_micro_usd = $3 \
+              where tenant_id = $1 and run_id = $2",
+        )
+        .bind(self.tenant)
+        .bind(run.0)
+        .bind(as_bigint(target))
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok(())
     }

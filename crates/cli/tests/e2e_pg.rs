@@ -3398,3 +3398,77 @@ async fn a_charged_submit_of_an_unpriced_chain_is_refused_up_front_without_budge
         "the issuer's reservation is unchanged"
     );
 }
+
+/// G2-3 (wave B review): a money-capped paused run with NO charge (here: submitted uncharged,
+/// the way a run from before AG-13 was) cannot have its cap moved through the caps — its spend is
+/// on no budget node. `run wake --budget-usd` refuses it as a precondition (exit 2, "not queued"),
+/// not as an execution error, and writes nothing.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+)]
+#[tokio::test]
+async fn a_raise_of_a_money_capped_run_with_no_charge_is_refused_as_a_precondition() {
+    let Some(db) = Db::new().await else { return };
+    let charges = torii_core::run_budget::RunCharges::new(db.pool().await, db.tenant);
+    let run = RunId(uuid::Uuid::new_v4());
+    let at = DateTime::<Utc>::from_timestamp(5_500_000, 0).unwrap();
+    // $1.50 a call under a $1 cap: the run pauses at n2.
+    let (sched, _calls) = fresh_priced_worker(&db, at, 1_500, 1.0).await;
+    let submitted = torii::cmd::run::submit(
+        &sched,
+        run,
+        two_node_graph(&run.0.to_string()),
+        orchestrator_core::RunBudget {
+            tokens: None,
+            money: Some(orchestrator_core::MoneyBudget {
+                total_micro_usd: 1_000_000,
+            }),
+        },
+        torii::cmd::run::StoreLifetime::Durable,
+        || {},
+    )
+    .await
+    .expect("a money-paused run is not an error");
+    assert!(submitted.text.starts_with("paused:"), "{}", submitted.text);
+    assert_eq!(rows_for(&db, "runs.run_charges", run).await, 0, "uncharged");
+
+    let store = PgSchedulerStore::new(db.pool().await, db.tenant);
+    let journal = PgJournal::new(db.pool().await, db.tenant);
+    let before = journal.load(run).await.unwrap().len();
+    let charging = torii::cmd::run::Charging {
+        charges: &charges,
+        journal: &journal,
+        user: None,
+    };
+    let queued_at = store.status(run).await.unwrap().unwrap().updated_at + Duration::seconds(600);
+    let out = torii::cmd::run::wake_charged(
+        Some(&charging),
+        &store,
+        &journal,
+        run,
+        queued_at,
+        orchestrator_core::RunBudget {
+            tokens: None,
+            money: Some(orchestrator_core::MoneyBudget {
+                total_micro_usd: torii::cmd::run::parse_budget_usd("2").unwrap(),
+            }),
+        },
+    )
+    .await
+    .unwrap_or_else(|e| panic!("a run with no charge is a precondition, not an error: {e:?}"));
+    assert_eq!(out.code, torii::errors::EXIT_PRECONDITION, "{}", out.text);
+    assert!(out.text.starts_with("not queued"), "{}", out.text);
+    let after = journal.load(run).await.unwrap();
+    assert_eq!(after.len(), before, "nothing was journaled");
+    assert_eq!(
+        orchestrator::money_spend_of(&after).1,
+        Some(1_000_000),
+        "the cap is unmoved"
+    );
+    assert_eq!(
+        store.status(run).await.unwrap().unwrap().status,
+        RunStatus::Paused,
+        "the run was not woken"
+    );
+}

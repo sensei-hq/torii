@@ -305,8 +305,10 @@ cap over their unit, their groups and every unit above — an explicit limit may
 raise must fit the headroom of the nodes the run is charged to. The run's spend is recorded on
 those nodes (idempotently, by `run submit` when its drive returns and by `worker serve` after every
 tick), so the Budgets & billing tree is one number for questions and runs. All of it is
-`torii_core::run_budget::RunCharges` (`admit`, `settle`, `settle_pending`, `check_raise`) — the
-API's submit and raise call the same four. `onRaiseCap` must surface the refusal it can now get
+`torii_core::run_budget::RunCharges` (`admit`, `abandon`, `settle`, `settle_pending`,
+`check_raise`, `release_to_cap`) — the API's submit and raise call the same functions. A raise is
+`check_raise` (which only reserves), then the cap write, then `release_to_cap` whether the write
+landed or not, so a lowering never releases before it is committed. `onRaiseCap` must surface the refusal it can now get
 ("exceeds the headroom of $X under unit Y"). The limit is a reservation: an admitted run's limit
 is held in the nodes' `reserved_amount` until its spend replaces it or it ends, so concurrent runs
 on one node can never together be admitted more than its headroom.
@@ -314,9 +316,10 @@ on one node can never together be admitted more than its headroom.
 A money cap needs a price for every model the run can reach. `torii_core::pricing::
 unpriced_chains(graph, registry, gateway_config)` returns each reachable chain that cannot be
 priced, who uses it and why (its unpriced models, no defined model, or an unknown chain). The
-CLI's `run submit --budget-usd` refuses on it before submitting (torii#55); the API's submit
-should call the same function, so the submit screen can say which model needs a price before
-the user commits a cap.
+CLI's `run submit` refuses on it before submitting (torii#55) — against the run's EFFECTIVE cap,
+which on Postgres is always set (the issuer's headroom, `--budget-usd` or not). The API's submit
+should call the same function on the admitted limit, so the submit screen can say which model
+needs a price before the user commits a run.
 
 ---
 

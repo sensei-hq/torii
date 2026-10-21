@@ -883,8 +883,8 @@ pub struct HeavyDeps {
     /// the catalog is read once, at boot, so a chain added there since is unknown here.
     pub gateway_chains: HashMap<String, kernel::types::config::FallbackChainConfig>,
     /// #55: the chains and models (no routers, so no credentials) this boot's gateway prices
-    /// with, and where they came from — what `run submit --budget-usd` checks a graph against
-    /// before submitting it (`torii_core::pricing`).
+    /// with, and where they came from — what `run submit` checks a money-capped graph against
+    /// before submitting it (`torii_core::pricing`): under `--budget-usd`, and on Postgres always.
     pub gateway_pricing: kernel::types::config::GatewayConfig,
     pub gateway_source: String,
 }

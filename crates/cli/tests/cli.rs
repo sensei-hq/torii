@@ -613,6 +613,75 @@ fn both_budget_usd_flags_name_the_issuers_headroom() {
     }
 }
 
+/// `--help` of `args`, whitespace-collapsed so a reflow or a wrap never decides a test.
+fn help_text(args: &[&str]) -> String {
+    let out = torii().args(args).output().expect("runs");
+    assert!(out.status.success(), "exit: {:?}", out.status);
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Wave B review D1: since AG-13 every Postgres run carries a money cap, so `run wake
+/// --budget-usd` on one goes through the cap check — the "submitted without --budget-usd ⇒
+/// REFUSED" rule holds on TORII_BACKEND=memory (and for a Postgres run from before AG-13), not
+/// everywhere. Every sentence that names the no-cap refusal must say which backend it is.
+#[test]
+fn wake_help_scopes_the_no_money_cap_refusal_to_the_memory_backend() {
+    let text = help_text(&["run", "wake", "--help"]);
+    let refusals: Vec<&str> = text
+        .split(". ")
+        .filter(|s| s.contains("without --budget-usd"))
+        .collect();
+    assert!(
+        !refusals.is_empty(),
+        "`run wake --help` must still say when a money raise is refused:\n{text}"
+    );
+    for s in refusals {
+        assert!(
+            s.contains("TORII_BACKEND=memory"),
+            "`run wake --help` states the no-money-cap refusal for every backend, and on \
+             Postgres every run has a money cap: {s:?}"
+        );
+    }
+    let submit = help_text(&["run", "submit", "--help"]);
+    assert!(
+        !submit.contains("Only a run SUBMITTED with a money cap has one"),
+        "`run submit --help` says only a --budget-usd run has a money cap; on Postgres every \
+         run does:\n{submit}"
+    );
+}
+
+/// Wave B review D2: omitting --budget-tokens no longer makes a run "unbudgeted, exactly as
+/// before" — on Postgres it is still money-capped, so its model calls still run one at a time.
+#[test]
+fn submit_help_does_not_call_a_run_without_budget_tokens_unbudgeted() {
+    let text = help_text(&["run", "submit", "--help"]);
+    assert!(
+        !text.contains("Omit it and the run is unbudgeted, exactly as before"),
+        "`run submit --help` calls a run without --budget-tokens unbudgeted, and on Postgres \
+         every run is money-capped:\n{text}"
+    );
+    assert!(
+        text.contains("one at a time"),
+        "`run submit --help` must still say a capped run's model calls are serial:\n{text}"
+    );
+}
+
+/// Wave B review D5: TORII_USER is asserted by the operator, never authenticated — naming
+/// another profile charges that profile's caps. Until torii#47 binds the issuer to an
+/// authenticated principal, the help that names TORII_USER must say so.
+#[test]
+fn submit_help_says_torii_user_is_not_authenticated() {
+    let text = help_text(&["run", "submit", "--help"]);
+    assert!(
+        text.contains("not authenticated") && text.contains("torii#47"),
+        "`run submit --help` names TORII_USER without saying it is an unauthenticated, \
+         operator-asserted identity (trusted operators only until torii#47):\n{text}"
+    );
+}
+
 /// The other side of the same sweep: `run agent --help` enumerated the waiting kinds as
 /// THREE ("The third waiting kind … Each of the three refuses the other two") in the very
 /// commit that added a fourth and a fourth refusal arm to this command.

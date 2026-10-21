@@ -4029,6 +4029,49 @@ pub(crate) mod tests {
         );
     }
 
+    /// G5-2 (wave B re-review): once `prune_terminal` committed, the rows ARE gone — a failure
+    /// reading how many were kept for an open charge is reported beside the deleted count, never
+    /// propagated over it (the module's rule: a fault after a durable write is reported).
+    #[cfg_attr(
+        not(have_database_url),
+        ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+    )]
+    #[tokio::test]
+    async fn prune_reports_the_deleted_count_when_the_kept_count_cannot_be_read() {
+        let Some(url) = crate::test_guard::db_url() else {
+            return;
+        };
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let store = t.stores().scheduler;
+        let closed = torii_core::connect(&url, 2).await.expect("connect");
+        closed.close().await;
+        let charges = torii_core::run_budget::RunCharges::new(closed, t.id);
+        let done = RunId(uuid::Uuid::new_v4());
+        store.enqueue(done, &empty_graph(), now()).await.unwrap();
+        store
+            .record_terminal(done, RunStatus::Completed, None)
+            .await
+            .unwrap();
+
+        let out = prune(
+            &store,
+            Some(&charges),
+            chrono::Duration::zero(),
+            chrono::Utc::now() + chrono::Duration::seconds(5),
+            true,
+            &mut never_asked(),
+        )
+        .await
+        .expect("the delete committed, so prune must report it, not fail");
+        assert!(out.text.starts_with("pruned: 1 "), "{}", out.text);
+        assert!(
+            out.text.contains("could not count"),
+            "the unread kept count must be named: {}",
+            out.text
+        );
+        assert!(store.status(done).await.unwrap().is_none());
+    }
+
     #[test]
     fn parse_retention_accepts_days_hours_minutes_and_seconds() {
         assert_eq!(parse_retention("30d"), Ok(chrono::Duration::days(30)));

@@ -780,6 +780,7 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 };
                 cmd::run::prune(
                     d.scheduler_store.as_ref(),
+                    d.charges.as_ref(),
                     older_than,
                     chrono::Utc::now(),
                     yes,

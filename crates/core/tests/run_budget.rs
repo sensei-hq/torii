@@ -1385,3 +1385,71 @@ async fn a_runs_raise_lock_is_exclusive_and_is_not_its_drive_lock() {
     other.drop_all().await;
     o.drop_all().await;
 }
+
+/// G5-5 (wave B re-review), pinning G4-1's orphan predicate clause by clause: an UNSETTLED charge
+/// with no schedule row whose spend is already recorded is a run that ran (and was pruned), not
+/// an orphan — the same issuer's re-admission is refused and its reservation is not released.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn an_unscheduled_charge_with_recorded_spend_is_never_taken_over() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
+    let c = o.charges();
+    let run = RunId(Uuid::new_v4());
+    c.admit(run, u, Some(2 * DOLLAR)).await.unwrap();
+    sqlx::query(
+        "update runs.run_charges set recorded_micro_usd = $3 where tenant_id = $1 and run_id = $2",
+    )
+    .bind(o.tenant)
+    .bind(run.0)
+    .bind((DOLLAR / 2) as i64)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let again = c.admit(run, u, Some(DOLLAR)).await;
+    assert!(
+        matches!(again, Err(ChargeError::AlreadyScheduled(r)) if r == run),
+        "a charge with recorded spend ran, so its id must not be re-admitted: {again:?}"
+    );
+    assert_eq!(
+        o.reserved(o.team_a).await,
+        "2.000000",
+        "its reservation is not released"
+    );
+    o.drop_all().await;
+}
+
+/// G5-5: likewise an unsettled charge with nothing recorded yet but a journal — the run started
+/// (its spend not settled yet), so re-admitting would append to and fold that journal again.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn an_unscheduled_charge_whose_run_journaled_is_never_taken_over() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
+    let c = o.charges();
+    let j = o.journal();
+    let run = RunId(Uuid::new_v4());
+    c.admit(run, u, Some(2 * DOLLAR)).await.unwrap();
+    priced_run(&j, run, 2 * DOLLAR, &[]).await;
+
+    let again = c.admit(run, u, Some(DOLLAR)).await;
+    assert!(
+        matches!(again, Err(ChargeError::AlreadyScheduled(r)) if r == run),
+        "a charge whose run journaled ran, so its id must not be re-admitted: {again:?}"
+    );
+    assert_eq!(
+        o.reserved(o.team_a).await,
+        "2.000000",
+        "its reservation is not released"
+    );
+    o.drop_all().await;
+}

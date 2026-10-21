@@ -410,31 +410,7 @@ async fn admit_takes_the_headroom_and_an_explicit_limit_may_only_lower_it() {
     let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
     let c = o.charges();
 
-    let run = RunId(Uuid::new_v4());
-    assert_eq!(
-        c.admit(run, u, None).await.unwrap().total_micro_usd,
-        4 * DOLLAR
-    );
-    let row: (Uuid, i64, Vec<Uuid>) = sqlx::query_as(
-        "select issuer_profile_id, limit_micro_usd, node_ids from runs.run_charges \
-         where tenant_id = $1 and run_id = $2",
-    )
-    .bind(o.tenant)
-    .bind(run.0)
-    .fetch_one(&pool)
-    .await
-    .expect("admit records the run's charge");
-    assert_eq!((row.0, row.1, row.2.len()), (u, 4 * DOLLAR as i64, 3));
-
-    let lower = RunId(Uuid::new_v4());
-    assert_eq!(
-        c.admit(lower, u, Some(DOLLAR))
-            .await
-            .unwrap()
-            .total_micro_usd,
-        DOLLAR
-    );
-
+    // Above the headroom: refused, naming it, and nothing is written (nor reserved).
     let over = RunId(Uuid::new_v4());
     let err = c.admit(over, u, Some(4 * DOLLAR + 1)).await.unwrap_err();
     assert!(
@@ -455,6 +431,36 @@ async fn admit_takes_the_headroom_and_an_explicit_limit_may_only_lower_it() {
     .await
     .unwrap();
     assert_eq!(written, 0, "a refused admission writes nothing");
+    assert_eq!(o.reserved(o.team_a).await, "0.000000");
+
+    let lower = RunId(Uuid::new_v4());
+    assert_eq!(
+        c.admit(lower, u, Some(DOLLAR))
+            .await
+            .unwrap()
+            .total_micro_usd,
+        DOLLAR
+    );
+
+    // No explicit limit: the headroom — what the $1 run's reservation left of the $4.
+    let run = RunId(Uuid::new_v4());
+    assert_eq!(
+        c.admit(run, u, None).await.unwrap().total_micro_usd,
+        3 * DOLLAR
+    );
+    let row: (Uuid, i64, Vec<Uuid>, i64) = sqlx::query_as(
+        "select issuer_profile_id, limit_micro_usd, node_ids, reserved_micro_usd \
+           from runs.run_charges where tenant_id = $1 and run_id = $2",
+    )
+    .bind(o.tenant)
+    .bind(run.0)
+    .fetch_one(&pool)
+    .await
+    .expect("admit records the run's charge");
+    assert_eq!(
+        (row.0, row.1, row.2.len(), row.3),
+        (u, 3 * DOLLAR as i64, 3, 3 * DOLLAR as i64)
+    );
 
     // A run id that is already scheduled is never charged to this issuer.
     let taken = RunId(Uuid::new_v4());
@@ -506,8 +512,14 @@ async fn settle_records_the_runs_journal_spend_on_every_charged_node_exactly_onc
     assert_eq!(o.spent(o.org).await, "1.750000");
     assert_eq!(o.spent(o.personal_u).await, "2.750000");
 
-    // The run's spend now counts against the issuer's headroom: H 2.0 − 1.75.
-    assert_eq!(c.headroom(u).await.unwrap().micro_usd, Some(250_000));
+    // The run's spend — and the $0.25 of its $2 limit still reserved — count against the
+    // issuer's headroom: H 2.0 − 1.75 − 0.25.
+    assert_eq!(c.headroom(u).await.unwrap().micro_usd, Some(0));
+    assert_eq!(
+        o.reserved(o.group_h).await,
+        "0.750000",
+        "0.50 + the run's 0.25"
+    );
 
     // A run with no charge (submitted before caps applied to runs) records nothing.
     let stray = RunId(Uuid::new_v4());
@@ -593,6 +605,12 @@ async fn a_raise_is_admitted_only_within_the_charged_nodes_headroom() {
         ),
         "{err}"
     );
+    // The $4 raise reserved Team A's last $2.50; lowering the run back to its spend releases it.
+    assert_eq!(o.reserved(o.team_a).await, "2.500000");
+    c.check_raise(&j, run, 3 * DOLLAR / 2)
+        .await
+        .expect("a lowering");
+    assert_eq!(o.reserved(o.team_a).await, "0.000000");
     // Lowering is always admitted — even with no headroom left at all.
     let low = RunId(Uuid::new_v4());
     c.admit(low, u, Some(2 * DOLLAR)).await.unwrap();
@@ -691,14 +709,46 @@ async fn concurrent_admits_never_admit_more_than_the_headroom_between_them() {
     let Some(pool) = pool().await else { return };
     let mut o = Org::new(&pool).await;
     let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
+                                           // Hold Team A's row so every admission is in flight at once: each must then wait for the
+                                           // node lock BEFORE it reads the headroom, or all of them read the same $4.
+    let mut blocker = pool.begin().await.unwrap();
+    sqlx::query("select 1 from governance.nodes where tenant_id = $1 and id = $2 for update")
+        .bind(o.tenant)
+        .bind(o.team_a)
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let racers = torii_core::connect(&std::env::var("DATABASE_URL").unwrap(), 8)
+        .await
+        .expect("connect");
     let mut tasks = Vec::new();
     for _ in 0..4 {
-        let c = o.charges();
+        let c = RunCharges::new(racers.clone(), o.tenant);
         tasks.push(tokio::spawn(async move {
             c.admit(RunId(Uuid::new_v4()), u, Some(3 * DOLLAR / 2))
                 .await
         }));
     }
+    // Every racer is blocked on a lock before the blocker lets go.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let waiting: i64 = sqlx::query_scalar(
+            "select count(*) from pg_stat_activity \
+              where wait_event_type = 'Lock' and query like '%governance.nodes%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        if waiting >= 4 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the racers never blocked"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    blocker.rollback().await.unwrap();
     let mut admitted = 0u64;
     for t in tasks {
         match t.await.unwrap() {

@@ -269,12 +269,16 @@ node per org unit, `hard` or `soft` (Budgets & billing) — and the engine enfor
   watermark of what is already recorded (`runs.run_charges`), so a re-drive or a second worker
   never counts a call twice.
 - **A raise.** `run wake --budget-usd` on Postgres is checked against the nodes the run is charged
-  to: the new cap less what the run has spent must fit their headroom, or the raise is refused
-  and nothing is written. Lowering is always allowed. A run submitted before AG-13 has no charge
+  to: the new cap less what the run has spent must fit their headroom (its own reservation
+  counting as its own), or the raise is refused and nothing is written. Lowering is always
+  allowed. A run submitted before AG-13 has no charge
   and cannot be money-raised.
-- **Not reserved.** The limit is computed at submit; it does not reserve the headroom. Two runs
-  (or a run and questions) on the same node can together spend past a `hard` cap by at most the
-  limits still outstanding — each run is bounded, the node's total is not.
+- **Reserved.** The limit is a reservation: admitting a run adds it to `reserved` on every `hard`
+  node it is charged to, under the node locks, so a second run (or a question) sees only the
+  headroom the first left — two runs are never admitted the same dollars. As the run's spend is
+  recorded it takes its reservation's place; when the run ends, what it did not spend is released.
+  A raise reserves only its increment, a lowering releases the difference. A paused run keeps its
+  reservation until it ends or is lowered.
 - Every Postgres run now carries a money limit, so its model calls run one at a time, as any
   budgeted run's do (a wide `Map` is slower than an unbudgeted one).
 

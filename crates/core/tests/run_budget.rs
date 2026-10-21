@@ -1122,3 +1122,54 @@ async fn a_cancelled_run_with_an_abandoned_claim_is_closed_only_once_no_drive_ho
     assert_eq!(o.spent(o.org).await, "1.000000");
     o.drop_all().await;
 }
+
+/// G4-1 (wave B re-review): `torii run prune` deletes a finished run's schedule row but keeps its
+/// charge, so a settled, pruned run's charge has no schedule row either — and it is NOT an orphan.
+/// Re-admitting its id would drop the settled charge and open a fresh one at `recorded = 0`, and
+/// the new run, appending to the OLD journal, would have the old spend folded and recorded again.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn a_pruned_runs_id_is_never_re_admitted_so_its_spend_is_never_recorded_twice() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
+    let c = o.charges();
+    let j = o.journal();
+    let sched = PgSchedulerStore::new(pool.clone(), o.tenant);
+    let run = RunId(Uuid::new_v4());
+    let limit = c.admit(run, u, None).await.unwrap().total_micro_usd;
+    sched
+        .enqueue(run, &Graph { nodes: vec![] }, chrono::Utc::now())
+        .await
+        .unwrap();
+    priced_run(&j, run, limit, &[DOLLAR]).await;
+    sched
+        .record_terminal(run, RunStatus::Completed, None)
+        .await
+        .unwrap();
+    assert_eq!(c.settle(&j, run).await.unwrap(), DOLLAR);
+    assert_eq!(o.spent(o.team_a).await, "7.000000");
+    assert_eq!(
+        sched
+            .prune_terminal(chrono::Utc::now() + chrono::Duration::seconds(5))
+            .await
+            .unwrap(),
+        1
+    );
+
+    let again = c.admit(run, u, None).await;
+    assert!(
+        matches!(again, Err(ChargeError::AlreadyScheduled(r)) if r == run),
+        "a pruned run's id must not be re-admitted: {again:?}"
+    );
+    assert_eq!(
+        o.spent(o.team_a).await,
+        "7.000000",
+        "the spend is unchanged"
+    );
+    assert_eq!(o.reserved(o.team_a).await, "0.000000");
+    o.drop_all().await;
+}

@@ -2031,24 +2031,34 @@ fn already_submitted(run: RunId, existing: &orchestrator_core::ScheduledRun) -> 
     ))
 }
 
+/// What a money-capped run's graph is checked against before it is submitted (#55): the registry
+/// the run would pin and the gateway's chains and models, named by where they came from.
+pub struct Pricing<'a> {
+    pub registry: &'a orchestrator_core::Registry,
+    pub gateway: &'a kernel::types::config::GatewayConfig,
+    pub source: &'a str,
+}
+
 /// #55 (AG-12): refuse a money cap the gateway could not meter, BEFORE anything is submitted.
 ///
-/// Under `--budget-usd` the engine refuses a call on a chain with an unpriced model — but
-/// mid-run, as a failed node. `torii_core::pricing::unpriced_chains` (the one implementation the
-/// API's submit shares) finds every chain the graph can use that has one; this names each chain,
-/// who uses it and the models without a price, and says what fixes it. `Ok` when there is no
-/// money cap or every reachable chain prices.
+/// Under a money cap the engine refuses a call on a chain with an unpriced model — but mid-run,
+/// as a failed node. `torii_core::pricing::unpriced_chains` (the one implementation the API's
+/// submit shares) finds every chain the graph can use that has one; this names each chain, who
+/// uses it and the models without a price, and says what fixes it. `Ok` when there is no money
+/// cap or every reachable chain prices.
+///
+/// `budget` is the run's EFFECTIVE budget: on Postgres every run is capped by its issuer's
+/// headroom (G2-1), so `charged` says where the cap came from — and so which remedies are true.
 pub fn require_priced_for_money_cap(
     budget: &RunBudget,
     graph: &orchestrator_core::Graph,
-    registry: &orchestrator_core::Registry,
-    pricing: &kernel::types::config::GatewayConfig,
-    source: &str,
+    pricing: &Pricing<'_>,
+    charged: bool,
 ) -> Result<(), CliError> {
     if budget.money.is_none() {
         return Ok(());
     }
-    let unpriced = torii_core::pricing::unpriced_chains(graph, registry, pricing);
+    let unpriced = torii_core::pricing::unpriced_chains(graph, pricing.registry, pricing.gateway);
     if unpriced.is_empty() {
         return Ok(());
     }
@@ -2073,12 +2083,24 @@ pub fn require_priced_for_money_cap(
         })
         .collect::<Vec<_>>()
         .join("; ");
-    Err(CliError::error(format!(
-        "not submitted: --budget-usd caps this run's money, so every model it can call must \
-         declare pricing, and the gateway would refuse these mid-run as unpriced: {list}. \
-         Declare `pricing` on each model in {source} (an explicit zero for a free or local \
-         model), or submit without --budget-usd."
-    )))
+    let source = pricing.source;
+    Err(CliError::error(if charged {
+        format!(
+            "not submitted: on Postgres every run's money is capped — by {}'s headroom under \
+             torii's caps, or lower with --budget-usd — so every model it can call must declare \
+             pricing, and the gateway would refuse these mid-run as unpriced: {list}. Declare \
+             `pricing` on each model in {source} (an explicit zero for a free or local model). \
+             Nothing was written.",
+            crate::boot::ENV_USER
+        )
+    } else {
+        format!(
+            "not submitted: --budget-usd caps this run's money, so every model it can call must \
+             declare pricing, and the gateway would refuse these mid-run as unpriced: {list}. \
+             Declare `pricing` on each model in {source} (an explicit zero for a free or local \
+             model), or submit without --budget-usd."
+        )
+    }))
 }
 
 /// Submit a fresh run and drive it inline. Blocks until the run pauses or ends —
@@ -2164,7 +2186,10 @@ pub struct Charging<'a> {
     pub user: Option<&'a str>,
 }
 
-/// [`submit`], charged to the issuer's caps.
+/// [`submit`], charged to the issuer's caps — and refused up front (#55) when its EFFECTIVE money
+/// cap (`--budget-usd` on the memory backend; always, on Postgres) meets a chain `pricing` cannot
+/// price.
+#[allow(clippy::too_many_arguments)]
 pub async fn submit_charged(
     charging: Option<&Charging<'_>>,
     scheduler: &orchestrator::Scheduler,
@@ -2172,9 +2197,11 @@ pub async fn submit_charged(
     graph: orchestrator_core::Graph,
     budget: RunBudget,
     lifetime: StoreLifetime,
+    pricing: &Pricing<'_>,
     announce: impl FnOnce(),
 ) -> Result<Outcome, CliError> {
     let Some(c) = charging else {
+        require_priced_for_money_cap(&budget, &graph, pricing, false)?;
         return submit(scheduler, run, graph, budget, lifetime, announce).await;
     };
     let user = c.user.ok_or_else(|| {
@@ -2217,6 +2244,21 @@ pub async fn submit_charged(
         money: Some(money),
         ..budget
     };
+    // G2-1: the admitted limit caps every Postgres run, so the graph is checked against it — not
+    // against the operator's budget, which has no money cap without --budget-usd. A refusal drops
+    // the charge just admitted, before anything is announced or enqueued.
+    if let Err(e) = require_priced_for_money_cap(&budget, &graph, pricing, true) {
+        if let Err(cleanup) = c.charges.abandon(run).await {
+            return Err(CliError::error(format!(
+                "{}\nAND the run's budget charge could not be cleaned up ({cleanup}): it still \
+                 reserves its limit on the issuer's budget nodes. Submitting the same --run-id \
+                 again as the same {} releases it.",
+                e.message,
+                crate::boot::ENV_USER
+            )));
+        }
+        return Err(e);
+    }
     let out = submit(scheduler, run, graph, budget, lifetime, announce).await;
     // G1-2: a submit that failed before its `enqueue` committed leaves a charge (and a reservation)
     // on a run that does not exist; drop it, so a retry of this --run-id is not refused and the

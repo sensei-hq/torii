@@ -3086,6 +3086,7 @@ async fn a_run_is_limited_to_its_issuers_headroom_paused_there_and_its_spend_rec
         two_node_graph(&marker),
         orchestrator_core::RunBudget::default(),
         torii::cmd::run::StoreLifetime::Durable,
+        &pricing(true),
         || {},
     )
     .await
@@ -3245,6 +3246,7 @@ async fn a_charged_submit_that_fails_before_its_enqueue_leaves_no_charge_and_no_
         two_node_graph(&run.0.to_string()),
         orchestrator_core::RunBudget::default(),
         torii::cmd::run::StoreLifetime::Durable,
+        &pricing(true),
         || {},
     )
     .await;
@@ -3274,6 +3276,31 @@ async fn a_charged_submit_that_fails_before_its_enqueue_leaves_no_charge_and_no_
     .await
     .unwrap();
     assert_eq!(reserved, "0.000000", "its reservation is released");
+}
+
+/// What `submit_charged` checks a graph against (#55): an empty registry and the gateway
+/// fixture's topology — chain `"c"` on model `"m"` — with `m` priced exactly when `priced`, so
+/// the check sees what the worker's gateway prices. Leaked: a test's whole life is `'static`.
+fn pricing(priced: bool) -> torii::cmd::run::Pricing<'static> {
+    let pricing = priced.then(|| serde_json::json!({ "input_per_1k": 1.0, "output_per_1k": 1.0 }));
+    let gateway: kernel::types::config::GatewayConfig = serde_json::from_value(serde_json::json!({
+        "routers": { "r": { "url": "http://localhost" } },
+        "models": { "m": {
+            "id": "m", "provider": "r", "capabilities": ["text_chat"],
+            "context_window": 8192, "max_output_tokens": 1024, "pricing": pricing
+        } },
+        "chains": { "c": {
+            "id": "c", "capability": "text_chat",
+            "models": [{ "model": "m", "router": "r", "priority": 1 }],
+            "fallback_triggers": []
+        } }
+    }))
+    .expect("the fixture gateway config parses");
+    torii::cmd::run::Pricing {
+        registry: Box::leak(Box::default()),
+        gateway: Box::leak(Box::new(gateway)),
+        source: "the e2e fixture gateway",
+    }
 }
 
 /// The reserved amount on `node`, as Postgres renders it.
@@ -3335,6 +3362,7 @@ async fn a_charged_submit_of_an_unpriced_chain_is_refused_up_front_without_budge
         one_node_graph(&marker),
         orchestrator_core::RunBudget::default(),
         torii::cmd::run::StoreLifetime::Durable,
+        &pricing(false),
         || announced.set(true),
     )
     .await;

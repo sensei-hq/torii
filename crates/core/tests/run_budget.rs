@@ -1220,3 +1220,91 @@ async fn a_terminal_run_whose_charge_is_open_is_not_pruned_until_it_is_settled()
     );
     o.drop_all().await;
 }
+
+/// G4-3 (wave B re-review): a lowering whose `release_to_cap` failed after its cap was journaled
+/// left the run over-reserved, and nothing repaired it while the run stayed paused. A settle
+/// reconciles the reservation to the cap in force: `cap − recorded`.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn a_settle_brings_the_reservation_to_the_cap_in_force_when_a_release_failed() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
+    let c = o.charges();
+    let j = o.journal();
+    let sched = PgSchedulerStore::new(pool.clone(), o.tenant);
+    let run = RunId(Uuid::new_v4());
+    c.admit(run, u, Some(3 * DOLLAR)).await.unwrap();
+    sched
+        .enqueue(run, &Graph { nodes: vec![] }, chrono::Utc::now())
+        .await
+        .unwrap();
+    priced_run(&j, run, 3 * DOLLAR, &[DOLLAR]).await;
+    sched
+        .record_paused(run, None, "money cap reached")
+        .await
+        .unwrap();
+
+    // `run wake --budget-usd 2`: admitted, journaled, woken — and its `release_to_cap` fails.
+    c.check_raise(&j, run, 2 * DOLLAR)
+        .await
+        .expect("a lowering");
+    j.append(
+        run,
+        JournalEvent::MoneyBudgetRaised {
+            new_total_micro_usd: 2 * DOLLAR,
+        },
+    )
+    .await
+    .unwrap();
+    sched.force_wake(run, chrono::Utc::now()).await.unwrap();
+    assert_eq!(o.reserved(o.team_a).await, "2.000000", "the release failed");
+
+    c.settle_pending(&j).await.unwrap();
+    assert_eq!(
+        o.reserved(o.team_a).await,
+        "1.000000",
+        "the cap in force ($2) less the recorded spend ($1)"
+    );
+    o.drop_all().await;
+}
+
+/// G4-4 (wave B re-review): a raise and a lowering of one paused run, interleaved — the raise's
+/// increment reserved, then the lowering's cap journaled and released to, then the raise's cap
+/// journaled — must leave the reservation covering the cap in force, never under it.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn interleaved_cap_moves_leave_the_cap_in_force_fully_reserved() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
+    let c = o.charges();
+    let j = o.journal();
+    let run = RunId(Uuid::new_v4());
+    c.admit(run, u, Some(2 * DOLLAR)).await.unwrap();
+    priced_run(&j, run, 2 * DOLLAR, &[DOLLAR]).await;
+    c.settle(&j, run).await.unwrap();
+    assert_eq!(o.reserved(o.team_a).await, "1.000000");
+
+    // Both moves pass their check against the $2 cap in force…
+    c.check_raise(&j, run, 4 * DOLLAR).await.expect("the raise");
+    c.check_raise(&j, run, 3 * DOLLAR)
+        .await
+        .expect("the lowering");
+    assert_eq!(o.reserved(o.team_a).await, "3.000000");
+    // … the lowering lands first, then the raise.
+    commit_cap(&c, &j, run, 3 * DOLLAR).await;
+    commit_cap(&c, &j, run, 4 * DOLLAR).await;
+    assert_eq!(
+        o.reserved(o.team_a).await,
+        "3.000000",
+        "the cap in force ($4) less the recorded spend ($1)"
+    );
+    o.drop_all().await;
+}

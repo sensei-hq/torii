@@ -1945,9 +1945,14 @@ fn fmt_cutoff(t: DateTime<Utc>) -> String {
 /// then uses — but the number reported at the end is the number actually DELETED, which can
 /// differ if a run went terminal, or was pruned by another operator, in between. Reporting
 /// the intent instead of the effect is precisely what the rest of this module refuses to do.
+///
+/// G4-2: on Postgres a terminal run whose budget charge is still open (`charges`) is never
+/// eligible either — its final spend is found through its schedule row — and the outcome says
+/// how many were kept for that, so a prune that deletes fewer runs than are terminal is never
+/// silent about why.
 pub async fn prune(
     store: &dyn SchedulerStore,
-    _charges: Option<&torii_core::run_budget::RunCharges>,
+    charges: Option<&torii_core::run_budget::RunCharges>,
     older_than: chrono::Duration,
     now: DateTime<Utc>,
     yes: bool,
@@ -1967,10 +1972,12 @@ pub async fn prune(
     if counted == 0 {
         // Nothing to consent to, so nothing is asked. Exit 0: the state the operator asked
         // for already holds.
-        return Ok(Outcome::ok(format!(
+        let mut text = format!(
             "nothing to prune: no completed, failed or cancelled run last changed before {}",
             fmt_cutoff(cutoff)
-        )));
+        );
+        text.push_str(&kept_for_open_charges(charges, cutoff).await?);
+        return Ok(Outcome::ok(text));
     }
 
     if !yes {
@@ -1999,7 +2006,32 @@ pub async fn prune(
             " — the preview counted {counted}; the eligible set changed in between"
         ));
     }
+    text.push_str(&kept_for_open_charges(charges, cutoff).await?);
     Ok(Outcome::ok(text))
+}
+
+/// The line `prune` adds for the terminal runs it kept because their budget charge is still open
+/// (G4-2) — empty when there are none, or on the memory backend, which has no charges.
+async fn kept_for_open_charges(
+    charges: Option<&torii_core::run_budget::RunCharges>,
+    cutoff: DateTime<Utc>,
+) -> Result<String, CliError> {
+    let Some(charges) = charges else {
+        return Ok(String::new());
+    };
+    let kept = charges
+        .open_terminal_before(cutoff)
+        .await
+        .map_err(|e| CliError::error(e.to_string()))?;
+    Ok(if kept == 0 {
+        String::new()
+    } else {
+        format!(
+            "\nkept {kept} terminal run record(s) whose budget charge is still open: their final \
+             spend is not recorded yet (or a cancelled run's drive may still be spending). \
+             `torii worker serve` records it; a later prune removes them."
+        )
+    })
 }
 
 /// How long the run state `run submit` drives into outlives the `run submit` process — which

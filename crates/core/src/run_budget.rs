@@ -677,6 +677,26 @@ impl RunCharges {
         }
     }
 
+    /// How many of this tenant's terminal runs last changed before `before` are still held by an
+    /// open charge — the ones `torii run prune` keeps (G4-2): their final spend is not recorded
+    /// yet, or a cancelled run's drive may still be spending.
+    pub async fn open_terminal_before(
+        &self,
+        before: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, ChargeError> {
+        let n: i64 = sqlx::query_scalar(
+            "select count(*) from runs.scheduled_runs sr \
+               join runs.run_charges c on c.tenant_id = sr.tenant_id and c.run_id = sr.run_id \
+              where sr.tenant_id = $1 and sr.status in ('completed', 'failed', 'cancelled') \
+                and sr.updated_at < $2 and not c.settled",
+        )
+        .bind(self.tenant)
+        .bind(before)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n.max(0) as u64)
+    }
+
     /// Whether `run`'s money limit may move to `new_total_micro_usd`, reserving for it. Lowering
     /// always may. A raise may only leave the run at most the headroom of the nodes it is charged
     /// to — its spend so far is settled onto them first, and its own reservation counts as its

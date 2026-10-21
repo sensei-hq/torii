@@ -989,3 +989,64 @@ async fn spend_a_cancelled_runs_live_drive_makes_after_the_cancel_is_still_recor
     assert_eq!(c.settle_pending(&j).await.unwrap(), 0, "and closed");
     o.drop_all().await;
 }
+
+/// G1-3: a cancelled run whose drive's claim never cleared (its worker died mid-drive) is closed
+/// once the claim is long abandoned AND no drive holds the run's lock — never while one does.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn a_cancelled_run_with_an_abandoned_claim_is_closed_only_once_no_drive_holds_it() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
+    let c = o.charges();
+    let j = o.journal();
+    let sched = PgSchedulerStore::new(pool.clone(), o.tenant);
+    let run = RunId(Uuid::new_v4());
+    let limit = c.admit(run, u, None).await.unwrap().total_micro_usd;
+    sched
+        .enqueue(run, &Graph { nodes: vec![] }, chrono::Utc::now())
+        .await
+        .unwrap();
+    priced_run(&j, run, limit, &[DOLLAR]).await;
+    sched.cancel(run).await.unwrap();
+    sqlx::query(
+        "update runs.scheduled_runs set claimed_at = now() - interval '2 hours' \
+          where tenant_id = $1 and run_id = $2",
+    )
+    .bind(o.tenant)
+    .bind(run.0)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let settled = || async {
+        sqlx::query_scalar::<_, bool>(
+            "select settled from runs.run_charges where tenant_id = $1 and run_id = $2",
+        )
+        .bind(o.tenant)
+        .bind(run.0)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+
+    // A drive still holds the run: its spend may still grow, so the charge stays open.
+    let lock = sched
+        .try_lock_run(run)
+        .await
+        .unwrap()
+        .expect("the run's lock");
+    c.settle_pending(&j).await.unwrap();
+    assert!(!settled().await, "a held drive lock keeps the charge open");
+    assert_eq!(o.reserved(o.team_a).await, "3.000000");
+    lock.release().await.unwrap();
+
+    // Nothing holds it and the claim is long abandoned: final.
+    assert_eq!(c.settle_pending(&j).await.unwrap(), 1);
+    assert!(settled().await);
+    assert_eq!(o.reserved(o.team_a).await, "0.000000");
+    assert_eq!(o.spent(o.org).await, "1.000000");
+    o.drop_all().await;
+}

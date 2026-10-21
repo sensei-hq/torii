@@ -104,7 +104,8 @@ enum RunAction {
         /// Ledgered from the cost the gateway prices each call at, so every model on a chain
         /// this run can use must declare pricing (an explicit zero for a free or local model):
         /// a graph that can reach an unpriced one is refused before it is submitted, naming the
-        /// chain and the model. Independent of --budget-tokens;
+        /// chain and the model — on Postgres with or without this flag, since every run there
+        /// is capped. Independent of --budget-tokens;
         /// give either, both or neither. Spend is shown by `run status`, and a run that stops
         /// at its cap is raised with `run wake --budget-usd`. Only a run SUBMITTED with a
         /// money cap has one — a later raise cannot introduce it.
@@ -807,15 +808,15 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                     money: budget_usd
                         .map(|total_micro_usd| orchestrator_core::MoneyBudget { total_micro_usd }),
                 };
-                // #55: a money cap the gateway could not meter is refused here, before
-                // anything is submitted — against the registry this run would pin.
-                cmd::run::require_priced_for_money_cap(
-                    &budget,
-                    &g,
-                    &registry.handle().snapshot().0,
-                    &gateway_pricing,
-                    &gateway_source,
-                )?;
+                // #55: a money cap the gateway could not meter is refused before anything is
+                // submitted — against the registry this run would pin. `submit_charged` checks
+                // the EFFECTIVE cap (G2-1): on Postgres every run is capped by its issuer.
+                let registry = registry.handle().snapshot().0;
+                let pricing = cmd::run::Pricing {
+                    registry: &registry,
+                    gateway: &gateway_pricing,
+                    source: &gateway_source,
+                };
                 let log = boot::log_run_events(events);
                 // Print the id BEFORE driving: an operator who loses the terminal
                 // must still be able to find the run. `submit` calls this AFTER its
@@ -833,6 +834,7 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                     g,
                     budget,
                     env.backend.store_lifetime(),
+                    &pricing,
                     || println!("submitted: {}", run.0),
                 )
                 .await;

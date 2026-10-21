@@ -858,3 +858,41 @@ async fn a_raise_reserves_its_increment_out_of_what_other_runs_reservations_leav
     assert_eq!(o.reserved(o.team_a).await, "1.500000");
     o.drop_all().await;
 }
+
+/// G1-4 (wave B review): an issuer with no headroom left is refused — a $0 limit would pause the
+/// run on its first priced call with nothing that could ever raise it — and nothing is written.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn zero_headroom_refuses_the_run_and_writes_nothing() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await;
+    sqlx::query(
+        "update governance.nodes set spent_amount = cap_amount where tenant_id = $1 and id = $2",
+    )
+    .bind(o.tenant)
+    .bind(o.team_a)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let run = RunId(Uuid::new_v4());
+    let got = o.charges().admit(run, u, None).await;
+    let err = got.expect_err("a run with no headroom must be refused, not admitted at $0");
+    assert!(
+        err.to_string().contains("no headroom") && err.to_string().contains("Team A"),
+        "{err}"
+    );
+    let written: i64 = sqlx::query_scalar(
+        "select count(*) from runs.run_charges where tenant_id = $1 and run_id = $2",
+    )
+    .bind(o.tenant)
+    .bind(run.0)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(written, 0, "a refused admission writes nothing");
+    o.drop_all().await;
+}

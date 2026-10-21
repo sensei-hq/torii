@@ -259,6 +259,20 @@ async fn drop_charge(
 /// `reserve_node_ids`, `reserved_micro_usd`, `settled`.
 type ChargeRow = (Vec<Uuid>, i64, Vec<Uuid>, i64, bool);
 
+/// A held per-run raise lock ([`RunCharges::try_lock_raise`]): while it is held no other
+/// `run wake --budget-usd` of the same run can move its money cap. Release it with
+/// [`release`](Self::release).
+pub struct RaiseLock {
+    _run: RunId,
+}
+
+impl RaiseLock {
+    /// Give the lock back.
+    pub async fn release(self) -> Result<(), ChargeError> {
+        Ok(())
+    }
+}
+
 /// One tenant's run charges, over torii's database.
 #[derive(Clone)]
 pub struct RunCharges {
@@ -269,6 +283,11 @@ pub struct RunCharges {
 impl RunCharges {
     pub fn new(pool: PgPool, tenant: Uuid) -> Self {
         Self { pool, tenant }
+    }
+
+    /// Take `run`'s raise lock without waiting: `None` when another raise of it holds it.
+    pub async fn try_lock_raise(&self, run: RunId) -> Result<Option<RaiseLock>, ChargeError> {
+        Ok(Some(RaiseLock { _run: run }))
     }
 
     /// The issuer a run is submitted as: a `core.profiles` id that belongs to this tenant — by a

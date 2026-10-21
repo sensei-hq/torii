@@ -24,6 +24,24 @@ impl PgSchedulerStore {
         Self { pool, tenant }
     }
 
+    /// G1-3 (wave B review): a drive's record found its row no longer `waking` — `cancel`
+    /// flipped it mid-drive. The status stays `cancelled`, but the drive's claim is released and
+    /// `updated_at` moves: the only signal a cancelled run's budget charge
+    /// (`torii_core::run_budget`) has that its drive has ended and its spend is final.
+    async fn release_cancelled_claim(&self, run: RunId) -> Result<(), OrchestratorError> {
+        sqlx::query(
+            "update runs.scheduled_runs set claimed_at = null, updated_at = now() \
+             where tenant_id = $1 and run_id = $2 and status = 'cancelled' \
+               and claimed_at is not null",
+        )
+        .bind(self.tenant)
+        .bind(run.0)
+        .execute(&self.pool)
+        .await
+        .map_err(store_err)?;
+        Ok(())
+    }
+
     /// AG-3: `run`'s consecutive wake attempts since its last successful drive, or `None` for
     /// a run this tenant does not have.
     /// A read for the operator (`torii run status`); the trait does not expose the counter.
@@ -142,7 +160,7 @@ impl SchedulerStore for PgSchedulerStore {
     ) -> Result<(), OrchestratorError> {
         // AG-3: a drive that recorded a pause SUCCEEDED — the consecutive-failure count and the
         // last recorded error restart, in the same conditional-on-waking UPDATE.
-        sqlx::query(
+        let res = sqlx::query(
             "update runs.scheduled_runs set status = 'paused', next_wake = $3, claimed_at = null, \
                     reason = $4, attempts = 0, last_wake_error = null, updated_at = now() \
              where tenant_id = $1 and run_id = $2 and status = 'waking'",
@@ -154,6 +172,9 @@ impl SchedulerStore for PgSchedulerStore {
         .execute(&self.pool)
         .await
         .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            self.release_cancelled_claim(run).await?;
+        }
         Ok(())
     }
 
@@ -163,7 +184,7 @@ impl SchedulerStore for PgSchedulerStore {
         status: RunStatus,
         reason: Option<&str>,
     ) -> Result<(), OrchestratorError> {
-        sqlx::query(
+        let res = sqlx::query(
             "update runs.scheduled_runs set status = $3::text::runs.run_status, next_wake = null, \
                     claimed_at = null, reason = $4, updated_at = now() \
              where tenant_id = $1 and run_id = $2 and status = 'waking'",
@@ -175,6 +196,9 @@ impl SchedulerStore for PgSchedulerStore {
         .execute(&self.pool)
         .await
         .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            self.release_cancelled_claim(run).await?;
+        }
         Ok(())
     }
 
@@ -278,7 +302,7 @@ impl SchedulerStore for PgSchedulerStore {
         retry_at: DateTime<Utc>,
         error: &str,
     ) -> Result<(), OrchestratorError> {
-        sqlx::query(
+        let res = sqlx::query(
             "update runs.scheduled_runs set status = 'paused', next_wake = $3, claimed_at = null, \
                     reason = $4, last_wake_error = $4, updated_at = now() \
              where tenant_id = $1 and run_id = $2 and status = 'waking'",
@@ -290,6 +314,9 @@ impl SchedulerStore for PgSchedulerStore {
         .execute(&self.pool)
         .await
         .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            self.release_cancelled_claim(run).await?;
+        }
         Ok(())
     }
 

@@ -268,7 +268,8 @@ node per org unit, `hard` or `soft` (Budgets & billing) — and the engine enfor
   `run submit` records it when its drive returns (paused, failed or completed), and `worker serve`
   after every tick for every run whose schedule moved. Recording is idempotent: each run keeps a
   watermark of what is already recorded (`runs.run_charges`), so a re-drive or a second worker
-  never counts a call twice.
+  never counts a call twice. A run cancelled while its drive is still running keeps its charge
+  open until that drive ends, so what it spends after the cancel is recorded too.
 - **A raise.** `run wake --budget-usd` on Postgres is checked against the nodes the run is charged
   to: the new cap less what the run has spent must fit their headroom (its own reservation
   counting as its own), or the raise is refused and nothing is written. Lowering is always

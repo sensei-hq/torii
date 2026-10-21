@@ -23,7 +23,8 @@
 //!   check against the nodes it is charged to, reserving only the increment (a lowering releases
 //!   the difference).
 
-use orchestrator_core::{ExecutionJournal, MoneyBudget, RunId, MICRO_USD_PER_USD};
+use crate::stores::PgSchedulerStore;
+use orchestrator_core::{ExecutionJournal, MoneyBudget, RunId, SchedulerStore, MICRO_USD_PER_USD};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -31,6 +32,11 @@ use uuid::Uuid;
 /// set — the engine ledgers a call's cost only while a money cap is in force, and that ledger is
 /// what [`RunCharges::settle`] records back — but one no run reaches. `i64::MAX` so it is storable.
 pub const UNBOUNDED_MICRO_USD: u64 = i64::MAX as u64;
+
+/// How long a CANCELLED run's drive claim must have stood before it counts as abandoned (its
+/// worker died mid-drive, so no record will ever release it): an hour, far past the scheduler's
+/// lease. Even then the charge is closed only while no drive holds the run's lock.
+const ABANDONED_CLAIM_SQL: &str = "interval '1 hour'";
 
 /// A dollar figure for an operator, exactly and without trailing zeros past the cents:
 /// `1500000` → `$1.50`, `1` → `$0.000001` — the form `torii run status` prints.
@@ -63,6 +69,8 @@ pub enum ChargeError {
     /// The run id is already scheduled — a charge must never attach to someone else's run.
     AlreadyScheduled(RunId),
     Journal(String),
+    /// Reading the run's schedule (its drive lock) failed.
+    Schedule(String),
     Db(sqlx::Error),
 }
 
@@ -106,6 +114,7 @@ impl std::fmt::Display for ChargeError {
                 write!(f, "run {} already exists", run.0)
             }
             ChargeError::Journal(e) => write!(f, "reading the run's journal: {e}"),
+            ChargeError::Schedule(e) => write!(f, "reading the run's schedule: {e}"),
             ChargeError::Db(e) => write!(f, "budget store: {e}"),
         }
     }
@@ -511,22 +520,63 @@ impl RunCharges {
         // The schedule row BEFORE the journal: a terminal status read here means the journal read
         // after it holds the run's final spend, and an `updated_at` that moves after this read
         // (another drive) is newer than the one recorded, so the next sweep settles again.
-        let schedule: Option<(String, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-            "select status::text, updated_at from runs.scheduled_runs \
-              where tenant_id = $1 and run_id = $2",
-        )
-        .bind(self.tenant)
-        .bind(run.0)
-        .fetch_optional(&self.pool)
-        .await?;
+        let schedule: Option<(String, chrono::DateTime<chrono::Utc>, bool, bool)> =
+            sqlx::query_as(&format!(
+                "select status::text, updated_at, claimed_at is not null, \
+                        coalesce(claimed_at < now() - {ABANDONED_CLAIM_SQL}, false) \
+                   from runs.scheduled_runs where tenant_id = $1 and run_id = $2"
+            ))
+            .bind(self.tenant)
+            .bind(run.0)
+            .fetch_optional(&self.pool)
+            .await?;
+        // G1-3: `cancel` can flip a run whose drive is still running (its claim stands), and that
+        // drive keeps spending; its record releases the claim when it ends. So a cancelled run is
+        // final only with no claim — or with one long abandoned (its worker died) while no drive
+        // holds the run's lock, which is held across the journal read below so none can start.
+        let mut drive_lock = None;
+        let terminal = match schedule.as_ref() {
+            Some((s, _, _, _)) if matches!(s.as_str(), "completed" | "failed") => true,
+            Some((s, _, claimed, abandoned)) if s == "cancelled" => {
+                if !claimed {
+                    true
+                } else if *abandoned {
+                    drive_lock = PgSchedulerStore::new(self.pool.clone(), self.tenant)
+                        .try_lock_run(run)
+                        .await
+                        .map_err(|e| ChargeError::Schedule(e.to_string()))?;
+                    drive_lock.is_some()
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        };
+        let settled = self
+            .record(journal, run, schedule.map(|s| s.1), terminal)
+            .await;
+        if let Some(lock) = drive_lock {
+            lock.release()
+                .await
+                .map_err(|e| ChargeError::Schedule(e.to_string()))?;
+        }
+        settled
+    }
+
+    /// The body of [`settle`](Self::settle): fold `run`'s journal and record what is new, closing
+    /// the charge when `terminal`.
+    async fn record(
+        &self,
+        journal: &dyn ExecutionJournal,
+        run: RunId,
+        seen: Option<chrono::DateTime<chrono::Utc>>,
+        terminal: bool,
+    ) -> Result<u64, ChargeError> {
         let events = journal
             .load(run)
             .await
             .map_err(|e| ChargeError::Journal(e.to_string()))?;
         let (spent, _) = orchestrator::money_spend_of(&events);
-        let terminal = schedule
-            .as_ref()
-            .is_some_and(|(s, _)| matches!(s.as_str(), "completed" | "failed" | "cancelled"));
 
         let mut tx = self.pool.begin().await?;
         let charge: Option<(Vec<Uuid>, i64, Vec<Uuid>, i64)> = sqlx::query_as(
@@ -576,7 +626,7 @@ impl RunCharges {
         .bind(self.tenant)
         .bind(run.0)
         .bind(as_bigint(spent))
-        .bind(schedule.map(|(_, at)| at))
+        .bind(seen)
         .bind(terminal)
         .bind(as_bigint(held - freed))
         .execute(&mut *tx)
@@ -593,12 +643,13 @@ impl RunCharges {
         &self,
         journal: &dyn ExecutionJournal,
     ) -> Result<usize, ChargeError> {
-        let runs: Vec<(Uuid,)> = sqlx::query_as(
+        let runs: Vec<(Uuid,)> = sqlx::query_as(&format!(
             "select c.run_id from runs.run_charges c \
                join runs.scheduled_runs sr on sr.tenant_id = c.tenant_id and sr.run_id = c.run_id \
               where c.tenant_id = $1 and not c.settled \
-                and (c.seen_updated_at is null or sr.updated_at > c.seen_updated_at)",
-        )
+                and (c.seen_updated_at is null or sr.updated_at > c.seen_updated_at \
+                     or (sr.status = 'cancelled' and sr.claimed_at < now() - {ABANDONED_CLAIM_SQL}))",
+        ))
         .bind(self.tenant)
         .fetch_all(&self.pool)
         .await?;

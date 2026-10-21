@@ -2,7 +2,9 @@
 set search_path to runs, core, extensions;
 -- TM-6 (torii#24): the durable scheduler's queue. `graph` is the ORIGINAL submitted graph;
 -- next_wake NULL = no timer (needs a force-wake); claimed_at is the lease stamp on 'waking' rows
--- for crash-reclaim; reason is the last pause/fail reason.
+-- for crash-reclaim; reason is the last pause/fail reason. A drive that ends on a row `cancel`
+-- flipped mid-drive leaves it `cancelled` but clears claimed_at and moves updated_at — the signal
+-- runs.run_charges waits for before closing the run's charge.
 -- AG-3 (torii#53): attempts counts CONSECUTIVE wake attempts since the last successful drive
 -- (enqueue = 1, record_paused resets to 0, begin_wake_attempt adds one); last_wake_error is the
 -- error the latest failed attempt recorded, taken (cleared) by the next begin_wake_attempt. On a

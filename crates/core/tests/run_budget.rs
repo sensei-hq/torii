@@ -534,6 +534,47 @@ async fn settle_records_the_runs_journal_spend_on_every_charged_node_exactly_onc
     ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
 )]
 #[tokio::test]
+async fn a_worker_clock_ahead_of_the_database_never_hides_a_terminal_run_from_settle_pending() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await;
+    let c = o.charges();
+    let j = o.journal();
+    let sched = PgSchedulerStore::new(pool.clone(), o.tenant);
+    let run = RunId(Uuid::new_v4());
+    let limit = c.admit(run, u, None).await.unwrap().total_micro_usd;
+    // The submitting process's clock runs a minute ahead of the database's: every
+    // `updated_at` the schedule records must still move forward on the DB's own clock.
+    sched
+        .enqueue(
+            run,
+            &Graph { nodes: vec![] },
+            chrono::Utc::now() + chrono::Duration::seconds(60),
+        )
+        .await
+        .unwrap();
+    priced_run(&j, run, limit, &[DOLLAR]).await;
+    assert_eq!(c.settle_pending(&j).await.unwrap(), 1);
+
+    spend(&j, run, 500_000).await;
+    sched
+        .record_terminal(run, RunStatus::Completed, None)
+        .await
+        .expect("the run completes");
+    assert_eq!(
+        c.settle_pending(&j).await.unwrap(),
+        1,
+        "the terminal update moved the schedule, whatever the submitter's clock said"
+    );
+    assert_eq!(o.spent(o.org).await, "1.500000");
+    o.drop_all().await;
+}
+
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
 async fn settle_pending_records_runs_whose_schedule_moved_and_closes_terminal_ones() {
     let Some(pool) = pool().await else { return };
     let mut o = Org::new(&pool).await;

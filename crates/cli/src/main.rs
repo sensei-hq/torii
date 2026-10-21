@@ -86,9 +86,10 @@ enum RunAction {
         /// refused outright for the same reason: below that no chat call can be
         /// dispatched whatever the prompt.
         ///
-        /// Omit it and the run is unbudgeted, exactly as before. A budgeted run runs
-        /// its model calls one at a time, so a wide fan-out is slower than an
-        /// unbudgeted one.
+        /// Omit it and the run has no token cap. That does not make it uncapped: on
+        /// Postgres every run carries a money cap (see --budget-usd), and a run with
+        /// any cap runs its model calls one at a time, so a wide fan-out is slower.
+        /// Only a TORII_BACKEND=memory run with neither flag keeps full fan-out.
         #[arg(long, value_parser = cmd::run::parse_budget_tokens)]
         budget_tokens: Option<u64>,
         /// Cap this run's MONEY spend, in US dollars (e.g. 5 or 0.25; at most 6 decimal
@@ -101,14 +102,21 @@ enum RunAction {
         /// headroom. What the run spends is recorded on those budget nodes. With
         /// TORII_BACKEND=memory there are no caps and this flag alone is the cap.
         ///
+        /// TORII_USER is asserted by the operator, not authenticated: the CLI only checks
+        /// that it names a profile in the tenant, so naming another profile charges that
+        /// profile's caps. That grants nothing the CLI's database credential cannot already
+        /// do (it can write budget nodes directly), but it is for trusted operators only
+        /// until torii#47 binds the issuer to an authenticated principal.
+        ///
         /// Ledgered from the cost the gateway prices each call at, so every model on a chain
         /// this run can use must declare pricing (an explicit zero for a free or local model):
         /// a graph that can reach an unpriced one is refused before it is submitted, naming the
         /// chain and the model — on Postgres with or without this flag, since every run there
         /// is capped. Independent of --budget-tokens;
         /// give either, both or neither. Spend is shown by `run status`, and a run that stops
-        /// at its cap is raised with `run wake --budget-usd`. Only a run SUBMITTED with a
-        /// money cap has one — a later raise cannot introduce it.
+        /// at its cap is raised with `run wake --budget-usd`, which moves a money cap and
+        /// never introduces one: on Postgres every run is submitted with one, but a
+        /// TORII_BACKEND=memory run submitted without this flag has none to move.
         #[arg(long, value_parser = cmd::run::parse_budget_usd)]
         budget_usd: Option<u64>,
     },
@@ -336,10 +344,14 @@ enum RunAction {
         /// run that stopped at its money budget. Lowering it below what the run has spent
         /// halts the run at its next model call.
         ///
-        /// It moves an existing money cap and can never introduce one: on a run submitted
-        /// without --budget-usd this is REFUSED and nothing is written (spend is only
+        /// It moves an existing money cap and can never introduce one (spend is only
         /// counted while a cap is in force, so a cap added now would be weighed against
-        /// spend it never saw).
+        /// spend it never saw). On TORII_BACKEND=memory a run submitted without --budget-usd
+        /// has no money cap, so this is REFUSED there and nothing is written. On Postgres
+        /// every run is submitted with a money cap, so the raise goes to the cap check
+        /// below; only a run submitted before torii applied caps to runs (AG-13) can lack
+        /// one — refused the same way — or have one but no budget charge, which is refused
+        /// as a precondition (exit 2), nothing written.
         ///
         /// On Postgres a raise goes through the cap check the run was submitted under: what
         /// the run may still spend (the new cap less its spend) must fit the headroom left on

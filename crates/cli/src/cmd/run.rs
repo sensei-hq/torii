@@ -458,8 +458,10 @@ pub async fn wake(
                 "not queued: {} was submitted without a money cap, and --budget-usd can only \
                  move an existing money cap, never introduce one (spend is counted only while \
                  a cap is in force, so a cap added now would be weighed against spend it never \
-                 saw). Nothing was written. Submit a new run with --budget-usd to cap its \
-                 spend, or wake this one without it.",
+                 saw). Nothing was written. To cap its spend, submit a new run — on Postgres \
+                 every new run carries a money cap (TORII_USER's headroom, or lower with \
+                 --budget-usd); with TORII_BACKEND=memory give it --budget-usd — or wake this \
+                 one without --budget-usd.",
                 run.0
             )));
         }

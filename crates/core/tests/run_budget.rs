@@ -1453,3 +1453,112 @@ async fn an_unscheduled_charge_whose_run_journaled_is_never_taken_over() {
     );
     o.drop_all().await;
 }
+
+/// A journal whose FIRST `load` signals `entered` and then waits for `go` — so a test can look at
+/// the database while a settle or release is inside its journal read.
+struct GatedJournal {
+    inner: PgJournal,
+    entered: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    go: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+}
+
+#[async_trait::async_trait]
+impl ExecutionJournal for GatedJournal {
+    async fn append(
+        &self,
+        run: RunId,
+        event: JournalEvent,
+    ) -> Result<orchestrator_core::Seq, orchestrator_core::JournalError> {
+        self.inner.append(run, event).await
+    }
+    async fn load(
+        &self,
+        run: RunId,
+    ) -> Result<Vec<(orchestrator_core::Seq, JournalEvent)>, orchestrator_core::JournalError> {
+        let entered = self.entered.lock().unwrap().take();
+        if let Some(entered) = entered {
+            let _ = entered.send(());
+            if let Some(go) = self.go.lock().await.take() {
+                let _ = go.await;
+            }
+        }
+        self.inner.load(run).await
+    }
+}
+
+/// While `op` is inside its first journal read, is `run`'s charge row locked? Probed from another
+/// connection with `for update nowait`, which fails at once (`55P03`) on a held row lock — no
+/// timing involved.
+async fn row_locked_during_the_journal_read<F, Fut>(o: &Org, run: RunId, op: F) -> bool
+where
+    F: FnOnce(GatedJournal) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (go_tx, go_rx) = tokio::sync::oneshot::channel();
+    let gated = GatedJournal {
+        inner: o.journal(),
+        entered: std::sync::Mutex::new(Some(entered_tx)),
+        go: tokio::sync::Mutex::new(Some(go_rx)),
+    };
+    let probe = async {
+        entered_rx.await.expect("the op reads the journal");
+        let mut tx = o.pool.begin().await.unwrap();
+        let got = sqlx::query(
+            "select 1 from runs.run_charges where tenant_id = $1 and run_id = $2 \
+             for update nowait",
+        )
+        .bind(o.tenant)
+        .bind(run.0)
+        .execute(&mut *tx)
+        .await;
+        tx.rollback().await.unwrap();
+        let _ = go_tx.send(());
+        match got {
+            Ok(_) => false,
+            Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("55P03") => true,
+            Err(e) => panic!("the probe failed: {e}"),
+        }
+    };
+    let ((), locked) = tokio::join!(op(gated), probe);
+    locked
+}
+
+/// G5-5b (wave B re-review), pinning G4-3/G4-4: a settle and a `release_to_cap` read the journal
+/// while they HOLD the charge's row lock — so a cap move whose own release waits on that lock reads
+/// the journal after this one committed, and the last of two moves always sees both caps.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn a_settle_and_a_release_read_the_journal_under_the_charges_row_lock() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
+    let c = o.charges();
+    let run = RunId(Uuid::new_v4());
+    c.admit(run, u, Some(2 * DOLLAR)).await.unwrap();
+    priced_run(&o.journal(), run, 2 * DOLLAR, &[DOLLAR]).await;
+
+    let settle = row_locked_during_the_journal_read(&o, run, |j| {
+        let c = c.clone();
+        async move {
+            c.settle(&j, run).await.expect("settle");
+        }
+    })
+    .await;
+    assert!(settle, "settle must read the journal under the row lock");
+    let release = row_locked_during_the_journal_read(&o, run, |j| {
+        let c = c.clone();
+        async move {
+            c.release_to_cap(&j, run).await.expect("release_to_cap");
+        }
+    })
+    .await;
+    assert!(
+        release,
+        "release_to_cap must read the journal under the row lock"
+    );
+    o.drop_all().await;
+}

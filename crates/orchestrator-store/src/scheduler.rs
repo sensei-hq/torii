@@ -395,7 +395,8 @@ impl SchedulerStore for PgSchedulerStore {
     async fn count_terminal_before(&self, before: DateTime<Utc>) -> Result<u64, OrchestratorError> {
         let (n,): (i64,) = sqlx::query_as(&format!(
             "select count(*) from runs.scheduled_runs \
-             where tenant_id = $1 and status in ({TERMINAL_STATUS_LITERALS}) and updated_at < $2"
+             where tenant_id = $1 and status in ({TERMINAL_STATUS_LITERALS}) and updated_at < $2 \
+               and {NO_OPEN_CHARGE}"
         ))
         .bind(self.tenant)
         .bind(before)
@@ -409,7 +410,8 @@ impl SchedulerStore for PgSchedulerStore {
     async fn prune_terminal(&self, before: DateTime<Utc>) -> Result<u64, OrchestratorError> {
         let res = sqlx::query(&format!(
             "delete from runs.scheduled_runs \
-             where tenant_id = $1 and status in ({TERMINAL_STATUS_LITERALS}) and updated_at < $2"
+             where tenant_id = $1 and status in ({TERMINAL_STATUS_LITERALS}) and updated_at < $2 \
+               and {NO_OPEN_CHARGE}"
         ))
         .bind(self.tenant)
         .bind(before)
@@ -425,6 +427,14 @@ impl SchedulerStore for PgSchedulerStore {
 /// allowlist, deliberately: with `not in ('paused','waking')` a status this build does not
 /// recognise would be DELETED by default; here it is kept.
 const TERMINAL_STATUS_LITERALS: &str = "'completed','failed','cancelled'";
+
+/// G4-2 (torii#49): a terminal run whose budget charge (`runs.run_charges`) is still open is not
+/// prunable — the charge is found through its schedule row, so deleting the row before the final
+/// settle would strand the run's reservation (and its last spend) forever. Interpolated into both
+/// the count and the delete, so the preview and the effect agree.
+const NO_OPEN_CHARGE: &str = "not exists (select 1 from runs.run_charges c \
+      where c.tenant_id = scheduled_runs.tenant_id and c.run_id = scheduled_runs.run_id \
+        and not c.settled)";
 
 #[cfg(test)]
 mod tests {

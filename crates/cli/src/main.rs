@@ -364,7 +364,9 @@ enum RunAction {
     },
     /// Delete terminal run records (completed/failed/cancelled) older than a window
     ///
-    /// Paused and waking runs are NEVER eligible, at any age.
+    /// Paused and waking runs are NEVER eligible, at any age. On Postgres neither is a
+    /// terminal run whose budget charge is still open (its final spend not recorded yet):
+    /// prune keeps it, says how many it kept, and a later prune removes it.
     Prune {
         /// Retention window, e.g. 30d, 12h, 90m. No default: the policy is the
         /// operator's to state, not this command's to assume.

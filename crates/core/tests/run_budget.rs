@@ -1173,3 +1173,50 @@ async fn a_pruned_runs_id_is_never_re_admitted_so_its_spend_is_never_recorded_tw
     assert_eq!(o.reserved(o.team_a).await, "0.000000");
     o.drop_all().await;
 }
+
+/// G4-2 (wave B re-review): `settle_pending` finds a charge through its schedule row, so a run
+/// pruned before its final settle would hold its reservation forever. `prune` keeps a terminal
+/// run whose charge is still open; once it is settled a later prune removes it.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn a_terminal_run_whose_charge_is_open_is_not_pruned_until_it_is_settled() {
+    let Some(pool) = pool().await else { return };
+    let mut o = Org::new(&pool).await;
+    let u = o.user(&[o.personal_u]).await; // headroom $4 (Team A)
+    let c = o.charges();
+    let j = o.journal();
+    let sched = PgSchedulerStore::new(pool.clone(), o.tenant);
+    let run = RunId(Uuid::new_v4());
+    c.admit(run, u, Some(3 * DOLLAR)).await.unwrap();
+    sched
+        .enqueue(run, &Graph { nodes: vec![] }, chrono::Utc::now())
+        .await
+        .unwrap();
+    priced_run(&j, run, 3 * DOLLAR, &[DOLLAR]).await;
+    sched
+        .record_paused(run, None, "money cap reached")
+        .await
+        .unwrap();
+    c.settle(&j, run).await.unwrap();
+    assert_eq!(o.reserved(o.team_a).await, "2.000000");
+    sched.cancel(run).await.unwrap();
+
+    let cutoff = || chrono::Utc::now() + chrono::Duration::seconds(5);
+    sched.prune_terminal(cutoff()).await.unwrap();
+    c.settle_pending(&j).await.unwrap();
+    assert_eq!(
+        o.reserved(o.team_a).await,
+        "0.000000",
+        "the cancelled run's reservation is released, not stranded by the prune"
+    );
+    assert_eq!(o.spent(o.team_a).await, "7.000000");
+    assert_eq!(
+        sched.prune_terminal(cutoff()).await.unwrap(),
+        1,
+        "settled, it is pruned"
+    );
+    o.drop_all().await;
+}

@@ -1947,6 +1947,7 @@ fn fmt_cutoff(t: DateTime<Utc>) -> String {
 /// the intent instead of the effect is precisely what the rest of this module refuses to do.
 pub async fn prune(
     store: &dyn SchedulerStore,
+    _charges: Option<&torii_core::run_budget::RunCharges>,
     older_than: chrono::Duration,
     now: DateTime<Utc>,
     yes: bool,
@@ -3697,6 +3698,7 @@ pub(crate) mod tests {
         let (s, dead, _) = prunable_store(3, long_ago(), false).await;
         let out = prune(
             &s,
+            None,
             chrono::Duration::days(7),
             now(),
             true,
@@ -3719,6 +3721,7 @@ pub(crate) mod tests {
         let (s, dead, live) = prunable_store(1, long_ago(), true).await;
         let out = prune(
             &s,
+            None,
             chrono::Duration::seconds(1),
             now(),
             true,
@@ -3752,6 +3755,7 @@ pub(crate) mod tests {
         let (s, _, live) = prunable_store(0, long_ago(), true).await;
         let out = prune(
             &s,
+            None,
             chrono::Duration::days(7),
             now(),
             false, // NOT --yes: the prompt is only skipped because the count is zero
@@ -3774,6 +3778,7 @@ pub(crate) mod tests {
         let (s, dead, _) = prunable_store(1, now() - chrono::Duration::hours(1), false).await;
         let out = prune(
             &s,
+            None,
             chrono::Duration::days(7),
             now(),
             true,
@@ -3800,9 +3805,16 @@ pub(crate) mod tests {
                 prompt = text.to_string();
                 true
             };
-            let out = prune(&s, chrono::Duration::days(7), now(), false, &mut confirm)
-                .await
-                .expect("prunes");
+            let out = prune(
+                &s,
+                None,
+                chrono::Duration::days(7),
+                now(),
+                false,
+                &mut confirm,
+            )
+            .await
+            .expect("prunes");
             assert_eq!(out.code, EXIT_OK);
         }
         assert!(prompt.contains('4'), "the count must be shown: {prompt}");
@@ -3822,9 +3834,16 @@ pub(crate) mod tests {
     async fn prune_refused_at_the_prompt_deletes_nothing() {
         let (s, dead, _) = prunable_store(2, long_ago(), false).await;
         let mut confirm = |_: &str| false;
-        let out = prune(&s, chrono::Duration::days(7), now(), false, &mut confirm)
-            .await
-            .expect("no hard error");
+        let out = prune(
+            &s,
+            None,
+            chrono::Duration::days(7),
+            now(),
+            false,
+            &mut confirm,
+        )
+        .await
+        .expect("no hard error");
         assert_eq!(out.code, EXIT_PRECONDITION);
         assert!(out.text.contains("refused"), "{}", out.text);
         assert!(out.text.contains("nothing deleted"), "{}", out.text);
@@ -3865,7 +3884,7 @@ pub(crate) mod tests {
             }
         };
 
-        let out = prune(&s, window, now(), false, &mut confirm)
+        let out = prune(&s, None, window, now(), false, &mut confirm)
             .await
             .expect("no hard error");
 
@@ -3886,6 +3905,84 @@ pub(crate) mod tests {
                 "the other operator's prune really did take them"
             );
         }
+    }
+
+    /// G4-2 (wave B re-review): a terminal run whose budget charge is still open (its final spend
+    /// not recorded yet, or a cancelled run's drive that may still spend) is KEPT — deleting its
+    /// schedule row would strand its reservation — and prune says so, rather than silently
+    /// deleting fewer runs than are terminal.
+    #[cfg_attr(
+        not(have_database_url),
+        ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+    )]
+    #[tokio::test]
+    async fn prune_keeps_a_terminal_run_whose_charge_is_open_and_says_so() {
+        let Some(url) = crate::test_guard::db_url() else {
+            return;
+        };
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let store = t.stores().scheduler;
+        let charges = torii_core::run_budget::RunCharges::new(t.pool.clone(), t.id);
+        let open = RunId(uuid::Uuid::new_v4());
+        let done = RunId(uuid::Uuid::new_v4());
+        for run in [open, done] {
+            store.enqueue(run, &empty_graph(), now()).await.unwrap();
+        }
+        store
+            .record_terminal(open, RunStatus::Completed, None)
+            .await
+            .unwrap();
+        sqlx::query(
+            "insert into runs.run_charges (tenant_id, run_id, issuer_profile_id, node_ids, \
+             limit_micro_usd) values ($1, $2, $3, '{}', 1000000)",
+        )
+        .bind(t.id)
+        .bind(open.0)
+        .bind(uuid::Uuid::new_v4())
+        .execute(&t.pool)
+        .await
+        .unwrap();
+        let later = || chrono::Utc::now() + chrono::Duration::seconds(5);
+
+        let out = prune(
+            &store,
+            Some(&charges),
+            chrono::Duration::zero(),
+            later(),
+            true,
+            &mut never_asked(),
+        )
+        .await
+        .expect("prunes");
+        assert_eq!(out.code, EXIT_OK, "{}", out.text);
+        assert!(out.text.contains("nothing to prune"), "{}", out.text);
+        assert!(
+            out.text.contains("kept 1") && out.text.contains("charge is still open"),
+            "the run kept for its open charge must be reported: {}",
+            out.text
+        );
+
+        store
+            .record_terminal(done, RunStatus::Completed, None)
+            .await
+            .unwrap();
+        let out = prune(
+            &store,
+            Some(&charges),
+            chrono::Duration::zero(),
+            later(),
+            true,
+            &mut never_asked(),
+        )
+        .await
+        .expect("prunes");
+        assert!(out.text.starts_with("pruned: 1 "), "{}", out.text);
+        assert!(out.text.contains("kept 1"), "{}", out.text);
+        assert!(store.status(done).await.unwrap().is_none());
+        assert!(
+            store.status(open).await.unwrap().is_some(),
+            "the run whose charge is open is not pruned"
+        );
     }
 
     #[test]

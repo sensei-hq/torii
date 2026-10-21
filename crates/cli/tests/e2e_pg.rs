@@ -3275,3 +3275,98 @@ async fn a_charged_submit_that_fails_before_its_enqueue_leaves_no_charge_and_no_
     .unwrap();
     assert_eq!(reserved, "0.000000", "its reservation is released");
 }
+
+/// The reserved amount on `node`, as Postgres renders it.
+async fn node_reserved(db: &Db, node: uuid::Uuid) -> String {
+    sqlx::query_scalar(
+        "select reserved_amount::text from governance.nodes where tenant_id = $1 and id = $2",
+    )
+    .bind(db.tenant)
+    .bind(node)
+    .fetch_one(&db.pool().await)
+    .await
+    .unwrap()
+}
+
+/// How many rows `table` holds for `run` in `db`'s tenant.
+async fn rows_for(db: &Db, table: &str, run: RunId) -> i64 {
+    sqlx::query_scalar(&format!(
+        "select count(*) from {table} where tenant_id = $1 and run_id = $2"
+    ))
+    .bind(db.tenant)
+    .bind(run.0)
+    .fetch_one(&db.pool().await)
+    .await
+    .unwrap()
+}
+
+/// G2-1 (wave B review, #55 × #49): on Postgres EVERY run is money-capped — its limit is the
+/// issuer's headroom even without `--budget-usd` — so a graph whose chain has an unpriced model
+/// must be refused UP FRONT, exactly as `--budget-usd` refuses it on the memory backend. Before,
+/// the check read the operator's budget (no money cap without the flag), so the run was announced
+/// and then failed mid-run as an "unpriced model call". Refused: nothing announced, no schedule
+/// row, no charge row, and the issuer's reservation untouched.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+)]
+#[tokio::test]
+async fn a_charged_submit_of_an_unpriced_chain_is_refused_up_front_without_budget_usd() {
+    let Some(db) = Db::new().await else { return };
+    let (user, team, _root) = capped_issuer(&db, "1").await;
+    let charges = torii_core::run_budget::RunCharges::new(db.pool().await, db.tenant);
+    let at = DateTime::<Utc>::from_timestamp(5_400_000, 0).unwrap();
+    // Chain "c" lands on model "m", which declares no pricing.
+    let (sched, calls) = fresh_metered_worker(&db, at, 1_500).await;
+    let journal = PgJournal::new(db.pool().await, db.tenant);
+    let run = RunId(uuid::Uuid::new_v4());
+    let marker = run.0.to_string();
+    let issuer = user.to_string();
+    let charging = torii::cmd::run::Charging {
+        charges: &charges,
+        journal: &journal,
+        user: Some(&issuer),
+    };
+    let announced = std::cell::Cell::new(false);
+    let out = torii::cmd::run::submit_charged(
+        Some(&charging),
+        &sched,
+        run,
+        one_node_graph(&marker),
+        orchestrator_core::RunBudget::default(),
+        torii::cmd::run::StoreLifetime::Durable,
+        || announced.set(true),
+    )
+    .await;
+    assert!(
+        !announced.get(),
+        "a run refused for an unpriced chain is never announced: {:?}",
+        out.as_ref().map(|o| &o.text).map_err(|e| &e.message)
+    );
+    let err = out.expect_err("an unpriced chain under the issuer's cap is refused");
+    assert!(
+        err.message.starts_with("not submitted: ")
+            && err.message.contains("chain \"c\"")
+            && err.message.contains(": m")
+            && err.message.contains("TORII_USER")
+            && !err.message.contains("without --budget-usd"),
+        "names the chain and model, and offers only a remedy that is true on Postgres: {}",
+        err.message
+    );
+    assert_eq!(calls_for(&calls, &marker), 0, "no model was called");
+    assert_eq!(
+        rows_for(&db, "runs.scheduled_runs", run).await,
+        0,
+        "no run was scheduled"
+    );
+    assert_eq!(
+        rows_for(&db, "runs.run_charges", run).await,
+        0,
+        "no charge is left behind"
+    );
+    assert_eq!(
+        node_reserved(&db, team).await,
+        "0.000000",
+        "the issuer's reservation is unchanged"
+    );
+}

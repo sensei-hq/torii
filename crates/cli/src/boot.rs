@@ -207,11 +207,18 @@ impl std::fmt::Debug for EnvConfig {
     }
 }
 
+/// The smallest `TORII_POOL_SIZE` that works (G5-1): a settle, a `release_to_cap` and a
+/// `check_raise` (`torii_core::run_budget`) hold a `run_charges` row lock in a transaction —
+/// one connection — while they read the run's journal over a second connection of the same
+/// pool. With one connection that read waits out sqlx's acquire timeout every time. Two can
+/// never deadlock: a process runs its settles one at a time.
+const MIN_POOL_SIZE: u32 = 2;
+
 /// Parse `TORII_POOL_SIZE`, mirroring `cmd::worker::parse_interval`'s discipline: reject
-/// anything that isn't a plain positive integer, loudly and with the offending value
-/// echoed back. A zero-size pool cannot serve any connection, and anything past
-/// [`MAX_POOL_SIZE`] is treated as a typo rather than an intentional value — see its doc
-/// comment.
+/// anything that isn't a plain integer of at least [`MIN_POOL_SIZE`], loudly and with the
+/// offending value echoed back. A zero-size pool cannot serve any connection, a one-size pool
+/// cannot settle a charge, and anything past [`MAX_POOL_SIZE`] is treated as a typo rather
+/// than an intentional value — see its doc comment.
 fn parse_pool_size(s: &str) -> Result<u32, String> {
     let s = s.trim();
     let v: u32 = s
@@ -220,6 +227,13 @@ fn parse_pool_size(s: &str) -> Result<u32, String> {
     if v == 0 {
         return Err(format!(
             "invalid {ENV_POOL_SIZE} {s:?}: a zero-size pool cannot serve any connection"
+        ));
+    }
+    if v < MIN_POOL_SIZE {
+        return Err(format!(
+            "invalid {ENV_POOL_SIZE} {s:?}: it must be at least {MIN_POOL_SIZE} — settling a \
+             run's charge holds its row lock on one connection while it reads the run's journal \
+             on another, so a one-connection pool times out on every settle"
         ));
     }
     if v > MAX_POOL_SIZE {

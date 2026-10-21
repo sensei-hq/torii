@@ -1347,3 +1347,41 @@ async fn a_two_connection_pool_settles_raises_and_releases() {
     two.close().await;
     o.drop_all().await;
 }
+
+/// G5-4 (wave B re-review): two `run wake --budget-usd` of one run must not interleave their
+/// check → journal → release — one's release could give back the other's increment before its
+/// cap is written. The raise lock is exclusive per run (and per tenant), and is not the drive
+/// lock, so a raise never blocks — or is blocked by — the run's own drive.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn a_runs_raise_lock_is_exclusive_and_is_not_its_drive_lock() {
+    let Some(pool) = pool().await else { return };
+    let o = Org::new(&pool).await;
+    let other = Org::new(&pool).await;
+    let c = o.charges();
+    let run = RunId(Uuid::new_v4());
+    let held = c.try_lock_raise(run).await.unwrap().expect("a free lock");
+    assert!(
+        c.try_lock_raise(run).await.unwrap().is_none(),
+        "a second raise of the same run must find the lock held"
+    );
+    assert!(
+        other.charges().try_lock_raise(run).await.unwrap().is_some(),
+        "the same run id in another tenant is another run"
+    );
+    let drive = PgSchedulerStore::new(pool.clone(), o.tenant)
+        .try_lock_run(run)
+        .await
+        .unwrap()
+        .expect("the raise lock is not the drive lock");
+    drive.release().await.unwrap();
+    held.release().await.unwrap();
+    let again = c.try_lock_raise(run).await.unwrap();
+    assert!(again.is_some(), "released, it is free again");
+    again.unwrap().release().await.unwrap();
+    other.drop_all().await;
+    o.drop_all().await;
+}

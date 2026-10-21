@@ -3607,3 +3607,94 @@ async fn a_raise_whose_wake_fails_gives_its_increment_back() {
         "the cap is still $4, so the $0.50 increment is released"
     );
 }
+
+/// G5-4 (wave B re-review): while another `run wake --budget-usd` of the same run holds its raise
+/// lock, a second one is refused as a precondition (exit 2) and writes nothing — no increment
+/// reserved, nothing journaled, the run not woken — so the two can never interleave.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+)]
+// Multi-threaded, as `torii`'s own `#[tokio::main]` is: a charge transaction dropped without a
+// commit is rolled back by a task sqlx spawns, and `Db`'s drop blocks its thread on the tenant
+// delete — on a one-thread runtime a failing assertion would hang here rather than report.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_raise_while_another_raise_of_the_run_is_in_progress_is_refused_and_writes_nothing() {
+    let Some(db) = Db::new().await else { return };
+    let (user, team, _root) = capped_issuer(&db, "5").await;
+    let charges = torii_core::run_budget::RunCharges::new(db.pool().await, db.tenant);
+    let at = DateTime::<Utc>::from_timestamp(5_800_000, 0).unwrap();
+    let (sched, _calls) = fresh_priced_worker(&db, at, 1_500, 1.0).await;
+    let journal = PgJournal::new(db.pool().await, db.tenant);
+    let run = RunId(uuid::Uuid::new_v4());
+    let issuer = user.to_string();
+    let charging = torii::cmd::run::Charging {
+        charges: &charges,
+        journal: &journal,
+        user: Some(&issuer),
+    };
+    let money = |usd: &str| orchestrator_core::RunBudget {
+        tokens: None,
+        money: Some(orchestrator_core::MoneyBudget {
+            total_micro_usd: torii::cmd::run::parse_budget_usd(usd).unwrap(),
+        }),
+    };
+    let out = torii::cmd::run::submit_charged(
+        Some(&charging),
+        &sched,
+        run,
+        signal_graph(&run.0.to_string(), None),
+        money("4"),
+        torii::cmd::run::StoreLifetime::Durable,
+        &pricing(true),
+        || {},
+    )
+    .await
+    .expect("paused at the gate");
+    assert!(out.text.starts_with("paused:"), "{}", out.text);
+    assert_eq!(node_reserved(&db, team).await, "2.500000");
+
+    let store = PgSchedulerStore::new(db.pool().await, db.tenant);
+    let before = journal.load(run).await.unwrap().len();
+    let held = charges
+        .try_lock_raise(run)
+        .await
+        .unwrap()
+        .expect("the test takes the raise lock first");
+    let queued_at = store.status(run).await.unwrap().unwrap().updated_at + Duration::seconds(600);
+    let out = torii::cmd::run::wake_charged(
+        Some(&charging),
+        &store,
+        &journal,
+        run,
+        queued_at,
+        money("4.5"),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("a busy raise lock is a precondition, not an error: {e:?}"));
+    assert_eq!(out.code, torii::errors::EXIT_PRECONDITION, "{}", out.text);
+    assert!(
+        out.text.starts_with("not queued")
+            && out
+                .text
+                .contains("another raise of this run is in progress"),
+        "{}",
+        out.text
+    );
+    assert_eq!(
+        journal.load(run).await.unwrap().len(),
+        before,
+        "nothing was journaled"
+    );
+    assert_eq!(
+        node_reserved(&db, team).await,
+        "2.500000",
+        "no increment was reserved"
+    );
+    assert_eq!(
+        store.status(run).await.unwrap().unwrap().status,
+        RunStatus::Paused,
+        "the run was not woken"
+    );
+    held.release().await.unwrap();
+}

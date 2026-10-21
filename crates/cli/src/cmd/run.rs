@@ -2226,8 +2226,8 @@ pub async fn submit_charged(
     {
         return Err(CliError::error(format!(
             "{}\nAND the run's budget charge could not be cleaned up ({cleanup}): it still \
-                 reserves its limit on the issuer's budget nodes. Submitting the same --run-id \
-                 again as the same {} releases it.",
+             reserves its limit on the issuer's budget nodes. Submitting the same --run-id again \
+             as the same {} releases it.",
             e.message,
             crate::boot::ENV_USER
         )));

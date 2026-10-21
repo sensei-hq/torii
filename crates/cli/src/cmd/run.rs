@@ -2361,13 +2361,14 @@ pub async fn wake_charged(
             let out = wake(store, journal, run, now, budget).await;
             // G2-4: the reservation follows the cap the journal now holds — a lowering that
             // landed gives its difference back; a raise that did not land gives back the
-            // increment `check_raise` reserved for it. A failure here only over-reserves (the
-            // run's end releases the rest), so it never hides the wake's own outcome.
+            // increment `check_raise` reserved for it. A failure here never hides the wake's own
+            // outcome: the next settle (a `worker serve` tick) brings the reservation to the cap
+            // in force (G4-3).
             if let Err(e) = c.charges.release_to_cap(c.journal, run).await {
                 tracing::warn!(
                     run = %run.0,
-                    "the run's reservation could not be brought down to its money cap ({e}); it \
-                     is released when the run ends"
+                    "the run's reservation could not be brought to its money cap ({e}); the next \
+                     worker tick's settle does"
                 );
             }
             return out;

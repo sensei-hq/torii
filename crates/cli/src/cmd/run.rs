@@ -11,6 +11,7 @@ use orchestrator_core::{
     SchedulerStore, Scope, Seq,
 };
 use std::collections::HashMap;
+use torii_core::run_budget::ChargeError;
 
 /// AG-3: a run's consecutive wake attempts since its last successful drive — the counter the
 /// scheduler store keeps and the `SchedulerStore` trait does not expose. `None` ⇒ unknown run,
@@ -154,10 +155,16 @@ pub async fn status(
                     text.push_str(&format!("spent: {spent} / budget: {cap} tokens\n"));
                 }
                 if let Some(cap) = money_budget {
-                    text.push_str(&format!(
-                        "money spent: {} / budget: {}\n",
-                        fmt_usd(spent_micro_usd),
+                    // AG-13: an issuer with no hard cap gets the unbounded sentinel — a limit that
+                    // keeps the spend ledgered, not one to read as dollars.
+                    let cap = if cap == torii_core::run_budget::UNBOUNDED_MICRO_USD {
+                        "none (no hard cap over the issuer)".to_string()
+                    } else {
                         fmt_usd(cap)
+                    };
+                    text.push_str(&format!(
+                        "money spent: {} / budget: {cap}\n",
+                        fmt_usd(spent_micro_usd)
                     ));
                 }
                 if !budgeted.is_empty() {
@@ -1854,10 +1861,8 @@ pub fn parse_budget_usd(s: &str) -> Result<u64, String> {
 /// AG-12: render integer micro-dollars as a dollar figure — exact (all six places when they
 /// are needed, so a sub-cent spend never reads as `$0.00`), and at least cents otherwise.
 pub fn fmt_usd(micro: u64) -> String {
-    let per = orchestrator_core::MICRO_USD_PER_USD;
-    let frac = format!("{:06}", micro % per);
-    let frac = frac.trim_end_matches('0');
-    format!("${}.{frac:0<2}", micro / per)
+    // ONE dollar format: torii-core's, which the budget-charge refusals (AG-13) print too.
+    torii_core::run_budget::usd(micro)
 }
 
 /// Parse a retention window: `30d`, `12h`, `90m`, `45s`.
@@ -2010,6 +2015,17 @@ pub enum StoreLifetime {
 pub const STRANDED_PAUSE: &str = "nothing can resume it: the memory backend keeps every store \
     in this process, so no worker, wake or answer from another process can ever see this run";
 
+/// What `run submit` says of a run id that already has a schedule record.
+fn already_submitted(run: RunId, existing: &orchestrator_core::ScheduledRun) -> Outcome {
+    Outcome::precondition(format!(
+        "already submitted: {} is {} — a run id can only be submitted once. Use \
+         `torii run status {}` to inspect it.",
+        run.0,
+        existing.status.as_str(),
+        run.0
+    ))
+}
+
 /// Submit a fresh run and drive it inline. Blocks until the run pauses or ends —
 /// there is no `--detach` yet, because `enqueue` stamps the row `waking`, so a
 /// detached run would only be picked up once the lease expired and the crash-reclaim
@@ -2048,13 +2064,7 @@ pub async fn submit(
     // `rows_affected == 0`), so that race degrades to the old loud error rather than
     // double-enqueueing — which is why the check belongs here and not in place of it.
     if let Some(existing) = scheduler.status(run).await? {
-        return Ok(Outcome::precondition(format!(
-            "already submitted: {} is {} — a run id can only be submitted once. Use \
-             `torii run status {}` to inspect it.",
-            run.0,
-            existing.status.as_str(),
-            run.0
-        )));
+        return Ok(already_submitted(run, &existing));
     }
     announce();
     // SP-DATA-5 / AG-12: `submit_with_budget` with `RunBudget::default()` is exactly
@@ -2086,6 +2096,124 @@ pub async fn submit(
         run.0,
         outcome.completed.len()
     )))
+}
+
+/// AG-13 (#49): the budget charge a Postgres submit or raise runs under — torii's caps
+/// (`torii_core::run_budget`), and the journal a run's spend is folded from. `None` on the memory
+/// backend, which has no caps.
+pub struct Charging<'a> {
+    pub charges: &'a torii_core::run_budget::RunCharges,
+    pub journal: &'a dyn ExecutionJournal,
+    /// Who submits (`TORII_USER`, as given) — read by [`submit_charged`] only; a raise is checked
+    /// against the caps of the run's recorded issuer, whoever asks.
+    pub user: Option<&'a str>,
+}
+
+/// [`submit`], charged to the issuer's caps.
+pub async fn submit_charged(
+    charging: Option<&Charging<'_>>,
+    scheduler: &orchestrator::Scheduler,
+    run: RunId,
+    graph: orchestrator_core::Graph,
+    budget: RunBudget,
+    lifetime: StoreLifetime,
+    announce: impl FnOnce(),
+) -> Result<Outcome, CliError> {
+    let Some(c) = charging else {
+        return submit(scheduler, run, graph, budget, lifetime, announce).await;
+    };
+    let user = c.user.ok_or_else(|| {
+        CliError::error(format!(
+            "{} is not set.\n\
+             On Postgres every run is charged to the budget of the user who submits it: its money \
+             limit is that user's headroom under torii's caps (their own unit, their groups and \
+             every unit above them), and what it spends is recorded there. Set {} to your user \
+             id (a core.profiles id in this tenant).",
+            crate::boot::ENV_USER,
+            crate::boot::ENV_USER
+        ))
+    })?;
+    // `submit`'s own duplicate pre-check, BEFORE anything is charged: a taken run id is reported
+    // as taken, not as a charge refusal.
+    if let Some(existing) = scheduler.status(run).await? {
+        return Ok(already_submitted(run, &existing));
+    }
+    let issuer = c
+        .charges
+        .resolve_issuer(user)
+        .await
+        .map_err(|e| CliError::error(format!("{}: {e}", crate::boot::ENV_USER)))?;
+    let requested = budget.money.map(|m| m.total_micro_usd);
+    let money = match c.charges.admit(run, issuer, requested).await {
+        Ok(m) => m,
+        Err(
+            e @ (ChargeError::OverHeadroom { .. }
+            | ChargeError::NoBudgetNode
+            | ChargeError::AlreadyScheduled(_)),
+        ) => {
+            return Ok(Outcome::precondition(format!(
+                "not submitted: {e}. Nothing was written."
+            )));
+        }
+        Err(e) => return Err(CliError::error(e.to_string())),
+    };
+    let budget = RunBudget {
+        money: Some(money),
+        ..budget
+    };
+    let out = submit(scheduler, run, graph, budget, lifetime, announce).await;
+    // Whatever the drive ended in — paused, failed or completed — what it spent is recorded on
+    // the issuer's nodes now. A failure here loses nothing: the journal holds the spend and the
+    // next `worker serve` tick records it (`RunCharges::settle_pending`).
+    if let Err(e) = c.charges.settle(c.journal, run).await {
+        tracing::warn!(
+            run = %run.0,
+            "the run's spend is not recorded on its budget nodes yet ({e}); the next worker tick \
+             records it"
+        );
+    }
+    out
+}
+
+/// [`wake`], with a money raise checked against the caps the run is charged to.
+pub async fn wake_charged(
+    charging: Option<&Charging<'_>>,
+    store: &dyn SchedulerStore,
+    journal: &dyn ExecutionJournal,
+    run: RunId,
+    now: DateTime<Utc>,
+    budget: RunBudget,
+) -> Result<Outcome, CliError> {
+    if let (Some(c), Some(m)) = (charging, budget.money) {
+        // Only a paused run with a money cap reaches the check: anything else `wake` refuses
+        // itself, in its own words, before writing anything.
+        let paused = store
+            .status(run)
+            .await?
+            .is_some_and(|r| r.status == RunStatus::Paused);
+        let capped = paused
+            && orchestrator::money_spend_of(
+                &journal
+                    .load(run)
+                    .await
+                    .map_err(OrchestratorError::Journal)?,
+            )
+            .1
+            .is_some();
+        if capped {
+            match c.charges.check_raise(journal, run, m.total_micro_usd).await {
+                Ok(()) => {}
+                Err(e @ (ChargeError::OverHeadroom { .. } | ChargeError::NotCharged(_))) => {
+                    return Ok(Outcome::precondition(format!(
+                        "not queued: {} — {e}. Nothing was written.",
+                        run.0
+                    )));
+                }
+                Err(e) => return Err(CliError::error(e.to_string())),
+            }
+        }
+    }
+    wake(store, journal, run, now, budget).await
 }
 
 /// `pub(crate)` **only so `cmd::gate`'s tests can reuse four fixtures** — `now`,
@@ -3238,6 +3366,32 @@ pub(crate) mod tests {
         let v: serde_json::Value = serde_json::from_str(&out.text).expect("valid json");
         assert_eq!(v[0]["spent_micro_usd"], serde_json::json!(12_345));
         assert_eq!(v[0]["money_budget_micro_usd"], serde_json::json!(5_000_000));
+    }
+
+    /// AG-13: a run whose issuer has no hard cap carries the unbounded sentinel as its money
+    /// limit (so its spend is still ledgered) — shown as what it is, not as $9.2 trillion.
+    #[tokio::test]
+    async fn status_shows_an_unbounded_money_limit_as_no_hard_cap() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let unbounded = torii_core::run_budget::UNBOUNDED_MICRO_USD;
+        let journal = journal_with_money(run, Some(unbounded), 12_345).await;
+
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, false)
+            .await
+            .expect("status");
+        assert!(
+            out.text
+                .contains("money spent: $0.012345 / budget: none (no hard cap over the issuer)"),
+            "{}",
+            out.text
+        );
+        // JSON keeps the number: a script compares it, it does not read it.
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, true)
+            .await
+            .expect("status");
+        let v: serde_json::Value = serde_json::from_str(&out.text).expect("valid json");
+        assert_eq!(v[0]["money_budget_micro_usd"], serde_json::json!(unbounded));
     }
 
     #[tokio::test]

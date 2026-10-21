@@ -63,6 +63,35 @@ impl Ticker for Reloading<'_> {
     }
 }
 
+/// AG-13 (#49): `worker serve`'s ticker on Postgres — tick, then record every charged run's new
+/// spend on its budget nodes.
+pub struct Settling<'a> {
+    pub inner: &'a dyn Ticker,
+    pub charging: &'a crate::cmd::run::Charging<'a>,
+}
+
+#[async_trait::async_trait]
+impl Ticker for Settling<'_> {
+    async fn tick(&self) -> Result<usize, OrchestratorError> {
+        let woken = self.inner.tick().await?;
+        // After EVERY tick, not only one that woke something: a run `run submit` drove whose
+        // spend that process could not record is picked up here. A failure is logged and the
+        // next tick retries — the spend is durable in the journal, and recording is idempotent.
+        if let Err(e) = self
+            .charging
+            .charges
+            .settle_pending(self.charging.journal)
+            .await
+        {
+            tracing::error!(
+                error = %e,
+                "recording runs' spend on their budget nodes failed; the next tick retries"
+            );
+        }
+        Ok(woken)
+    }
+}
+
 /// What is wrong with a registry a worker just reloaded, if anything — the checks boot makes,
 /// as a diagnosis rather than a refusal: the push already landed, so refusing it here would
 /// only leave this worker fencing out every run submitted under it.

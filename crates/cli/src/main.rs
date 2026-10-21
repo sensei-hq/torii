@@ -21,7 +21,8 @@ use torii::{boot, cmd};
                   --dir`, which only writes the built-in defaults to a directory. The gateway config is torii's \
                   catalog. `run submit` and `worker serve` additionally need \
                   TORII_FENCE_VERSION; with TORII_BACKEND=memory (no database) they take \
-                  --gateway-config instead.\n\n\
+                  --gateway-config instead. `run submit` on Postgres also needs TORII_USER \
+                  (your core.profiles id): the run is charged to that user's budget.\n\n\
                   Exit codes: 0 ok, 1 error (including a submitted run that actually executed \
                   and failed), 2 not-found, precondition-not-met, or a result that is complete \
                   enough to print but not the unqualified success you asked for (`run \
@@ -92,6 +93,13 @@ enum RunAction {
         budget_tokens: Option<u64>,
         /// Cap this run's MONEY spend, in US dollars (e.g. 5 or 0.25; at most 6 decimal
         /// places — a cap is kept in whole micro-dollars, and finer is refused, not rounded).
+        ///
+        /// On Postgres every run is charged to TORII_USER, and its money limit is that user's
+        /// headroom under torii's caps — the tightest hard cap over their own unit, their
+        /// groups and every unit above them. This flag may only LOWER that limit: a value
+        /// above the headroom is refused and nothing is submitted. Omitted, the limit is the
+        /// headroom. What the run spends is recorded on those budget nodes. With
+        /// TORII_BACKEND=memory there are no caps and this flag alone is the cap.
         ///
         /// Ledgered from the cost the gateway prices each call at, so every model on a chain
         /// this run uses must declare pricing (an explicit zero for a free or local model):
@@ -330,6 +338,11 @@ enum RunAction {
         /// without --budget-usd this is REFUSED and nothing is written (spend is only
         /// counted while a cap is in force, so a cap added now would be weighed against
         /// spend it never saw).
+        ///
+        /// On Postgres a raise goes through the cap check the run was submitted under: what
+        /// the run may still spend (the new cap less its spend) must fit the headroom left on
+        /// the budget nodes it is charged to — the submitting TORII_USER's. Past it the raise
+        /// is refused and nothing is written; lowering is always allowed.
         //
         // Recorded as `MoneyBudgetRaised` BEFORE the wake is queued, like `BudgetRaised`.
         #[arg(long, value_parser = cmd::run::parse_budget_usd)]
@@ -727,7 +740,9 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                     money: budget_usd
                         .map(|total_micro_usd| orchestrator_core::MoneyBudget { total_micro_usd }),
                 };
-                cmd::run::wake(
+                // AG-13: a money raise is checked against the caps the run is charged to.
+                cmd::run::wake_charged(
+                    d.charging(None).as_ref(),
                     d.scheduler_store.as_ref(),
                     d.journal.as_ref(),
                     run,
@@ -777,7 +792,10 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                     CliError::error(format!("{} is not a valid graph: {e}", graph.display()))
                 })?;
                 let boot::HeavyDeps {
-                    scheduler, events, ..
+                    light,
+                    scheduler,
+                    events,
+                    ..
                 } = boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
                 let log = boot::log_run_events(events);
                 let budget = orchestrator_core::RunBudget {
@@ -792,7 +810,11 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 // effect that never happened.
                 // A pause exits 0 only where another process can resume it (AG-5): never on
                 // the memory backend, whose stores die with this process.
-                let out = cmd::run::submit(
+                // AG-13: on Postgres the run is charged to TORII_USER — its money limit is
+                // their headroom, and its spend is recorded on their budget nodes.
+                let user = boot::user_from_env();
+                let out = cmd::run::submit_charged(
+                    light.charging(user.as_deref()).as_ref(),
                     &scheduler,
                     run,
                     g,

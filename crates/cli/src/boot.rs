@@ -32,6 +32,19 @@ pub const ENV_POOL_SIZE: &str = "TORII_POOL_SIZE";
 pub const ENV_BACKEND: &str = "TORII_BACKEND";
 pub const ENV_REGISTRY_DIR: &str = "TORII_REGISTRY_DIR";
 pub const ENV_TENANT: &str = "TORII_TENANT";
+/// AG-13 (#49): the user torii acts as — a `core.profiles` id in `TORII_TENANT`. On Postgres
+/// `run submit` charges the run to this user's budget (their headroom is its money limit, and its
+/// spend is recorded on their nodes). The minimal operator identity; `--as` on the answering
+/// verbs is still attribution, and who may do what is #47's.
+pub const ENV_USER: &str = "TORII_USER";
+
+/// `TORII_USER`, trimmed — `None` when unset or blank.
+pub fn user_from_env() -> Option<String> {
+    std::env::var(ENV_USER)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
 /// AG-3: the scheduler's wake-retry policy ([`WakeRetryPolicy`]) — both heavy-tier drivers
 /// (`worker serve`, and `run submit`'s inline drive) build their `Scheduler` from these, so one
 /// fleet shares one policy. Unset ⇒ the gateway's defaults.
@@ -753,6 +766,22 @@ pub struct LightDeps {
     /// AG-4: the tenant's CAS, so `run results` can resolve an output stored as a ref. The SAME
     /// store the heavy tier hands the executor — a ref the executor wrote is readable here.
     pub content: Arc<dyn ContentStore>,
+    /// AG-13: the tenant's run charges — torii's caps a run is limited by and its spend recorded
+    /// on. `None` on the memory backend, which has no caps.
+    pub charges: Option<torii_core::run_budget::RunCharges>,
+}
+
+impl LightDeps {
+    /// AG-13: the charge `run submit`, `run wake` and `worker serve` run under — `None` on memory.
+    pub fn charging<'a>(&'a self, user: Option<&'a str>) -> Option<crate::cmd::run::Charging<'a>> {
+        self.charges
+            .as_ref()
+            .map(|charges| crate::cmd::run::Charging {
+                charges,
+                journal: self.journal.as_ref(),
+                user,
+            })
+    }
 }
 
 /// AG-3: torii's Postgres scheduler keeps the counter in `runs.scheduled_runs.attempts`.
@@ -786,6 +815,7 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                 .await
                 .map_err(|e| CliError::error(format!("{ENV_TENANT}: {e}")))?;
             let stores = torii_core::TenantStores::open(&pool, tenant_id);
+            let charges = torii_core::run_budget::RunCharges::new(pool.clone(), tenant_id);
             // ONE store object behind both the trait and the attempt-counter reader.
             let scheduler = Arc::new(stores.scheduler);
             Ok(Stores {
@@ -796,6 +826,7 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                     gateway_config: Some(Arc::new(CatalogGatewayConfigSource::new(pool))),
                     wake_attempts: scheduler,
                     content: Arc::new(stores.content),
+                    charges: Some(charges),
                 },
                 context: Arc::new(stores.context),
             })
@@ -820,6 +851,7 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                     gateway_config: None,
                     wake_attempts: Arc::new(NoWakeAttemptCounts),
                     content: content.clone(),
+                    charges: None,
                 },
                 context: Arc::new(InMemoryContextStore::new(content)),
             })
@@ -834,12 +866,12 @@ pub async fn light(env: &EnvConfig) -> Result<LightDeps, CliError> {
 /// Heavy tier: a full Executor behind a Scheduler. Adds the gateway config file
 /// and the fence base.
 pub struct HeavyDeps {
-    // Not read by the current dispatch (only `.scheduler` is): kept for a future
-    // heavy-tier command that needs the shared pool's config source directly, or a
-    // test that wants to fast-forward the injected clock.
-    #[allow(dead_code)]
+    /// The stores the scheduler drives over — `run submit` and `worker serve` take the run
+    /// charges (AG-13) from here.
     pub light: LightDeps,
     pub scheduler: Scheduler,
+    // Not read by the current dispatch: kept for a test that wants to fast-forward the
+    // injected clock.
     #[allow(dead_code)]
     pub clock: Arc<dyn Clock>,
     /// AG-18: the run events the scheduler's drives report (torii-core's `RunEventSink`).
@@ -872,14 +904,27 @@ impl HeavyDeps {
             registry,
             gateway_chains,
         } = self;
-        drop((light, clock));
+        drop(clock);
         let log = log_run_events(events);
         let ticker = crate::cmd::worker::Reloading {
             inner: &scheduler,
             registry: &registry,
             gateway_chains: &gateway_chains,
         };
-        let out = crate::cmd::worker::serve(&ticker, opts, shutdown).await;
+        // AG-13: on Postgres every tick also records the charged runs' new spend on their
+        // budget nodes.
+        let charging = light.charging(None);
+        let settling = charging
+            .as_ref()
+            .map(|charging| crate::cmd::worker::Settling {
+                inner: &ticker,
+                charging,
+            });
+        let ticker: &dyn crate::cmd::worker::Ticker = match &settling {
+            Some(s) => s,
+            None => &ticker,
+        };
+        let out = crate::cmd::worker::serve(ticker, opts, shutdown).await;
         // Closes the event channel, so the log drains everything the drives reported.
         drop(scheduler);
         flush_run_events(log).await;

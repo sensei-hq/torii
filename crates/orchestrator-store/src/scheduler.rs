@@ -132,9 +132,11 @@ impl SchedulerStore for PgSchedulerStore {
         let res = sqlx::query(
             // AG-3: `submit`'s inline drive is the run's first attempt, so a submit lost
             // mid-drive is counted when its lease is reclaimed.
+            // `updated_at` is the database's clock, like every later write: settle_pending compares
+            // it with a watermark, so a submitter's clock ahead of the DB must not move it backwards.
             "insert into runs.scheduled_runs \
              (tenant_id, run_id, graph, status, claimed_at, attempts, last_wake_error, updated_at) \
-             values ($1, $2, $3, 'waking', $4, 1, null, $4) \
+             values ($1, $2, $3, 'waking', $4, 1, null, now()) \
              on conflict (tenant_id, run_id) do nothing",
         )
         .bind(self.tenant)

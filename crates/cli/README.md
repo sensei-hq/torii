@@ -18,10 +18,11 @@ toolkit does not yet do something, it says so rather than describing an intentio
 | | |
 |---|---|
 | **torii's database** | The orchestrator's registry (`registry.*`) and run state (`runs.*`) live there, per tenant, beside the catalog. Apply the schema with `dbd` from `database/` (see `database/README.md`), RLS policies included. |
-| **`DATABASE_URL`** | Environment only. There is deliberately no flag: a flag would leak the password into `ps`. |
+| **`DATABASE_URL`** | Environment only. There is deliberately no flag: a flag would leak the password into `ps`. Every command needs it except `config init --dir`, which only writes the built-in defaults to a directory. |
 | **`TORII_TENANT`** | The tenant every command acts for — its id or its slug. A slug can never look like an id (the database refuses a UUID-shaped slug, and org create turns a UUID-shaped name into an `org-`-prefixed slug), so an id always names its own tenant. Required on the Postgres backend: every run, journal and registry belongs to exactly one tenant, and another tenant's are invisible. |
+| **`TORII_USER`** | Needed by `run submit` on Postgres: the user torii acts as — a `core.profiles` id with a membership (or an org unit) in `TORII_TENANT`. Every run is **charged to this user's budget**: its money limit is their headroom under torii's caps, and what it spends is recorded there (see Budgets below). Unset, `run submit` is refused (exit 1) before anything is written. Not read on `TORII_BACKEND=memory`, which has no caps. **Operator-asserted, not authenticated:** the CLI only resolves it to a profile in the tenant and never checks that the operator *is* that user, so naming another profile charges that profile's caps. That grants nothing beyond the CLI's database credential, which can already write budget nodes directly — but it is for trusted operators only until torii#47 binds the issuer to an authenticated principal. Likewise `--as` on the answering verbs is attribution, and who may do what is torii#47's. |
 | **`TORII_FENCE_VERSION`** | Needed by `run submit` and `worker serve`. Set it **explicitly** (e.g. `v1`) and keep a fleet agreed on it — it is recorded in every run and checked on resume, so deriving it from a build version would strand every paused run on a routine deploy. |
-| **`TORII_POOL_SIZE`** | Optional. Defaults are fine to start. |
+| **`TORII_POOL_SIZE`** | Optional (default `8`). The process's one connection pool. At least `2`: settling a run's charge holds its row lock on one connection while it reads the run's journal on another, so `1` (and `0`) are refused at boot, as is anything past `1000`. |
 | **`TORII_WAKE_MAX_ATTEMPTS`**, **`TORII_WAKE_BASE_BACKOFF`**, **`TORII_WAKE_MAX_BACKOFF`** | Optional (defaults `5`, `30s`, `60m`). How a wake that keeps failing is retried: a retryable drive error (a journal or store backend fault) or a worker lost mid-drive re-schedules the run after a backoff that doubles from the base up to the ceiling; the attempt past the cap is never driven — the run is filed `failed`, naming the count and the last error. A successful drive resets the count. Backoffs take `--interval`'s units (`500ms`, `30s`, `15m`); `0` attempts and a base above the ceiling are refused. Read only by the two commands that drive (`worker serve` and `run submit`), so keep a fleet agreed on them; a bad value fails those two, loudly, and no other command reads it (`run status`, `run list-paused`, `run cancel` and the answering verbs still work while you fix it). |
 | **`TORII_TRANSIENT_ATTEMPTS`** | Optional (default `3` on Postgres, `1` on `TORII_BACKEND=memory`). Total attempts a model call gets when the provider fails in a way the gateway reports as retryable (a provider 500, say) before the node fails. Between attempts the run **pauses** on a backoff (2s, doubling, capped at 60s) and a worker re-attempts it on that wake — so on Postgres a `run submit` whose call hits one prints `paused`, and `worker serve` finishes it. On memory nothing outlives the process, so no worker could ever wake that pause: retry is off there unless this is set, and the same 500 fails the run (`run submit` exits `1`); set, a retry is a pause like any other there (exit `2`, below). `1` turns retry off (the gateway's own default); `0` is refused (there is no "unlimited"), as is anything past `20`. Auth and credit failures never reach this path: they pause for a person instead. Like `TORII_WAKE_*` — and the two below — read only by `run submit` and `worker serve`, where a bad value fails loudly, naming the variable. |
 | **`TORII_MAP_CONCURRENCY`** | Optional (default `8`). The ceiling on how many children of one `Map` node are in flight at once; each `Map` asks for its own `concurrency` and the lower of the two wins. Every in-flight child journals over the one `TORII_POOL_SIZE` pool, so a value far past it only queues children on connections. `0` and anything past `256` are refused. |
@@ -50,6 +51,44 @@ convenient for a first boot:
 > lacks (always, on Postgres; with `--gateway-config` on memory), and `run submit` /
 > `worker serve` **always** refuse to boot on one — naming each missing chain and the agent, phase
 > or binding that names it — rather than letting every run that reaches it fail with no candidates.
+
+## Starting from the built-in defaults
+
+```sh
+torii config init --dir ./registry      # write them out to edit — no database needed
+torii config push ./registry            # …then push your edited copy
+
+torii config init --push                # or push them exactly as they ship
+```
+
+torii ships a small registry, compiled into the binary (`crates/core/defaults/`), so a fresh
+tenant can plan without hand-writing one:
+
+| | |
+|---|---|
+| **agents** | `planner` (`area: planning`, `default_planner: true`) — declares the five discovery tools (`list_agents`, `list_skills`, `list_tools`, `list_chains`, `validate_plan`) and is told the plan format; `researcher` (`research/analyst`), `writer` (`writing/author`), `reviewer` (`review/critic`). |
+| **skills** | each keyword-gated (`activate_on`), so none is composed into a prompt that does not ask for it: `summarize`, `research-method`, `code-review`, `structured-output`. |
+| **tools** | the five discovery tools' specs — exactly the gateway executables' own. |
+| **chains.json** | every `(area, kind)` above bound to the catalog's seeded `local` chain (Ollama, priced at an explicit zero, no provider key). Re-point a role at `chat` (or any catalog chain) by editing this one file once its provider keys are set. |
+
+**`--dir <d>`** writes them in the layout `config push` reads — the exact files `config pull`
+would write for them — and nothing else: no database, no `TORII_TENANT`, and it works from an
+installed binary with no source tree beside it. A missing `<d>` is created and an empty one
+seeded; a non-empty one (including an earlier `init` you have since edited) is refused at exit 2
+with nothing written, unless `--force`, which replaces only the files a push reads (the
+layout below) and leaves the rest.
+It is seed-once: from then on the files are yours, and a later release's defaults reach you only
+if you `init` again into a scratch directory and compare.
+
+**`--push`** is `config push` of those files, through the same path: checked against torii's
+catalog (on Postgres; memory has none), replace-all (so on a tenant with a registry it REMOVES whatever the defaults lack, and
+asks first), a generation bump that strands paused runs (asks first), `--yes` to skip both
+prompts, and `no changes` when the tenant already has exactly the defaults.
+
+Nothing per tenant needs seeding in the catalog: the chains the defaults bind are the platform
+tenant's, which every tenant inherits (`catalog.chains_for_tenant`), and every model on them is
+priced, so a money-capped run — every Postgres run, and a memory run with `--budget-usd` — accepts
+them.
 
 ## The registry directory
 
@@ -103,10 +142,10 @@ is a tool the model can call and the runtime cannot serve.
 ## The flow
 
 ```sh
-export DATABASE_URL=… TORII_TENANT=acme TORII_FENCE_VERSION=v1
+export DATABASE_URL=… TORII_TENANT=acme TORII_FENCE_VERSION=v1 TORII_USER=<your profile id>
 
 # 1. push your registry — replace-all; it advances THIS tenant's config generation
-torii config push ./registry
+torii config push ./registry       # or `torii config init --push` for the built-in defaults
 torii config version
 
 # 2. run something
@@ -202,10 +241,61 @@ run`, `null` under `--json`. Light tier: no gateway config, no credentials.
 **Budgets.** `run submit --budget-tokens N` caps a run's tokens and `--budget-usd D` its money
 (whole micro-dollars: at most 6 decimal places, refused rather than rounded); either, both or
 neither. A run that stops at a cap pauses, `run status` shows the spend against it, and `run wake
---budget-tokens`/`--budget-usd` moves the cap before re-queueing. A money raise only moves a cap the
-run was SUBMITTED with — on a run without one it is refused and nothing is written. Under a money
-cap every model on the chains the run uses must declare pricing (an explicit zero for a free or
-local model); an unpriced one is refused.
+--budget-tokens`/`--budget-usd` moves the cap before re-queueing. A money raise moves a cap and never
+introduces one. On Postgres every run is submitted with a money cap (below), so a raise goes to the
+cap check; on `TORII_BACKEND=memory` a run submitted without `--budget-usd` has none, and a money
+raise on it is refused and nothing is written (as it is for a Postgres run from before AG-13 that
+has no money cap). Under a money
+cap every model on the chains the run can use must declare pricing (an explicit zero for a free or
+local model): `run submit` checks that before anything is submitted — under `--budget-usd` on the
+memory backend, and always on Postgres, where every run is capped by its issuer's headroom — and
+refuses (exit `1`, nothing submitted, no charge left) naming each chain, who uses it and its
+unpriced models. "Can use"
+is the graph's `ModelCall` chains, the chain each model-backed agent it names resolves to, and —
+when the graph has an `Expand` anywhere — every route of every model-backed agent in the
+registry, since a plan may run any of them. A chain only a planned `ModelCall` names is still
+refused by the engine at call time. `config push` does not check pricing: an unpriced model is
+fine for every memory-backend run without `--budget-usd`, and refused at `run submit` for every
+Postgres run, since each one is money-capped.
+
+**Runs are charged to torii's caps (AG-13, Postgres).** torii configures the caps — one budget
+node per org unit, `hard` or `soft` (Budgets & billing) — and the engine enforces a run's limit:
+
+- **The limit.** At `run submit` the run's money limit is `TORII_USER`'s **headroom**: the tightest
+  `hard` cap (`cap − spent − reserved`) over every unit the user is a member of (their personal
+  unit, their groups) and every unit above those. `soft` caps never limit. `--budget-usd` may
+  only lower it; above the headroom the submit is refused (exit 2, naming the headroom and the
+  unit) and nothing is written — as it is when no headroom is left at all (a `$0` limit would
+  pause the run before its first priced call). With no `hard` cap anywhere the run still gets a money limit — one
+  it cannot reach, shown by `run status` as `none (no hard cap over the issuer)` — because the
+  engine ledgers a call's cost only under a money cap. A user covered by no budget node at all
+  (not even the tenant's root) is refused, as a question is.
+- **The spend.** What a run spends — the engine's own fold of its journal — is added to every
+  budget node it was charged to, so Budgets & billing shows one number for questions and runs.
+  `run submit` records it when its drive returns (paused, failed or completed), and `worker serve`
+  after every tick for every run whose schedule moved. Recording is idempotent: each run keeps a
+  watermark of what is already recorded (`runs.run_charges`), so a re-drive or a second worker
+  never counts a call twice. A run cancelled while its drive is still running keeps its charge
+  open until that drive ends, so what it spends after the cancel is recorded too.
+- **A raise.** `run wake --budget-usd` on Postgres is checked against the nodes the run is charged
+  to: the new cap less what the run has spent must fit their headroom (its own reservation
+  counting as its own), or the raise is refused and nothing is written. Lowering is always
+  allowed. A run submitted before AG-13 has no charge
+  and cannot be money-raised. One raise of a run at a time: a second `run wake --budget-usd` of
+  the same run while the first is still moving its cap is refused (exit 2, nothing written) —
+  retry once the first has finished.
+- **Reserved.** The limit is a reservation: admitting a run adds it to `reserved` on every `hard`
+  node it is charged to, under the node locks, so a second run (or a question) sees only the
+  headroom the first left — two runs are never admitted the same dollars. As the run's spend is
+  recorded it takes its reservation's place; when the run ends, what it did not spend is released.
+  A raise reserves only its increment, and gives it back if the raise then fails to be written; a
+  lowering releases the difference once the lower cap is written. A paused run keeps its
+  reservation until it ends or is lowered. A submit that fails before its run is scheduled drops
+  its charge and releases the reservation, and a retry of the same `--run-id` by the same user
+  is admitted afresh.
+- Every Postgres run now carries a money limit, so its model calls run one at a time, as any
+  budgeted run's do (a wide `Map` is slower than on an uncapped `TORII_BACKEND=memory` run, the
+  only kind that keeps full fan-out).
 
 **Confirmations and escalations.** A `tool:` row in `list-paused` (and a `tool confirmation
 pending:` line in `status`) is one call of a `confirm_tools` tool waiting for a person; answer it
@@ -213,6 +303,17 @@ with `run tool approve|reject <id> --call <effect_id>`. A call past its deadline
 or already settled is refused before anything is written. An escalated question shows its current
 holder (`agent (escalated to <agent>):`) and that hop's deadline, and is answered with `run agent
 answer` as before. `--as` on every verb is attribution, not authentication.
+
+**When an answer half-lands.** `run signal`, `run gate decide`, `run agent answer` and `run tool
+approve|reject` journal the answer first, then queue the wake, then read both back. A fault after
+the answer is journaled never prints a bare error — the answer is durable either way — and the
+first word says how far it got (exit `2` for both):
+
+- `not queued: …` — the wake itself failed. The answer is on the journal but nothing will read it
+  until the run is woken: run `torii run wake <id>`.
+- `wake sent: …` — the wake went through and only reading the outcome back failed, so the run is
+  probably queued already (or a worker has picked it up). Check `torii run status <id>`; do not
+  wake it again on the strength of this message.
 
 Exit codes: `0` ok · `1` error, including a run that executed and failed · `2` not-found,
 precondition-not-met, or a result printable but not the unqualified success you asked for (among
@@ -234,9 +335,16 @@ and counted in a warning. `RUST_LOG=torii::run_event=info` shows only these.
 
 Stated because finding them by experiment is worse.
 
-- **No registry content ships.** There are no built-in agents, skills or tools — you author all of
-  them. `torii worker serve` refuses to boot against a registry with zero agents.
-- **No `config init` and no dry-run diff.** `push` prints its diff as it applies (and asks before
+- **The defaults are the starting point, not a library.** Four agents and four skills; the planner
+  plans for the three role agents and nothing else ships. `torii worker serve` still refuses to
+  boot against a registry with zero agents — push something (`config init --push`) first.
+- **The defaults route to a local model.** Every role is bound to the catalog's `local` chain
+  — the catalog's `llama3.2`, then `qwen2.5-coder`, both on Ollama. Those are catalog names, not
+  Ollama tags: the seeded endpoints send Ollama `gemma4:latest` and then `gemma2:2b`
+  (`catalog.model_endpoints.router_model_id`), so Ollama must be running with those two tags
+  pulled for a run to get an answer; a small local model is a weak planner. Edit `chains.json` to use `chat` once provider
+  keys are set.
+- **No dry-run diff.** `push` (and `init --push`) prints its diff as it applies (and asks before
   removing anything), but nothing shows the diff without offering to write it.
 - **With nobody marked, two planner agents resolve by name order.** Mark one `area: planning`
   agent `default_planner: true` and it is chosen; leave every agent unmarked and the selector
@@ -254,3 +362,9 @@ With `DATABASE_URL` pointing at a torii database (schema applied **and** seeded 
 bind the catalog's `chat` chain), every test runs: each creates a tenant of its own and removes it
 afterwards, so they run in parallel with no shared lock. `tests/postgres_backend.rs` drives the real
 binary end to end; `tests/e2e_pg.rs` the cross-process operator loop.
+
+CI runs both halves (`.github/workflows/coverage.yml`): `rust-tests` with no database, and
+`rust-tests-db` against a `supabase/postgres` service with the schema, seeds and RLS policies
+applied by `database/ci/bootstrap.sh` (pinned `dbd`), followed by the SQL suite
+`database/tests/run.sh`. To reproduce that job locally against a throwaway container, follow the
+recipe at the top of `database/ci/bootstrap.sh`.

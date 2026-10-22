@@ -32,6 +32,19 @@ pub const ENV_POOL_SIZE: &str = "TORII_POOL_SIZE";
 pub const ENV_BACKEND: &str = "TORII_BACKEND";
 pub const ENV_REGISTRY_DIR: &str = "TORII_REGISTRY_DIR";
 pub const ENV_TENANT: &str = "TORII_TENANT";
+/// AG-13 (#49): the user torii acts as — a `core.profiles` id in `TORII_TENANT`. On Postgres
+/// `run submit` charges the run to this user's budget (their headroom is its money limit, and its
+/// spend is recorded on their nodes). The minimal operator identity; `--as` on the answering
+/// verbs is still attribution, and who may do what is #47's.
+pub const ENV_USER: &str = "TORII_USER";
+
+/// `TORII_USER`, trimmed — `None` when unset or blank.
+pub fn user_from_env() -> Option<String> {
+    std::env::var(ENV_USER)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
 /// AG-3: the scheduler's wake-retry policy ([`WakeRetryPolicy`]) — both heavy-tier drivers
 /// (`worker serve`, and `run submit`'s inline drive) build their `Scheduler` from these, so one
 /// fleet shares one policy. Unset ⇒ the gateway's defaults.
@@ -194,11 +207,18 @@ impl std::fmt::Debug for EnvConfig {
     }
 }
 
+/// The smallest `TORII_POOL_SIZE` that works (G5-1): a settle, a `release_to_cap` and a
+/// `check_raise` (`torii_core::run_budget`) hold a `run_charges` row lock in a transaction —
+/// one connection — while they read the run's journal over a second connection of the same
+/// pool. With one connection that read waits out sqlx's acquire timeout every time. Two can
+/// never deadlock: a process runs its settles one at a time.
+const MIN_POOL_SIZE: u32 = 2;
+
 /// Parse `TORII_POOL_SIZE`, mirroring `cmd::worker::parse_interval`'s discipline: reject
-/// anything that isn't a plain positive integer, loudly and with the offending value
-/// echoed back. A zero-size pool cannot serve any connection, and anything past
-/// [`MAX_POOL_SIZE`] is treated as a typo rather than an intentional value — see its doc
-/// comment.
+/// anything that isn't a plain integer of at least [`MIN_POOL_SIZE`], loudly and with the
+/// offending value echoed back. A zero-size pool cannot serve any connection, a one-size pool
+/// cannot settle a charge, and anything past [`MAX_POOL_SIZE`] is treated as a typo rather
+/// than an intentional value — see its doc comment.
 fn parse_pool_size(s: &str) -> Result<u32, String> {
     let s = s.trim();
     let v: u32 = s
@@ -207,6 +227,13 @@ fn parse_pool_size(s: &str) -> Result<u32, String> {
     if v == 0 {
         return Err(format!(
             "invalid {ENV_POOL_SIZE} {s:?}: a zero-size pool cannot serve any connection"
+        ));
+    }
+    if v < MIN_POOL_SIZE {
+        return Err(format!(
+            "invalid {ENV_POOL_SIZE} {s:?}: it must be at least {MIN_POOL_SIZE} — settling a \
+             run's charge holds its row lock on one connection while it reads the run's journal \
+             on another, so a one-connection pool times out on every settle"
         ));
     }
     if v > MAX_POOL_SIZE {
@@ -753,6 +780,22 @@ pub struct LightDeps {
     /// AG-4: the tenant's CAS, so `run results` can resolve an output stored as a ref. The SAME
     /// store the heavy tier hands the executor — a ref the executor wrote is readable here.
     pub content: Arc<dyn ContentStore>,
+    /// AG-13: the tenant's run charges — torii's caps a run is limited by and its spend recorded
+    /// on. `None` on the memory backend, which has no caps.
+    pub charges: Option<torii_core::run_budget::RunCharges>,
+}
+
+impl LightDeps {
+    /// AG-13: the charge `run submit`, `run wake` and `worker serve` run under — `None` on memory.
+    pub fn charging<'a>(&'a self, user: Option<&'a str>) -> Option<crate::cmd::run::Charging<'a>> {
+        self.charges
+            .as_ref()
+            .map(|charges| crate::cmd::run::Charging {
+                charges,
+                journal: self.journal.as_ref(),
+                user,
+            })
+    }
 }
 
 /// AG-3: torii's Postgres scheduler keeps the counter in `runs.scheduled_runs.attempts`.
@@ -786,6 +829,7 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                 .await
                 .map_err(|e| CliError::error(format!("{ENV_TENANT}: {e}")))?;
             let stores = torii_core::TenantStores::open(&pool, tenant_id);
+            let charges = torii_core::run_budget::RunCharges::new(pool.clone(), tenant_id);
             // ONE store object behind both the trait and the attempt-counter reader.
             let scheduler = Arc::new(stores.scheduler);
             Ok(Stores {
@@ -796,6 +840,7 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                     gateway_config: Some(Arc::new(CatalogGatewayConfigSource::new(pool))),
                     wake_attempts: scheduler,
                     content: Arc::new(stores.content),
+                    charges: Some(charges),
                 },
                 context: Arc::new(stores.context),
             })
@@ -820,6 +865,7 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                     gateway_config: None,
                     wake_attempts: Arc::new(NoWakeAttemptCounts),
                     content: content.clone(),
+                    charges: None,
                 },
                 context: Arc::new(InMemoryContextStore::new(content)),
             })
@@ -834,12 +880,12 @@ pub async fn light(env: &EnvConfig) -> Result<LightDeps, CliError> {
 /// Heavy tier: a full Executor behind a Scheduler. Adds the gateway config file
 /// and the fence base.
 pub struct HeavyDeps {
-    // Not read by the current dispatch (only `.scheduler` is): kept for a future
-    // heavy-tier command that needs the shared pool's config source directly, or a
-    // test that wants to fast-forward the injected clock.
-    #[allow(dead_code)]
+    /// The stores the scheduler drives over — `run submit` and `worker serve` take the run
+    /// charges (AG-13) from here.
     pub light: LightDeps,
     pub scheduler: Scheduler,
+    // Not read by the current dispatch: kept for a test that wants to fast-forward the
+    // injected clock.
     #[allow(dead_code)]
     pub clock: Arc<dyn Clock>,
     /// AG-18: the run events the scheduler's drives report (torii-core's `RunEventSink`).
@@ -850,6 +896,11 @@ pub struct HeavyDeps {
     /// The chains this boot's gateway serves. A reloaded registry is checked against them:
     /// the catalog is read once, at boot, so a chain added there since is unknown here.
     pub gateway_chains: HashMap<String, kernel::types::config::FallbackChainConfig>,
+    /// #55: the chains and models (no routers, so no credentials) this boot's gateway prices
+    /// with, and where they came from — what `run submit` checks a money-capped graph against
+    /// before submitting it (`torii_core::pricing`): under `--budget-usd`, and on Postgres always.
+    pub gateway_pricing: kernel::types::config::GatewayConfig,
+    pub gateway_source: String,
 }
 
 impl HeavyDeps {
@@ -871,15 +922,29 @@ impl HeavyDeps {
             events,
             registry,
             gateway_chains,
+            ..
         } = self;
-        drop((light, clock));
+        drop(clock);
         let log = log_run_events(events);
         let ticker = crate::cmd::worker::Reloading {
             inner: &scheduler,
             registry: &registry,
             gateway_chains: &gateway_chains,
         };
-        let out = crate::cmd::worker::serve(&ticker, opts, shutdown).await;
+        // AG-13: on Postgres every tick also records the charged runs' new spend on their
+        // budget nodes.
+        let charging = light.charging(None);
+        let settling = charging
+            .as_ref()
+            .map(|charging| crate::cmd::worker::Settling {
+                inner: &ticker,
+                charging,
+            });
+        let ticker: &dyn crate::cmd::worker::Ticker = match &settling {
+            Some(s) => s,
+            None => &ticker,
+        };
+        let out = crate::cmd::worker::serve(ticker, opts, shutdown).await;
         // Closes the event channel, so the log drains everything the drives reported.
         drop(scheduler);
         flush_run_events(log).await;
@@ -891,6 +956,20 @@ pub async fn heavy(
     env: &EnvConfig,
     gateway_config_file: Option<&Path>,
     workspace_root: Option<&Path>,
+) -> Result<HeavyDeps, CliError> {
+    heavy_with(env, gateway_config_file, workspace_root, |gw| gw).await
+}
+
+/// [`heavy`], with `adjust` applied to the gateway config once it is loaded — the identity in
+/// production. A test seam: on Postgres the gateway config is always torii's catalog, whose
+/// routers point at real providers, and a drive that needs a model answer (AG-9's
+/// `config init` → planning run) re-points the catalog's routers at a local fake while keeping
+/// every chain and model exactly as seeded.
+pub(crate) async fn heavy_with(
+    env: &EnvConfig,
+    gateway_config_file: Option<&Path>,
+    workspace_root: Option<&Path>,
+    adjust: impl FnOnce(kernel::types::config::GatewayConfig) -> kernel::types::config::GatewayConfig,
 ) -> Result<HeavyDeps, CliError> {
     let fence = require_fence(env)?.to_string();
     let wake_retry = require_wake_retry(env)?;
@@ -917,6 +996,7 @@ pub async fn heavy(
             unreachable!("gateway_config_file_for returns a file exactly when there is no catalog")
         }
     };
+    let gw_config = adjust(gw_config);
 
     // One atomic (config, generation) read — the fence generation must match the
     // config it was computed from.
@@ -951,6 +1031,11 @@ pub async fn heavy(
     // builder, and checked right after.
     let configured_routers: Vec<String> = gw_config.routers.keys().cloned().collect();
     let gateway_chains = gw_config.chains.clone();
+    let gateway_pricing = kernel::types::config::GatewayConfig {
+        chains: gw_config.chains.clone(),
+        models: gw_config.models.clone(),
+        ..Default::default()
+    };
     let builder = gateway::FacadeBuilder::new(gw_config);
     let registered = builder.registry().clone();
     let facade = builder.build().await;
@@ -1064,6 +1149,8 @@ pub async fn heavy(
         events,
         registry,
         gateway_chains,
+        gateway_pricing,
+        gateway_source: gw_source,
     })
 }
 
@@ -1275,6 +1362,18 @@ mod tests {
         .expect_err("must refuse");
         assert_eq!(err.code, crate::errors::EXIT_ERROR);
         assert!(err.message.contains(ENV_POOL_SIZE), "{}", err.message);
+    }
+
+    /// G5-1: a settle holds its `run_charges` row lock inside a transaction while it reads the
+    /// journal over a second connection of the same pool, so a one-connection pool waits out
+    /// sqlx's acquire timeout on every settle, release and raise. Two is the floor.
+    #[test]
+    fn a_pool_size_of_one_is_rejected_naming_why() {
+        let err = parse_pool_size("1").expect_err("a one-connection pool must be refused");
+        assert!(err.contains(ENV_POOL_SIZE), "{err}");
+        assert!(err.contains("at least 2"), "{err}");
+        assert!(err.contains("row lock"), "{err}");
+        assert_eq!(parse_pool_size("2"), Ok(2));
     }
 
     #[test]
@@ -2730,5 +2829,401 @@ mod tests {
             "heavy() must share ONE pool (~1 backend connection), saw {after}"
         );
         drop(deps);
+    }
+
+    /// A fake model provider on the OpenAI wire that plays the default PLANNER through one
+    /// discovery round-trip: offered `list_agents` and not yet answered, it calls it; given the
+    /// tool's answer, it returns `plan` and keeps the answer; asked anything else (a planned
+    /// step), it answers in prose. Returns its base URL, every tool answer it was handed, and
+    /// its call count.
+    async fn planning_provider(
+        plan: serde_json::Value,
+    ) -> (
+        String,
+        Arc<std::sync::Mutex<Vec<String>>>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        #[derive(Clone)]
+        struct St {
+            plan: String,
+            tool_answers: Arc<std::sync::Mutex<Vec<String>>>,
+            calls: Arc<AtomicUsize>,
+        }
+        fn reply(message: serde_json::Value, finish: &str) -> axum::Json<serde_json::Value> {
+            axum::Json(serde_json::json!({
+                "id": "fake", "object": "chat.completion", "created": 0, "model": "m",
+                "choices": [{"index": 0, "finish_reason": finish, "message": message}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}
+            }))
+        }
+        async fn chat(
+            axum::extract::State(st): axum::extract::State<St>,
+            axum::Json(req): axum::Json<serde_json::Value>,
+        ) -> axum::Json<serde_json::Value> {
+            st.calls.fetch_add(1, SeqCst);
+            let offered = req["tools"]
+                .as_array()
+                .is_some_and(|ts| ts.iter().any(|t| t["function"]["name"] == "list_agents"));
+            let answered: Vec<String> = req["messages"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|m| m["role"] == "tool")
+                .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+                .collect();
+            if offered && answered.is_empty() {
+                return reply(
+                    serde_json::json!({"role": "assistant", "content": null, "tool_calls": [{
+                        "id": "call_1", "type": "function",
+                        "function": {"name": "list_agents", "arguments": "{}"}}]}),
+                    "tool_calls",
+                );
+            }
+            if offered {
+                st.tool_answers.lock().unwrap().extend(answered);
+                return reply(
+                    serde_json::json!({"role": "assistant", "content": st.plan}),
+                    "stop",
+                );
+            }
+            reply(
+                serde_json::json!({"role": "assistant",
+                                   "content": "The report says revenue rose 4%."}),
+                "stop",
+            )
+        }
+        let st = St {
+            plan: plan.to_string(),
+            tool_answers: Arc::new(std::sync::Mutex::new(Vec::new())),
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let (answers, calls) = (st.tool_answers.clone(), st.calls.clone());
+        let app = axum::Router::new()
+            .route("/v1/chat/completions", axum::routing::post(chat))
+            .with_state(st);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (url, answers, calls)
+    }
+
+    /// **AG-9 (#46) done-when.** On a FRESH tenant, `config init --push` (the real command
+    /// function, checked against torii's real catalog) followed by `run submit` of a planning
+    /// graph — one `Expand` whose planner is `Select` — produces a plan, with no hand-written
+    /// registry. The binary's own boot (`heavy`) drives it; the only substitution is the
+    /// catalog's router URLs, re-pointed at a local fake, so the chains and models are exactly
+    /// the seeded ones. Submitted under a money cap, so every model on the chains the defaults
+    /// bind must be priced (an explicit zero for the local one).
+    #[cfg_attr(
+        not(have_database_url),
+        ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+    )]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn config_init_then_a_planning_run_produces_a_plan_on_a_fresh_tenant() {
+        let Some(url) = crate::test_guard::db_url() else {
+            return;
+        };
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let stores = t.stores();
+        let catalog = CatalogGatewayConfigSource::new(t.pool.clone());
+        let pushed = crate::cmd::config::init_push(
+            &stores.config,
+            &stores.scheduler,
+            Some(&catalog),
+            false,
+            &mut |text: &str| panic!("a fresh tenant's first push asks nothing: {text}"),
+        )
+        .await
+        .expect("config init --push");
+        assert!(
+            pushed.text.contains("pushed: config now at v1"),
+            "{}",
+            pushed.text
+        );
+
+        let plan = serde_json::json!({
+            "graph": {"nodes": [{"id": "summary", "deps": [],
+                "kind": {"Agent": {"agent": "writer",
+                                    "input": {"task": "Summarize the report in one line"}}}}]},
+            "node_plans": {"summary": {"label": "Summarize the report"}}
+        });
+        let (fake, tool_answers, calls) = planning_provider(plan).await;
+        let env = tenant_env(&url, t.id, "torii-ag9-init-plan-fence");
+        let d = heavy_with(&env, None, None, |mut gw| {
+            for r in gw.routers.values_mut() {
+                r.url = fake.clone();
+            }
+            gw
+        })
+        .await
+        .unwrap_or_else(|e| panic!("heavy boots on the defaults: {}", e.message));
+
+        let run = RunId(uuid::Uuid::new_v4());
+        let graph = graph_of(
+            "goal",
+            orchestrator_core::NodeKind::Expand {
+                input: serde_json::json!({"goal": "Summarize the quarterly report"}),
+                planner: orchestrator_core::PlannerRef::Select,
+            },
+        );
+        let budget = orchestrator_core::RunBudget {
+            tokens: None,
+            money: Some(orchestrator_core::MoneyBudget {
+                total_micro_usd: 1_000_000,
+            }),
+        };
+        let _ = crate::cmd::run::submit(
+            &d.scheduler,
+            run,
+            graph,
+            budget,
+            crate::cmd::run::StoreLifetime::Process,
+            || {},
+        )
+        .await;
+        let st = d.scheduler.status(run).await.unwrap().expect("row");
+        let events: Vec<_> = d
+            .light
+            .journal
+            .load(run)
+            .await
+            .expect("journal")
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
+        assert_eq!(
+            st.status,
+            orchestrator_core::RunStatus::Completed,
+            "{:?}\n{events:#?}",
+            st.reason
+        );
+        assert!(
+            events.iter().any(|e| matches!(e,
+                orchestrator_core::JournalEvent::PlannerSelected { agent, .. }
+                    if agent.0 == "planner")),
+            "Select picked the shipped default planner: {events:#?}"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e,
+                orchestrator_core::JournalEvent::PlanExpanded { subgraph, .. }
+                    if subgraph.nodes.iter().any(|n| n.id.0 == "summary"))),
+            "the planner's plan was expanded: {events:#?}"
+        );
+        let answers = tool_answers.lock().unwrap().join("\n");
+        for agent in ["planner", "researcher", "reviewer", "writer"] {
+            assert!(
+                answers.contains(agent),
+                "list_agents — declared by the shipped planner, specced by the shipped \
+                 tools/list_agents.json — answered from the registry: {answers}"
+            );
+        }
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "planner: list_agents, then the plan; then the planned step"
+        );
+        drop(d);
+        drop(t);
+    }
+
+    /// G2-2 (wave B review): the AG-9 (#46) done-when through the path `run submit` really takes
+    /// on Postgres — CHARGED to `TORII_USER` (`submit_charged`), with no `--budget-usd`, so the
+    /// run's money limit is the issuer's headroom and its graph is checked against the shipped
+    /// defaults' pricing (G2-1). On a fresh tenant whose only structure is an org root and a
+    /// `hard`-capped team holding the issuer, `config init --push` then a planning run produces a
+    /// plan; afterwards the charge is closed and consistent: the run's spend (zero, on the
+    /// defaults' local model) is what the nodes record, and the $5 its admission reserved on the
+    /// team is released.
+    #[cfg_attr(
+        not(have_database_url),
+        ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+    )]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn config_init_then_a_charged_planning_run_produces_a_plan_on_a_fresh_tenant() {
+        let Some(url) = crate::test_guard::db_url() else {
+            return;
+        };
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let (root, team, user) = (
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+        for (q, binds) in [
+            (
+                "insert into core.unit_levels (tenant_id, level, label) \
+                 select $1, l, 'L' || l from generate_series(0, 4) l",
+                vec![],
+            ),
+            (
+                "insert into core.org_units (tenant_id, id, parent_id, level, name) \
+                 values ($1, $2, null, 0, 'Org')",
+                vec![root],
+            ),
+            (
+                "insert into governance.nodes (tenant_id, id, org_unit_id, modified_by) \
+                 values ($1, $2, $2, 'torii-cli-test')",
+                vec![root],
+            ),
+            (
+                "insert into core.org_units (tenant_id, id, parent_id, level, name) \
+                 values ($1, $2, $3, 2, 'Team')",
+                vec![team, root],
+            ),
+            (
+                "insert into governance.nodes \
+                   (tenant_id, id, org_unit_id, cap_amount, enforcement, modified_by) \
+                 values ($1, $2, $2, 5, 'hard', 'torii-cli-test')",
+                vec![team],
+            ),
+        ] {
+            let mut q = sqlx::query(q).bind(t.id);
+            for b in binds {
+                q = q.bind(b);
+            }
+            q.execute(&t.pool).await.expect("seed the tenant's units");
+        }
+        sqlx::query("insert into core.profiles (id, display_name) values ($1, 'torii-cli-test')")
+            .bind(user)
+            .execute(&t.pool)
+            .await
+            .unwrap();
+        for q in [
+            "insert into core.memberships (profile_id, tenant_id, assigned_by) \
+             values ($1, $2, 'torii-cli-test')",
+            "insert into core.unit_members (tenant_id, unit_id, profile_id) values ($2, $3, $1)",
+        ] {
+            sqlx::query(q)
+                .bind(user)
+                .bind(t.id)
+                .bind(team)
+                .execute(&t.pool)
+                .await
+                .expect("the issuer");
+        }
+
+        let stores = t.stores();
+        let catalog = CatalogGatewayConfigSource::new(t.pool.clone());
+        crate::cmd::config::init_push(
+            &stores.config,
+            &stores.scheduler,
+            Some(&catalog),
+            false,
+            &mut |text: &str| panic!("a fresh tenant's first push asks nothing: {text}"),
+        )
+        .await
+        .expect("config init --push");
+
+        let plan = serde_json::json!({
+            "graph": {"nodes": [{"id": "summary", "deps": [],
+                "kind": {"Agent": {"agent": "writer",
+                                    "input": {"task": "Summarize the report in one line"}}}}]},
+            "node_plans": {"summary": {"label": "Summarize the report"}}
+        });
+        let (fake, _tool_answers, calls) = planning_provider(plan).await;
+        let env = tenant_env(&url, t.id, "torii-g2-2-charged-plan-fence");
+        let d = heavy_with(&env, None, None, |mut gw| {
+            for r in gw.routers.values_mut() {
+                r.url = fake.clone();
+            }
+            gw
+        })
+        .await
+        .unwrap_or_else(|e| panic!("heavy boots on the defaults: {}", e.message));
+
+        let run = RunId(uuid::Uuid::new_v4());
+        let graph = graph_of(
+            "goal",
+            orchestrator_core::NodeKind::Expand {
+                input: serde_json::json!({"goal": "Summarize the quarterly report"}),
+                planner: orchestrator_core::PlannerRef::Select,
+            },
+        );
+        let registry = d.registry.handle().snapshot().0;
+        let pricing = crate::cmd::run::Pricing {
+            registry: &registry,
+            gateway: &d.gateway_pricing,
+            source: &d.gateway_source,
+        };
+        let issuer = user.to_string();
+        let out = crate::cmd::run::submit_charged(
+            d.light.charging(Some(&issuer)).as_ref(),
+            &d.scheduler,
+            run,
+            graph,
+            orchestrator_core::RunBudget::default(),
+            crate::cmd::run::StoreLifetime::Process,
+            &pricing,
+            || {},
+        )
+        .await;
+        let st = d.scheduler.status(run).await.unwrap();
+        let events: Vec<_> = d
+            .light
+            .journal
+            .load(run)
+            .await
+            .expect("journal")
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
+        let out = out.unwrap_or_else(|e| panic!("{}\n{events:#?}", e.message));
+        assert!(out.text.starts_with("completed: "), "{}", out.text);
+        assert_eq!(
+            st.expect("row").status,
+            orchestrator_core::RunStatus::Completed
+        );
+        assert!(
+            events.iter().any(|e| matches!(e,
+                orchestrator_core::JournalEvent::PlanExpanded { subgraph, .. }
+                    if subgraph.nodes.iter().any(|n| n.id.0 == "summary"))),
+            "the planner's plan was expanded: {events:#?}"
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+        let (spent, cap) = orchestrator::money_spend_of(&d.light.journal.load(run).await.unwrap());
+        assert_eq!(
+            cap,
+            Some(5_000_000),
+            "the limit is the team's $5 of headroom"
+        );
+        // The defaults bind the local model, priced at an explicit zero: the run spends $0, so
+        // what this pins is the charge's bookkeeping — the $5 reserved at admission is released
+        // when the run completes — not a non-zero spend (the e2e suite covers that).
+        assert_eq!(
+            spent, 0,
+            "the shipped local model is priced at an explicit zero"
+        );
+        let (recorded, reserved, settled): (i64, i64, bool) = sqlx::query_as(
+            "select recorded_micro_usd, reserved_micro_usd, settled from runs.run_charges \
+              where tenant_id = $1 and run_id = $2",
+        )
+        .bind(t.id)
+        .bind(run.0)
+        .fetch_one(&t.pool)
+        .await
+        .expect("the run is charged");
+        assert_eq!(
+            (recorded as u64, reserved, settled),
+            (spent, 0, true),
+            "the completed run's spend is recorded and its charge closed"
+        );
+        let nodes: Vec<(uuid::Uuid, i64, i64)> = sqlx::query_as(
+            "select id, (spent_amount * 1000000)::bigint, (reserved_amount * 1000000)::bigint \
+               from governance.nodes where tenant_id = $1 order by id",
+        )
+        .bind(t.id)
+        .fetch_all(&t.pool)
+        .await
+        .unwrap();
+        let mut want = vec![(root, spent as i64, 0), (team, spent as i64, 0)];
+        want.sort();
+        assert_eq!(
+            nodes, want,
+            "spend on the team and the root, nothing left reserved"
+        );
+        drop(d);
+        drop(t);
     }
 }

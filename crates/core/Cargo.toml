@@ -11,6 +11,9 @@ name = "torii_core"
 # One gateway version across torii (TM-8a). Dev resolves via the workspace [patch].
 gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", tag = "v0.12.0" }
 anyhow = "1"
+# AG-9 (#46): the shipped default registry (`defaults/`) is compiled into the binary, so
+# `torii config init` works from an install or a container with no source tree beside it.
+include_dir = "0.7"
 # AG-18 (#53): the run-event sink (`events`) — `OrchestratorHooks` is an async trait, its
 # wire type serializes, and it hands events off over a bounded `tokio::sync::mpsc`.
 async-trait = "0.1"
@@ -25,6 +28,9 @@ uuid = { version = "1", features = ["serde"] }
 # `orchestrator_store`, like the gateway's in-memory crate the CLI uses.
 tenant-stores = { package = "torii-orchestrator-store", path = "../orchestrator-store" }
 orchestrator-core = { package = "sensei-orchestrator-core", git = "https://github.com/sensei-hq/gateway", tag = "v0.12.0" }
+# AG-13 (#49): a run's money spend is folded with the engine's OWN fold (`money_spend_of`) before
+# it is recorded on the budget nodes — never a second, drifting sum.
+orchestrator = { package = "sensei-orchestrator", git = "https://github.com/sensei-hq/gateway", tag = "v0.12.0" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

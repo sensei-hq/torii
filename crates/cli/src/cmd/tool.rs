@@ -324,10 +324,16 @@ pub async fn decide(
     if let Err(e) = store.force_wake(run, now).await {
         return Ok(unread("the wake", &e));
     }
+    // A re-read fault comes AFTER `force_wake` committed: the wake was sent, so `unread`'s
+    // "not queued" would be false (#55) — `wake_sent_unread` says so and points at `run status`.
+    let durable = format!("call {shown} is {verdict} and journaled durably (seq {appended})");
+    let reread = |what: &str, e: &dyn std::fmt::Display| {
+        crate::cmd::wake_sent_unread(&durable, run, what, e)
+    };
     let after = match store.status(run).await {
         Ok(Some(s)) => s,
-        Ok(None) => return Ok(unread("the status re-read", &"the run vanished")),
-        Err(e) => return Ok(unread("the status re-read", &e)),
+        Ok(None) => return Ok(reread("the status re-read", &"the run vanished")),
+        Err(e) => return Ok(reread("the status re-read", &e)),
     };
     let rewritten = if actor != one_lined {
         format!(" (--as contained secret-shaped text and was recorded as {actor})")
@@ -352,7 +358,7 @@ pub async fn decide(
     // with the decision on the journal.
     let after_events = match journal.load(run).await {
         Ok(evs) => evs,
-        Err(e) => return Ok(unread("the journal re-read", &e)),
+        Err(e) => return Ok(reread("the journal re-read", &e)),
     };
     let settled_after = after_events.iter().any(|(seq, e)| {
         *seq > appended
@@ -383,7 +389,9 @@ pub async fn decide(
 mod tests {
     use super::*;
     use crate::cmd::run::tests::{
-        FailingForceWakeStore, append_tool_confirm, now, paused_store, tool_confirm_journal,
+        ConcurrentActor, FailingForceWakeStore, FailsTheJournalReread, FailsTheReread, RacingStore,
+        append_tool_confirm, assert_reports_wake_sent, hostile_password, now, paused_store,
+        tool_confirm_journal,
     };
     use crate::errors::{EXIT_OK, EXIT_PRECONDITION};
     use orchestrator_core::{
@@ -704,6 +712,59 @@ mod tests {
             out.text
         );
         assert_eq!(decided_rows(&j, run).await.len(), 1);
+    }
+
+    /// #55: `decide`'s STATUS re-read faults after `force_wake` committed — the wake was
+    /// sent, so "not queued" (and "run `torii run wake`") would be false.
+    #[tokio::test]
+    async fn a_status_reread_fault_after_the_wake_reports_wake_sent() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let (inner, j) = pending(run).await;
+        let s = FailsTheReread(inner, Default::default());
+
+        let out = decide(&s, &j, run, CALL, None, true, "alice", None, now())
+            .await
+            .expect("a post-wake fault is reported, not `?`-ed");
+
+        assert_eq!(decided_rows(&j, run).await.len(), 1);
+        assert_reports_wake_sent(&out, run, &s.0).await;
+    }
+
+    /// #55: the JOURNAL re-read — reached only when the status re-read says the wake did not
+    /// queue the run (here a worker claimed it first) — faults. `force_wake` returned Ok, so
+    /// the wake was sent, and the claiming worker may already be folding the decision:
+    /// "Nothing has read it yet … not queued — run `torii run wake`" is unknowable at best.
+    #[tokio::test]
+    async fn a_journal_reread_fault_after_the_wake_reports_wake_sent() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let deadline = now() + chrono::Duration::hours(1);
+        let s = RacingStore {
+            inner: paused_store(run, Some(now() - chrono::Duration::seconds(1))).await,
+            run,
+            actor: ConcurrentActor::ClaimsFirst,
+        };
+        let inner = std::sync::Arc::new(tool_confirm_journal(run, Some(deadline)).await);
+        let j = FailsTheJournalReread(inner.clone(), Default::default());
+
+        let out = decide(&s, &j, run, CALL, None, true, "alice", None, now())
+            .await
+            .expect("a post-wake fault is reported, not `?`-ed");
+
+        assert_eq!(decided_rows(&inner, run).await.len(), 1);
+        let t = &out.text;
+        assert_eq!(out.code, EXIT_PRECONDITION, "{t}");
+        assert!(t.starts_with("wake sent"), "{t}");
+        assert!(
+            !t.contains("not queued") && !t.contains("`torii run wake"),
+            "{t}"
+        );
+        assert!(
+            t.contains("journaled durably")
+                && t.contains("could not be read back")
+                && t.contains(&format!("torii run status {}", run.0)),
+            "{t}"
+        );
+        assert!(!t.contains(&hostile_password()), "rendered safe: {t}");
     }
 
     #[tokio::test]

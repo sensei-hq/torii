@@ -5,10 +5,13 @@
 //! "where a tenant's runs live".
 
 pub mod config;
+pub mod defaults;
 pub mod events;
+pub mod pricing;
 pub mod registry;
 pub mod registry_dir;
 pub mod results;
+pub mod run_budget;
 pub mod stores;
 
 pub use config::load_gateway_config;

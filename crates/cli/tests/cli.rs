@@ -592,6 +592,96 @@ fn both_budget_token_flags_name_the_floor_their_parser_enforces() {
     }
 }
 
+/// AG-13 (#49): both money flags say where the limit really comes from on Postgres — the
+/// issuer's (`TORII_USER`'s) headroom under torii's caps, which `--budget-usd` may only lower and
+/// a raise may not exceed. Help that still described an operator-chosen cap would send an operator
+/// to a flag that now refuses what it used to accept.
+#[test]
+fn both_budget_usd_flags_name_the_issuers_headroom() {
+    for args in [
+        vec!["run", "submit", "--help"],
+        vec!["run", "wake", "--help"],
+    ] {
+        let out = torii().args(&args).output().expect("runs");
+        assert!(out.status.success(), "exit: {:?}", out.status);
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            text.contains("TORII_USER") && text.contains("headroom"),
+            "`{}` must say a money limit is bounded by TORII_USER's headroom:\n{text}",
+            args.join(" ")
+        );
+    }
+}
+
+/// `--help` of `args`, whitespace-collapsed so a reflow or a wrap never decides a test.
+fn help_text(args: &[&str]) -> String {
+    let out = torii().args(args).output().expect("runs");
+    assert!(out.status.success(), "exit: {:?}", out.status);
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Wave B review D1: since AG-13 every Postgres run carries a money cap, so `run wake
+/// --budget-usd` on one goes through the cap check — the "submitted without --budget-usd ⇒
+/// REFUSED" rule holds on TORII_BACKEND=memory (and for a Postgres run from before AG-13), not
+/// everywhere. Every sentence that names the no-cap refusal must say which backend it is.
+#[test]
+fn wake_help_scopes_the_no_money_cap_refusal_to_the_memory_backend() {
+    let text = help_text(&["run", "wake", "--help"]);
+    let refusals: Vec<&str> = text
+        .split(". ")
+        .filter(|s| s.contains("without --budget-usd"))
+        .collect();
+    assert!(
+        !refusals.is_empty(),
+        "`run wake --help` must still say when a money raise is refused:\n{text}"
+    );
+    for s in refusals {
+        assert!(
+            s.contains("TORII_BACKEND=memory"),
+            "`run wake --help` states the no-money-cap refusal for every backend, and on \
+             Postgres every run has a money cap: {s:?}"
+        );
+    }
+    let submit = help_text(&["run", "submit", "--help"]);
+    assert!(
+        !submit.contains("Only a run SUBMITTED with a money cap has one"),
+        "`run submit --help` says only a --budget-usd run has a money cap; on Postgres every \
+         run does:\n{submit}"
+    );
+}
+
+/// Wave B review D2: omitting --budget-tokens no longer makes a run "unbudgeted, exactly as
+/// before" — on Postgres it is still money-capped, so its model calls still run one at a time.
+#[test]
+fn submit_help_does_not_call_a_run_without_budget_tokens_unbudgeted() {
+    let text = help_text(&["run", "submit", "--help"]);
+    assert!(
+        !text.contains("Omit it and the run is unbudgeted, exactly as before"),
+        "`run submit --help` calls a run without --budget-tokens unbudgeted, and on Postgres \
+         every run is money-capped:\n{text}"
+    );
+    assert!(
+        text.contains("one at a time"),
+        "`run submit --help` must still say a capped run's model calls are serial:\n{text}"
+    );
+}
+
+/// Wave B review D5: TORII_USER is asserted by the operator, never authenticated — naming
+/// another profile charges that profile's caps. Until torii#47 binds the issuer to an
+/// authenticated principal, the help that names TORII_USER must say so.
+#[test]
+fn submit_help_says_torii_user_is_not_authenticated() {
+    let text = help_text(&["run", "submit", "--help"]);
+    assert!(
+        text.contains("not authenticated") && text.contains("torii#47"),
+        "`run submit --help` names TORII_USER without saying it is an unauthenticated, \
+         operator-asserted identity (trusted operators only until torii#47):\n{text}"
+    );
+}
+
 /// The other side of the same sweep: `run agent --help` enumerated the waiting kinds as
 /// THREE ("The third waiting kind … Each of the three refuses the other two") in the very
 /// commit that added a fourth and a fourth refusal arm to this command.
@@ -1051,4 +1141,137 @@ fn run_tool_approve_and_reject_are_wired_and_state_the_trust_boundary() {
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(err.contains("invalid run id"), "{err}");
     }
+}
+
+/// `torii` with no database configuration AT ALL — not even a memory backend — run from `cwd`.
+fn torii_without_a_database(cwd: &std::path::Path) -> Command {
+    let mut c = torii();
+    c.env_remove("TORII_BACKEND")
+        .env_remove("TORII_REGISTRY_DIR")
+        .current_dir(cwd);
+    c
+}
+
+/// Every registry file under `dir`, relative to it, with its contents, in path order.
+fn registry_files(dir: &std::path::Path) -> Vec<(std::path::PathBuf, String)> {
+    torii_core::defaults::files()
+        .into_iter()
+        .filter_map(|(p, _)| std::fs::read_to_string(dir.join(&p)).ok().map(|c| (p, c)))
+        .collect()
+}
+
+fn shipped_files() -> Vec<(std::path::PathBuf, String)> {
+    torii_core::defaults::files()
+        .into_iter()
+        .map(|(p, c)| (p, c.to_string()))
+        .collect()
+}
+
+/// AG-9 (#46), SP-REG-1 D9 + gate item 8: `config init --dir` is a local file operation over
+/// defaults COMPILED INTO the binary — it needs no `DATABASE_URL` (dispatch used to read the
+/// environment before matching the command), and run from a directory with no source tree
+/// beside it, it still writes every shipped file.
+#[test]
+fn config_init_dir_writes_the_embedded_defaults_with_no_database_and_no_source_tree() {
+    let cwd = tempfile::tempdir().unwrap();
+    let out = torii_without_a_database(cwd.path())
+        .args(["config", "init", "--dir", "registry"])
+        .output()
+        .expect("runs");
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stdout: {stdout}\nstderr: {stderr}"
+    );
+    assert_eq!(
+        registry_files(&cwd.path().join("registry")),
+        shipped_files()
+    );
+    let cfg = torii_core::defaults::config().unwrap();
+    assert!(
+        stdout.contains(&format!("{} agents", cfg.agents.len()))
+            && stdout.contains("torii config push"),
+        "{stdout}"
+    );
+}
+
+/// D9: a non-empty directory — here, an earlier `init` the operator has since edited — is
+/// refused at exit 2 with nothing written; `--force` restores the defaults.
+#[test]
+fn config_init_dir_refuses_a_non_empty_directory_unless_forced() {
+    let cwd = tempfile::tempdir().unwrap();
+    let init = |force: bool| {
+        let mut c = torii_without_a_database(cwd.path());
+        c.args(["config", "init", "--dir", "registry"]);
+        if force {
+            c.arg("--force");
+        }
+        c.output().expect("runs")
+    };
+    assert_eq!(init(false).status.code(), Some(0), "precondition");
+    let planner = cwd.path().join("registry/agents/planner.md");
+    std::fs::write(&planner, "edited").unwrap();
+
+    let out = init(false);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("--force"),
+        "the refusal names the way through: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(std::fs::read_to_string(&planner).unwrap(), "edited");
+
+    assert_eq!(init(true).status.code(), Some(0));
+    assert_eq!(
+        registry_files(&cwd.path().join("registry")),
+        shipped_files()
+    );
+}
+
+/// Exactly one destination: `init` alone is a usage error that names both.
+#[test]
+fn config_init_takes_exactly_one_of_dir_and_push() {
+    let cwd = tempfile::tempdir().unwrap();
+    for args in [
+        &["config", "init"][..],
+        &["config", "init", "--dir", "x", "--push"][..],
+    ] {
+        let out = torii_without_a_database(cwd.path())
+            .args(args)
+            .output()
+            .expect("runs");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {err}");
+        assert!(
+            err.contains("--dir") && err.contains("--push"),
+            "{args:?}: {err}"
+        );
+    }
+    assert!(
+        std::fs::read_dir(cwd.path()).unwrap().next().is_none(),
+        "a usage error writes nothing"
+    );
+}
+
+/// `--push` writes the durable config, so unlike `--dir` it does need the database — and says
+/// which variable is missing.
+#[test]
+fn config_init_push_needs_the_database_and_names_the_variable() {
+    let cwd = tempfile::tempdir().unwrap();
+    let out = torii_without_a_database(cwd.path())
+        .args(["config", "init", "--push"])
+        .output()
+        .expect("runs");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("DATABASE_URL"), "{err}");
 }

@@ -17,10 +17,12 @@ use torii::{boot, cmd};
     about = "Operator control plane for the sensei orchestrator",
     long_about = "Observe and intervene on runs, drive due wakes, and manage durable config.\n\n\
                   DATABASE_URL and TORII_TENANT (a tenant id or slug) must be set — env only, \
-                  a flag would leak the password into `ps`. The gateway config is torii's \
+                  a flag would leak the password into `ps` — by every command but `config init \
+                  --dir`, which only writes the built-in defaults to a directory. The gateway config is torii's \
                   catalog. `run submit` and `worker serve` additionally need \
                   TORII_FENCE_VERSION; with TORII_BACKEND=memory (no database) they take \
-                  --gateway-config instead.\n\n\
+                  --gateway-config instead. `run submit` on Postgres also needs TORII_USER \
+                  (your core.profiles id): the run is charged to that user's budget.\n\n\
                   Exit codes: 0 ok, 1 error (including a submitted run that actually executed \
                   and failed), 2 not-found, precondition-not-met, or a result that is complete \
                   enough to print but not the unqualified success you asked for (`run \
@@ -84,20 +86,37 @@ enum RunAction {
         /// refused outright for the same reason: below that no chat call can be
         /// dispatched whatever the prompt.
         ///
-        /// Omit it and the run is unbudgeted, exactly as before. A budgeted run runs
-        /// its model calls one at a time, so a wide fan-out is slower than an
-        /// unbudgeted one.
+        /// Omit it and the run has no token cap. That does not make it uncapped: on
+        /// Postgres every run carries a money cap (see --budget-usd), and a run with
+        /// any cap runs its model calls one at a time, so a wide fan-out is slower.
+        /// Only a TORII_BACKEND=memory run with neither flag keeps full fan-out.
         #[arg(long, value_parser = cmd::run::parse_budget_tokens)]
         budget_tokens: Option<u64>,
         /// Cap this run's MONEY spend, in US dollars (e.g. 5 or 0.25; at most 6 decimal
         /// places — a cap is kept in whole micro-dollars, and finer is refused, not rounded).
         ///
+        /// On Postgres every run is charged to TORII_USER, and its money limit is that user's
+        /// headroom under torii's caps — the tightest hard cap over their own unit, their
+        /// groups and every unit above them. This flag may only LOWER that limit: a value
+        /// above the headroom is refused and nothing is submitted. Omitted, the limit is the
+        /// headroom. What the run spends is recorded on those budget nodes. With
+        /// TORII_BACKEND=memory there are no caps and this flag alone is the cap.
+        ///
+        /// TORII_USER is asserted by the operator, not authenticated: the CLI only checks
+        /// that it names a profile in the tenant, so naming another profile charges that
+        /// profile's caps. That grants nothing the CLI's database credential cannot already
+        /// do (it can write budget nodes directly), but it is for trusted operators only
+        /// until torii#47 binds the issuer to an authenticated principal.
+        ///
         /// Ledgered from the cost the gateway prices each call at, so every model on a chain
-        /// this run uses must declare pricing (an explicit zero for a free or local model):
-        /// under a money cap an unpriced model is refused. Independent of --budget-tokens;
+        /// this run can use must declare pricing (an explicit zero for a free or local model):
+        /// a graph that can reach an unpriced one is refused before it is submitted, naming the
+        /// chain and the model — on Postgres with or without this flag, since every run there
+        /// is capped. Independent of --budget-tokens;
         /// give either, both or neither. Spend is shown by `run status`, and a run that stops
-        /// at its cap is raised with `run wake --budget-usd`. Only a run SUBMITTED with a
-        /// money cap has one — a later raise cannot introduce it.
+        /// at its cap is raised with `run wake --budget-usd`, which moves a money cap and
+        /// never introduces one: on Postgres every run is submitted with one, but a
+        /// TORII_BACKEND=memory run submitted without this flag has none to move.
         #[arg(long, value_parser = cmd::run::parse_budget_usd)]
         budget_usd: Option<u64>,
     },
@@ -325,10 +344,19 @@ enum RunAction {
         /// run that stopped at its money budget. Lowering it below what the run has spent
         /// halts the run at its next model call.
         ///
-        /// It moves an existing money cap and can never introduce one: on a run submitted
-        /// without --budget-usd this is REFUSED and nothing is written (spend is only
+        /// It moves an existing money cap and can never introduce one (spend is only
         /// counted while a cap is in force, so a cap added now would be weighed against
-        /// spend it never saw).
+        /// spend it never saw). On TORII_BACKEND=memory a run submitted without --budget-usd
+        /// has no money cap, so this is REFUSED there and nothing is written. On Postgres
+        /// every run is submitted with a money cap, so the raise goes to the cap check
+        /// below; only a run submitted before torii applied caps to runs (AG-13) can lack
+        /// one — refused the same way — or have one but no budget charge, which is refused
+        /// as a precondition (exit 2), nothing written.
+        ///
+        /// On Postgres a raise goes through the cap check the run was submitted under: what
+        /// the run may still spend (the new cap less its spend) must fit the headroom left on
+        /// the budget nodes it is charged to — the submitting TORII_USER's. Past it the raise
+        /// is refused and nothing is written; lowering is always allowed.
         //
         // Recorded as `MoneyBudgetRaised` BEFORE the wake is queued, like `BudgetRaised`.
         #[arg(long, value_parser = cmd::run::parse_budget_usd)]
@@ -336,7 +364,9 @@ enum RunAction {
     },
     /// Delete terminal run records (completed/failed/cancelled) older than a window
     ///
-    /// Paused and waking runs are NEVER eligible, at any age.
+    /// Paused and waking runs are NEVER eligible, at any age. On Postgres neither is a
+    /// terminal run whose budget charge is still open (its final spend not recorded yet):
+    /// prune keeps it, says how many it kept, and a later prune removes it.
     Prune {
         /// Retention window, e.g. 30d, 12h, 90m. No default: the policy is the
         /// operator's to state, not this command's to assume.
@@ -384,6 +414,34 @@ enum ConfigAction {
         /// anything else alone
         #[arg(long)]
         force: bool,
+    },
+    /// Start from the built-in defaults: a planner (with the discovery tools), role agents,
+    /// keyword-gated skills and chain bindings onto the seeded catalog
+    ///
+    /// `--dir <d>` writes them into a directory for you to edit and then `config push` — no
+    /// database needed. A missing directory is created; a non-empty one is refused (exit 2,
+    /// nothing written) unless --force, which replaces only the files a push reads there.
+    ///
+    /// `--push` pushes them as they ship, exactly as `config push` would a directory holding
+    /// them: replace-all, checked against torii's catalog, and asking before it removes
+    /// anything or advances the generation under paused runs (--yes skips both prompts).
+    #[command(group(
+        clap::ArgGroup::new("destination").required(true).multiple(false).args(["dir", "push"])
+    ))]
+    Init {
+        /// Write the defaults into this directory
+        #[arg(long, value_name = "DIR")]
+        dir: Option<PathBuf>,
+        /// Push the defaults straight to the durable config
+        #[arg(long)]
+        push: bool,
+        /// With --dir: write into a non-empty directory, replacing the files a push reads
+        /// there (agents/*.md, skills/*.md, tools/*.json, chains.json, grants.json)
+        #[arg(long, requires = "dir")]
+        force: bool,
+        /// With --push: apply without confirmation even when entities are removed
+        #[arg(long, requires = "push")]
+        yes: bool,
     },
     /// Replace the durable config from a directory and advance the generation
     Push {
@@ -501,6 +559,20 @@ fn ensure_newline(s: &str) -> String {
 }
 
 async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
+    // A command that touches no store is answered BEFORE the environment is read: `env_config`
+    // refuses a missing DATABASE_URL / TORII_TENANT, and `config init --dir` is a local file
+    // operation over defaults compiled into the binary (SP-REG-1 D9).
+    if let Command::Config {
+        action:
+            ConfigAction::Init {
+                dir: Some(dir),
+                force,
+                ..
+            },
+    } = &cli.command
+    {
+        return cmd::config::init_dir(dir, *force);
+    }
     let env = boot::env_config()?;
     match cli.command {
         Command::Run { action } => match action {
@@ -684,7 +756,9 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                     money: budget_usd
                         .map(|total_micro_usd| orchestrator_core::MoneyBudget { total_micro_usd }),
                 };
-                cmd::run::wake(
+                // AG-13: a money raise is checked against the caps the run is charged to.
+                cmd::run::wake_charged(
+                    d.charging(None).as_ref(),
                     d.scheduler_store.as_ref(),
                     d.journal.as_ref(),
                     run,
@@ -708,6 +782,7 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 };
                 cmd::run::prune(
                     d.scheduler_store.as_ref(),
+                    d.charges.as_ref(),
                     older_than,
                     chrono::Utc::now(),
                     yes,
@@ -734,27 +809,47 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                     CliError::error(format!("{} is not a valid graph: {e}", graph.display()))
                 })?;
                 let boot::HeavyDeps {
-                    scheduler, events, ..
+                    light,
+                    scheduler,
+                    events,
+                    registry,
+                    gateway_pricing,
+                    gateway_source,
+                    ..
                 } = boot::heavy(&env, gateway_config.as_deref(), workspace_root.as_deref()).await?;
-                let log = boot::log_run_events(events);
                 let budget = orchestrator_core::RunBudget {
                     tokens: budget_tokens
                         .map(|total_tokens| orchestrator_core::TokenBudget { total_tokens }),
                     money: budget_usd
                         .map(|total_micro_usd| orchestrator_core::MoneyBudget { total_micro_usd }),
                 };
+                // #55: a money cap the gateway could not meter is refused before anything is
+                // submitted — against the registry this run would pin. `submit_charged` checks
+                // the EFFECTIVE cap (G2-1): on Postgres every run is capped by its issuer.
+                let registry = registry.handle().snapshot().0;
+                let pricing = cmd::run::Pricing {
+                    registry: &registry,
+                    gateway: &gateway_pricing,
+                    source: &gateway_source,
+                };
+                let log = boot::log_run_events(events);
                 // Print the id BEFORE driving: an operator who loses the terminal
                 // must still be able to find the run. `submit` calls this AFTER its
                 // duplicate pre-check, so a rejected submit no longer announces an
                 // effect that never happened.
                 // A pause exits 0 only where another process can resume it (AG-5): never on
                 // the memory backend, whose stores die with this process.
-                let out = cmd::run::submit(
+                // AG-13: on Postgres the run is charged to TORII_USER — its money limit is
+                // their headroom, and its spend is recorded on their budget nodes.
+                let user = boot::user_from_env();
+                let out = cmd::run::submit_charged(
+                    light.charging(user.as_deref()).as_ref(),
                     &scheduler,
                     run,
                     g,
                     budget,
                     env.backend.store_lifetime(),
+                    &pricing,
                     || println!("submitted: {}", run.0),
                 )
                 .await;
@@ -787,6 +882,29 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
                 ConfigAction::Show => cmd::config::show(d.config_source.as_ref()).await,
                 ConfigAction::Pull { dir, force } => {
                     cmd::config::pull(d.config_source.as_ref(), &dir, force).await
+                }
+                ConfigAction::Init { dir: Some(_), .. } => {
+                    unreachable!("`config init --dir` is answered before the environment is read")
+                }
+                ConfigAction::Init { dir: None, yes, .. } => {
+                    let mut confirm = |text: &str| {
+                        cmd::config::interactive_confirm(
+                            text,
+                            &mut std::io::stdin().lock(),
+                            &mut std::io::stderr(),
+                        )
+                    };
+                    // The backend's own gateway config — torii's catalog on Postgres; none on
+                    // memory, which takes no --gateway-config here — exactly as `push` without
+                    // the flag.
+                    cmd::config::init_push(
+                        d.config_source.as_ref(),
+                        d.scheduler_store.as_ref(),
+                        d.gateway_config.as_deref(),
+                        yes,
+                        &mut confirm,
+                    )
+                    .await
                 }
                 ConfigAction::Push {
                     dir,

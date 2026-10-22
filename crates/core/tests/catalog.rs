@@ -74,3 +74,55 @@ async fn the_gateway_config_is_built_from_the_platform_catalog() {
         );
     }
 }
+
+/// AG-9 (torii#46): the shipped registry routes on the SEEDED catalog with nothing added — every
+/// chain it names (agent `chain`, per-phase `chains`, `(area, kind)` bindings) is one the
+/// platform catalog defines, which every tenant inherits (`catalog.chains_for_tenant`), so a
+/// fresh tenant needs no catalog rows of its own. And every model on those chains declares
+/// pricing — an explicit zero for a local one — because AG-12 refuses an unpriced model under a
+/// `--budget-usd` cap.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn the_shipped_defaults_route_through_priced_chains_of_the_seeded_catalog() {
+    let Ok(url) = std::env::var("DATABASE_URL") else {
+        return;
+    };
+    let pool = sqlx::PgPool::connect(&url).await.expect("connect");
+    let cfg = torii_core::load_gateway_config(&pool)
+        .await
+        .expect("the platform catalog loads");
+    let defaults = torii_core::defaults::config().expect("the defaults parse");
+
+    let mut named: BTreeSet<String> = defaults
+        .chain_bindings
+        .iter()
+        .map(|b| b.chain.clone())
+        .collect();
+    for a in &defaults.agents {
+        named.extend(a.chain.iter().cloned());
+        named.extend(a.chains.values().cloned());
+    }
+    assert!(!named.is_empty(), "the defaults name no chain at all");
+
+    for chain in &named {
+        let c = cfg
+            .chains
+            .get(chain)
+            .unwrap_or_else(|| panic!("the defaults name chain {chain:?}; the catalog lacks it"));
+        assert!(!c.models.is_empty(), "chain {chain:?} has no members");
+        for e in &c.models {
+            let m = cfg
+                .models
+                .get(&e.model)
+                .unwrap_or_else(|| panic!("chain {chain:?} names unknown model {:?}", e.model));
+            assert!(
+                m.pricing.is_some(),
+                "model {:?} on chain {chain:?} is unpriced: a --budget-usd run would refuse it",
+                e.model
+            );
+        }
+    }
+}

@@ -26,8 +26,9 @@ The evidence is specific and recent:
   could not run, and the test suite was green throughout.
 - The five planner discovery tools were built, tested, and wired nowhere until gateway v0.11.0
   (torii#53 adopts it): `Executor::pinned` now composes them per run.
-- **No registry content ships at all.** Zero agents, skills, tools. The activation mechanism has
-  no production constructor because nothing constructs it.
+- **No registry content shipped** until AG-9 (torii#46): zero agents, skills, tools, so the
+  activation mechanism had no production input. `torii config init` now ships a default set
+  (§7).
 - Until PR #64 there were zero `.md` files under `crates/torii`.
 
 The pattern is features built and then not connected to anything reachable. This document
@@ -282,6 +283,13 @@ difference between a system that pauses safely and one a human can unblock.
   onSignal, onGate, onAnswer, onCancel, onWake }
 ```
 
+An answer can half-land, and the screen must say which half. Every answering verb journals the
+answer, then queues the wake, then reads both back; a fault after the journal write is reported,
+never raised, because the answer is already durable. `not queued` means the wake failed — offer
+`onWake`. `wake sent` means the wake went through and only the read-back failed — the run is
+probably queued or already being driven, so show it as delivered-pending and send the user to the
+run's status, not to wake it again (torii#55).
+
 ### 6.5 Budget and spend
 Token spend per run and against a cap, with the pause-on-exhaustion state surfaced. A budgeted run
 pauses durably when it hits its cap and can be resumed with a raised one — that is a workflow, and
@@ -290,6 +298,31 @@ it needs a screen.
 ```
 { runs: { runId, spent, cap, status }[], onRaiseCap }
 ```
+
+**Backed since AG-13 (torii#49, decision C5).** On Postgres every run is charged to the user who
+submits it (`TORII_USER` for the CLI): its money cap is that user's headroom — the tightest `hard`
+cap over their unit, their groups and every unit above — an explicit limit may only lower it, and a
+raise must fit the headroom of the nodes the run is charged to. The run's spend is recorded on
+those nodes (idempotently, by `run submit` when its drive returns and by `worker serve` after every
+tick), so the Budgets & billing tree is one number for questions and runs. All of it is
+`torii_core::run_budget::RunCharges` (`admit`, `abandon`, `settle`, `settle_pending`,
+`check_raise`, `release_to_cap`), which only the CLI calls today — the API's submit and raise
+should call the same functions (no API route does yet). A raise is `check_raise` (which only
+reserves), then the cap write, then `release_to_cap` whether the write landed or not, so a lowering
+never releases before it is committed; `release_to_cap` and every settle bring an open charge's
+reservation to what the cap in force still leaves the run, so a lost release, or two cap moves
+interleaved, are reconciled. `onRaiseCap` must surface the refusal a raise can get ("exceeds the
+headroom of $X under unit Y"). The limit is a reservation: an admitted run's limit
+is held in the nodes' `reserved_amount` until its spend replaces it or it ends, so concurrent runs
+on one node can never together be admitted more than its headroom.
+
+A money cap needs a price for every model the run can reach. `torii_core::pricing::
+unpriced_chains(graph, registry, gateway_config)` returns each reachable chain that cannot be
+priced, who uses it and why (its unpriced models, no defined model, or an unknown chain). The
+CLI's `run submit` refuses on it before submitting (torii#55) — against the run's EFFECTIVE cap,
+which on Postgres is always set (the issuer's headroom, `--budget-usd` or not). The API's submit
+should call the same function on the admitted limit, so the submit screen can say which model
+needs a price before the user commits a run.
 
 ---
 
@@ -305,12 +338,17 @@ Honest gaps between these screens and the engine, so nobody designs against a fi
 | 6.2 timeline | The journal is durable and complete, but there is no read API shaped for a timeline view. What a run PRODUCED is readable: `torii run results <id>` (AG-4, torii#33) returns each node's state and output — the executor's round checkpoint, with CAS refs resolved through the tenant's content store — from `torii_core::results::run_results`, the read the API will share. The ordered event timeline is still missing. |
 | 6.3 plan review | Plans are journaled; approving or rejecting one interactively is not a mechanism that exists. |
 | 6.4 interventions | Best-supported screen — `list-paused`, `signal`, `gate`, `agent`, `wake`, `cancel` all exist as commands. |
-| planner quality | No longer a code gap: the five discovery tools are composed per run (gateway v0.11.0). What remains is content — no shipped planner agent declares them, and no shipped `tools/*.json` defines their schemas (see the absent default content below). |
+| 6.5 budget and spend | Backed (AG-13): a run's money cap comes from the submitter's caps, is reserved on their `hard` nodes at admission, and its spend is recorded on their budget nodes. The submitter is operator-asserted, not authenticated: the CLI resolves `TORII_USER` only to a profile in the tenant, so naming another profile charges that profile's caps — nothing beyond what the CLI's database credential can already write to budget nodes directly, but trusted-operator only until #47 (gate authorization) binds the issuer to an authenticated principal. Missing: a per-node list of the runs charged to it (`runs.run_charges` holds it; nothing reads it out yet). |
+| planner quality | No longer a code or content gap: the five discovery tools are composed per run (gateway v0.11.0), and since AG-9 (torii#46) the shipped `planner` declares all five and the shipped `tools/*.json` define them (byte-for-byte the executables' specs). What remains is model quality — the defaults bind every role to the catalog's local chain. |
 
-**Revised assessment.** With the read path already present below the CLI, the largest genuine
-blocker is the **absent default content**, without which a fresh install cannot plan at all —
-including a planner agent that declares the discovery tools, which have been wired since gateway
-v0.11.0 but do nothing for an agent that does not declare them.
+**Revised assessment.** The default content is no longer absent (AG-9, torii#46):
+`torii config init --dir <d>` writes a shipped registry to edit, and `torii config init --push`
+pushes it through `config push`'s own path — a `default_planner` planning agent declaring the
+five discovery tools, three role agents, four keyword-gated skills, the discovery specs, and
+`(area, kind)` bindings onto the seeded catalog's `local` chain (inherited by every tenant,
+zero-priced). On a fresh tenant, `init --push` then a `PlannerRef::Select` run produces a plan
+with no hand-written registry (pinned at the boot the binary uses, against torii's catalog).
+The content lives in `torii_core::defaults`, so the API can seed a tenant from the same set.
 Reading the durable config back out is done: `config show` / `config pull` (AG-6).
 
 ---
@@ -322,8 +360,8 @@ Reading the durable config back out is done: `config show` / `config pull` (AG-6
 2. **Are seiki and torii one app or two?** Administration and operation have different audiences
    and different blast radii — the push screen can destroy in-flight work, the intervention queue
    cannot.
-3. **What content ships by default?** Still open, and it gates the registry work: without a
-   shipped planner agent, a fresh install cannot plan at all.
+3. ~~**What content ships by default?**~~ Decided and built (AG-9, torii#46, decision C3):
+   `torii_core::defaults` — see §7. Seed-once (`config init`), never merged into a push.
 4. ~~**Expose the durable config for reading?**~~ Decided and built (AG-6, torii#35):
    `torii config show` (JSON + generation, one snapshot) and `torii config pull <dir>` (the
    directory `config push` reads; pull-then-push is a no-op), over `torii_core::registry_dir`.

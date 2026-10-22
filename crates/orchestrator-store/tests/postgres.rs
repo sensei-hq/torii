@@ -1062,3 +1062,56 @@ async fn concurrent_pushes_at_the_same_nonzero_generation_do_not_both_land() {
     assert_eq!(names, vec![winner]);
     t.drop_tenant().await;
 }
+
+/// G1-3 (wave B review): `cancel` flips a `waking` row whose drive is still running, and that
+/// drive's own record is then a no-op on the status. It must still release the drive's claim and
+/// move `updated_at` — the only signal the run's budget charge has that the drive has ended, so
+/// its spend can be recorded and the charge closed. The status stays `cancelled`.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied"
+)]
+#[tokio::test]
+async fn a_drive_ending_on_a_cancelled_run_releases_its_claim_and_keeps_it_cancelled() {
+    let Some(pool) = pool().await else { return };
+    let t = Tenant::new(&pool).await;
+    let s = t.scheduler();
+    let row = |r: RunId| {
+        let pool = pool.clone();
+        let tenant = t.id;
+        async move {
+            sqlx::query_as::<_, (String, Option<DateTime<Utc>>, DateTime<Utc>)>(
+                "select status::text, claimed_at, updated_at from runs.scheduled_runs \
+                  where tenant_id = $1 and run_id = $2",
+            )
+            .bind(tenant)
+            .bind(r.0)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let ended = |r: RunId, how: u8| {
+        let s = &s;
+        async move {
+            match how {
+                0 => s.record_terminal(r, RunStatus::Completed, None).await,
+                1 => s.record_paused(r, None, "gate").await,
+                _ => s.record_wake_failed(r, ts(1), "boom").await,
+            }
+            .unwrap()
+        }
+    };
+    for how in 0..3u8 {
+        let r = run();
+        s.enqueue(r, &sg(), ts(46_000_000)).await.unwrap();
+        s.cancel(r).await.unwrap();
+        let (_, claimed, cancelled_at) = row(r).await;
+        assert!(claimed.is_some(), "the drive's claim survives the cancel");
+        ended(r, how).await;
+        let (status, claimed, at) = row(r).await;
+        assert_eq!(status, "cancelled", "record #{how} never un-cancels");
+        assert_eq!(claimed, None, "record #{how} releases the drive's claim");
+        assert!(at > cancelled_at, "record #{how} moves updated_at");
+    }
+}

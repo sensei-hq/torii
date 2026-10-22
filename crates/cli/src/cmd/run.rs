@@ -11,6 +11,7 @@ use orchestrator_core::{
     SchedulerStore, Scope, Seq,
 };
 use std::collections::HashMap;
+use torii_core::run_budget::ChargeError;
 
 /// AG-3: a run's consecutive wake attempts since its last successful drive — the counter the
 /// scheduler store keeps and the `SchedulerStore` trait does not expose. `None` ⇒ unknown run,
@@ -154,10 +155,16 @@ pub async fn status(
                     text.push_str(&format!("spent: {spent} / budget: {cap} tokens\n"));
                 }
                 if let Some(cap) = money_budget {
-                    text.push_str(&format!(
-                        "money spent: {} / budget: {}\n",
-                        fmt_usd(spent_micro_usd),
+                    // AG-13: an issuer with no hard cap gets the unbounded sentinel — a limit that
+                    // keeps the spend ledgered, not one to read as dollars.
+                    let cap = if cap == torii_core::run_budget::UNBOUNDED_MICRO_USD {
+                        "none (no hard cap over the issuer)".to_string()
+                    } else {
                         fmt_usd(cap)
+                    };
+                    text.push_str(&format!(
+                        "money spent: {} / budget: {cap}\n",
+                        fmt_usd(spent_micro_usd)
                     ));
                 }
                 if !budgeted.is_empty() {
@@ -451,8 +458,10 @@ pub async fn wake(
                 "not queued: {} was submitted without a money cap, and --budget-usd can only \
                  move an existing money cap, never introduce one (spend is counted only while \
                  a cap is in force, so a cap added now would be weighed against spend it never \
-                 saw). Nothing was written. Submit a new run with --budget-usd to cap its \
-                 spend, or wake this one without it.",
+                 saw). Nothing was written. To cap its spend, submit a new run — on Postgres \
+                 every new run carries a money cap (TORII_USER's headroom, or lower with \
+                 --budget-usd); with TORII_BACKEND=memory give it --budget-usd — or wake this \
+                 one without --budget-usd.",
                 run.0
             )));
         }
@@ -1574,20 +1583,25 @@ pub async fn signal(
     }
 
     // ---- The effect actually achieved, read back rather than assumed ------------------
-    // A fault on either READ is less damaging than the wake fault above — the wake may
-    // well have applied — but it is still a durable row the operator has not been told
-    // about, so it takes the same shape rather than a bare `?`.
+    // A fault on either READ comes AFTER `force_wake` committed, so the run may well be
+    // queued (or already claimed): `unread`'s "not queued — run `torii run wake`" would be
+    // false here (#55). It is still a durable row the operator must be told about, so it is
+    // a report rather than a bare `?` — "wake sent", pointing at `run status`.
     //
     // The row is never deleted by any shipped store, so `None` would mean a hypothetical
     // future retention/purge raced us, not a reachable path today.
+    let durable = format!("{shown}'s answer is journaled durably (seq {appended})");
+    let reread = |what: &str, e: &dyn std::fmt::Display| {
+        crate::cmd::wake_sent_unread(&durable, run, what, e)
+    };
     let after = match store.status(run).await {
         Ok(Some(s)) => s,
-        Ok(None) => return Ok(unread("the status re-read", &"the run vanished mid-signal")),
-        Err(e) => return Ok(unread("the status re-read", &e)),
+        Ok(None) => return Ok(reread("the status re-read", &"the run vanished mid-signal")),
+        Err(e) => return Ok(reread("the status re-read", &e)),
     };
     let after_events = match journal.load(run).await {
         Ok(evs) => evs,
-        Err(e) => return Ok(unread("the journal re-read", &e)),
+        Err(e) => return Ok(reread("the journal re-read", &e)),
     };
     // The node is terminal by now, or it is not. If it is, "not delivered" is FALSE — the
     // row is already durable — and the honest question is whether anything READ it. The
@@ -1854,10 +1868,8 @@ pub fn parse_budget_usd(s: &str) -> Result<u64, String> {
 /// AG-12: render integer micro-dollars as a dollar figure — exact (all six places when they
 /// are needed, so a sub-cent spend never reads as `$0.00`), and at least cents otherwise.
 pub fn fmt_usd(micro: u64) -> String {
-    let per = orchestrator_core::MICRO_USD_PER_USD;
-    let frac = format!("{:06}", micro % per);
-    let frac = frac.trim_end_matches('0');
-    format!("${}.{frac:0<2}", micro / per)
+    // ONE dollar format: torii-core's, which the budget-charge refusals (AG-13) print too.
+    torii_core::run_budget::usd(micro)
 }
 
 /// Parse a retention window: `30d`, `12h`, `90m`, `45s`.
@@ -1933,8 +1945,14 @@ fn fmt_cutoff(t: DateTime<Utc>) -> String {
 /// then uses — but the number reported at the end is the number actually DELETED, which can
 /// differ if a run went terminal, or was pruned by another operator, in between. Reporting
 /// the intent instead of the effect is precisely what the rest of this module refuses to do.
+///
+/// G4-2: on Postgres a terminal run whose budget charge is still open (`charges`) is never
+/// eligible either — its final spend is found through its schedule row — and the outcome says
+/// how many were kept for that, so a prune that deletes fewer runs than are terminal is never
+/// silent about why.
 pub async fn prune(
     store: &dyn SchedulerStore,
+    charges: Option<&torii_core::run_budget::RunCharges>,
     older_than: chrono::Duration,
     now: DateTime<Utc>,
     yes: bool,
@@ -1953,11 +1971,20 @@ pub async fn prune(
     let counted = store.count_terminal_before(cutoff).await?;
     if counted == 0 {
         // Nothing to consent to, so nothing is asked. Exit 0: the state the operator asked
-        // for already holds.
-        return Ok(Outcome::ok(format!(
-            "nothing to prune: no completed, failed or cancelled run last changed before {}",
+        // for already holds. G5-3: a terminal run kept for its open charge does exist, so the
+        // first line then says none was ELIGIBLE rather than that none was terminal.
+        let kept = kept_for_open_charges(charges, cutoff).await?;
+        let none = if kept == 0 {
+            "no completed, failed or cancelled run"
+        } else {
+            "no eligible run"
+        };
+        let mut text = format!(
+            "nothing to prune: {none} last changed before {}",
             fmt_cutoff(cutoff)
-        )));
+        );
+        text.push_str(&kept_line(kept));
+        return Ok(Outcome::ok(text));
     }
 
     if !yes {
@@ -1986,7 +2013,44 @@ pub async fn prune(
             " — the preview counted {counted}; the eligible set changed in between"
         ));
     }
+    // G5-2: the delete is committed, so a fault counting what was kept is reported beside it —
+    // never propagated over the count of rows that are already gone.
+    match kept_for_open_charges(charges, cutoff).await {
+        Ok(kept) => text.push_str(&kept_line(kept)),
+        Err(e) => text.push_str(&format!(
+            "\nwarning: could not count the terminal runs kept for an open budget charge: {}",
+            e.message
+        )),
+    }
     Ok(Outcome::ok(text))
+}
+
+/// How many terminal runs `prune` keeps because their budget charge is still open (G4-2) — zero
+/// on the memory backend, which has no charges.
+async fn kept_for_open_charges(
+    charges: Option<&torii_core::run_budget::RunCharges>,
+    cutoff: DateTime<Utc>,
+) -> Result<u64, CliError> {
+    let Some(charges) = charges else {
+        return Ok(0);
+    };
+    charges
+        .open_terminal_before(cutoff)
+        .await
+        .map_err(|e| CliError::error(e.to_string()))
+}
+
+/// The line `prune` adds for the `kept` runs of [`kept_for_open_charges`] — empty when none.
+fn kept_line(kept: u64) -> String {
+    if kept == 0 {
+        String::new()
+    } else {
+        format!(
+            "\nkept {kept} terminal run record(s) whose budget charge is still open: their final \
+             spend is not recorded yet (or a cancelled run's drive may still be spending). \
+             `torii worker serve` records it; a later prune removes them."
+        )
+    }
 }
 
 /// How long the run state `run submit` drives into outlives the `run submit` process — which
@@ -2009,6 +2073,89 @@ pub enum StoreLifetime {
 /// The words `run submit` adds to a pause under [`StoreLifetime::Process`].
 pub const STRANDED_PAUSE: &str = "nothing can resume it: the memory backend keeps every store \
     in this process, so no worker, wake or answer from another process can ever see this run";
+
+/// What `run submit` says of a run id that already has a schedule record.
+fn already_submitted(run: RunId, existing: &orchestrator_core::ScheduledRun) -> Outcome {
+    Outcome::precondition(format!(
+        "already submitted: {} is {} — a run id can only be submitted once. Use \
+         `torii run status {}` to inspect it.",
+        run.0,
+        existing.status.as_str(),
+        run.0
+    ))
+}
+
+/// What a money-capped run's graph is checked against before it is submitted (#55): the registry
+/// the run would pin and the gateway's chains and models, named by where they came from.
+pub struct Pricing<'a> {
+    pub registry: &'a orchestrator_core::Registry,
+    pub gateway: &'a kernel::types::config::GatewayConfig,
+    pub source: &'a str,
+}
+
+/// #55 (AG-12): refuse a money cap the gateway could not meter, BEFORE anything is submitted.
+///
+/// Under a money cap the engine refuses a call on a chain with an unpriced model — but mid-run,
+/// as a failed node. `torii_core::pricing::unpriced_chains` (the one implementation the API's
+/// submit shares) finds every chain the graph can use that has one; this names each chain, who
+/// uses it and the models without a price, and says what fixes it. `Ok` when there is no money
+/// cap or every reachable chain prices.
+///
+/// `budget` is the run's EFFECTIVE budget: on Postgres every run is capped by its issuer's
+/// headroom (G2-1), so `charged` says where the cap came from — and so which remedies are true.
+pub fn require_priced_for_money_cap(
+    budget: &RunBudget,
+    graph: &orchestrator_core::Graph,
+    pricing: &Pricing<'_>,
+    charged: bool,
+) -> Result<(), CliError> {
+    if budget.money.is_none() {
+        return Ok(());
+    }
+    let unpriced = torii_core::pricing::unpriced_chains(graph, pricing.registry, pricing.gateway);
+    if unpriced.is_empty() {
+        return Ok(());
+    }
+    use torii_core::pricing::Unpriced;
+    let list = unpriced
+        .iter()
+        .map(|u| {
+            let why = match &u.why {
+                Unpriced::Models(models) => format!(
+                    "{} no pricing: {}",
+                    if models.len() == 1 { "has" } else { "have" },
+                    models.join(", ")
+                ),
+                Unpriced::NoModels => "has no model the gateway config defines".to_string(),
+                Unpriced::UnknownChain => "is not in the gateway config".to_string(),
+            };
+            format!(
+                "chain {:?} (used by {}) {why}",
+                render::one_line(&u.chain),
+                render::one_line(&u.used_by.join(", "))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let source = pricing.source;
+    Err(CliError::error(if charged {
+        format!(
+            "not submitted: on Postgres every run's money is capped — by {}'s headroom under \
+             torii's caps, or lower with --budget-usd — so every model it can call must declare \
+             pricing, and the gateway would refuse these mid-run as unpriced: {list}. Declare \
+             `pricing` on each model in {source} (an explicit zero for a free or local model). \
+             Nothing was written.",
+            crate::boot::ENV_USER
+        )
+    } else {
+        format!(
+            "not submitted: --budget-usd caps this run's money, so every model it can call must \
+             declare pricing, and the gateway would refuse these mid-run as unpriced: {list}. \
+             Declare `pricing` on each model in {source} (an explicit zero for a free or local \
+             model), or submit without --budget-usd."
+        )
+    }))
+}
 
 /// Submit a fresh run and drive it inline. Blocks until the run pauses or ends —
 /// there is no `--detach` yet, because `enqueue` stamps the row `waking`, so a
@@ -2048,13 +2195,7 @@ pub async fn submit(
     // `rows_affected == 0`), so that race degrades to the old loud error rather than
     // double-enqueueing — which is why the check belongs here and not in place of it.
     if let Some(existing) = scheduler.status(run).await? {
-        return Ok(Outcome::precondition(format!(
-            "already submitted: {} is {} — a run id can only be submitted once. Use \
-             `torii run status {}` to inspect it.",
-            run.0,
-            existing.status.as_str(),
-            run.0
-        )));
+        return Ok(already_submitted(run, &existing));
     }
     announce();
     // SP-DATA-5 / AG-12: `submit_with_budget` with `RunBudget::default()` is exactly
@@ -2086,6 +2227,210 @@ pub async fn submit(
         run.0,
         outcome.completed.len()
     )))
+}
+
+/// AG-13 (#49): the budget charge a Postgres submit or raise runs under — torii's caps
+/// (`torii_core::run_budget`), and the journal a run's spend is folded from. `None` on the memory
+/// backend, which has no caps.
+pub struct Charging<'a> {
+    pub charges: &'a torii_core::run_budget::RunCharges,
+    pub journal: &'a dyn ExecutionJournal,
+    /// Who submits (`TORII_USER`, as given) — read by [`submit_charged`] only; a raise is checked
+    /// against the caps of the run's recorded issuer, whoever asks.
+    pub user: Option<&'a str>,
+}
+
+/// [`submit`], charged to the issuer's caps — and refused up front (#55) when its EFFECTIVE money
+/// cap (`--budget-usd` on the memory backend; always, on Postgres) meets a chain `pricing` cannot
+/// price.
+#[allow(clippy::too_many_arguments)]
+pub async fn submit_charged(
+    charging: Option<&Charging<'_>>,
+    scheduler: &orchestrator::Scheduler,
+    run: RunId,
+    graph: orchestrator_core::Graph,
+    budget: RunBudget,
+    lifetime: StoreLifetime,
+    pricing: &Pricing<'_>,
+    announce: impl FnOnce(),
+) -> Result<Outcome, CliError> {
+    let Some(c) = charging else {
+        require_priced_for_money_cap(&budget, &graph, pricing, false)?;
+        return submit(scheduler, run, graph, budget, lifetime, announce).await;
+    };
+    let user = c.user.ok_or_else(|| {
+        CliError::error(format!(
+            "{} is not set.\n\
+             On Postgres every run is charged to the budget of the user who submits it: its money \
+             limit is that user's headroom under torii's caps (their own unit, their groups and \
+             every unit above them), and what it spends is recorded there. Set {} to your user \
+             id (a core.profiles id in this tenant).",
+            crate::boot::ENV_USER,
+            crate::boot::ENV_USER
+        ))
+    })?;
+    // `submit`'s own duplicate pre-check, BEFORE anything is charged: a taken run id is reported
+    // as taken, not as a charge refusal.
+    if let Some(existing) = scheduler.status(run).await? {
+        return Ok(already_submitted(run, &existing));
+    }
+    let issuer = c
+        .charges
+        .resolve_issuer(user)
+        .await
+        .map_err(|e| CliError::error(format!("{}: {e}", crate::boot::ENV_USER)))?;
+    let requested = budget.money.map(|m| m.total_micro_usd);
+    let money = match c.charges.admit(run, issuer, requested).await {
+        Ok(m) => m,
+        Err(
+            e @ (ChargeError::OverHeadroom { .. }
+            | ChargeError::NoHeadroom { .. }
+            | ChargeError::NoBudgetNode
+            | ChargeError::AlreadyScheduled(_)),
+        ) => {
+            return Ok(Outcome::precondition(format!(
+                "not submitted: {e}. Nothing was written."
+            )));
+        }
+        Err(e) => return Err(CliError::error(e.to_string())),
+    };
+    let budget = RunBudget {
+        money: Some(money),
+        ..budget
+    };
+    // G2-1: the admitted limit caps every Postgres run, so the graph is checked against it — not
+    // against the operator's budget, which has no money cap without --budget-usd. A refusal drops
+    // the charge just admitted, before anything is announced or enqueued.
+    if let Err(e) = require_priced_for_money_cap(&budget, &graph, pricing, true) {
+        if let Err(cleanup) = c.charges.abandon(run).await {
+            return Err(CliError::error(format!(
+                "{}\nAND the run's budget charge could not be cleaned up ({cleanup}): it still \
+                 reserves its limit on the issuer's budget nodes. Submitting the same --run-id \
+                 again as the same {} releases it.",
+                e.message,
+                crate::boot::ENV_USER
+            )));
+        }
+        return Err(e);
+    }
+    let out = submit(scheduler, run, graph, budget, lifetime, announce).await;
+    // G1-2: a submit that failed before its `enqueue` committed leaves a charge (and a reservation)
+    // on a run that does not exist; drop it, so a retry of this --run-id is not refused and the
+    // issuer's headroom is not held. A charge whose run IS scheduled is left alone.
+    if let Err(e) = &out
+        && let Err(cleanup) = c.charges.abandon(run).await
+    {
+        return Err(CliError::error(format!(
+            "{}\nAND the run's budget charge could not be cleaned up ({cleanup}): it still \
+             reserves its limit on the issuer's budget nodes. Submitting the same --run-id again \
+             as the same {} releases it.",
+            e.message,
+            crate::boot::ENV_USER
+        )));
+    }
+    // Whatever the drive ended in — paused, failed or completed — what it spent is recorded on
+    // the issuer's nodes now. A failure here loses nothing: the journal holds the spend and the
+    // next `worker serve` tick records it (`RunCharges::settle_pending`).
+    if let Err(e) = c.charges.settle(c.journal, run).await {
+        tracing::warn!(
+            run = %run.0,
+            "the run's spend is not recorded on its budget nodes yet ({e}); the next worker tick \
+             records it"
+        );
+    }
+    out
+}
+
+/// [`wake`], with a money raise checked against the caps the run is charged to.
+pub async fn wake_charged(
+    charging: Option<&Charging<'_>>,
+    store: &dyn SchedulerStore,
+    journal: &dyn ExecutionJournal,
+    run: RunId,
+    now: DateTime<Utc>,
+    budget: RunBudget,
+) -> Result<Outcome, CliError> {
+    if let (Some(c), Some(m)) = (charging, budget.money) {
+        // Only a paused run with a money cap reaches the check: anything else `wake` refuses
+        // itself, in its own words, before writing anything.
+        let paused = store
+            .status(run)
+            .await?
+            .is_some_and(|r| r.status == RunStatus::Paused);
+        let capped = paused
+            && orchestrator::money_spend_of(
+                &journal
+                    .load(run)
+                    .await
+                    .map_err(OrchestratorError::Journal)?,
+            )
+            .1
+            .is_some();
+        if capped {
+            // G5-4: one raise of a run at a time, from its check through its release — another's
+            // release could otherwise give back this one's increment before its cap is written.
+            let Some(lock) = c
+                .charges
+                .try_lock_raise(run)
+                .await
+                .map_err(|e| CliError::error(e.to_string()))?
+            else {
+                return Ok(Outcome::precondition(format!(
+                    "not queued: {} — another raise of this run is in progress; retry once it \
+                     has finished. Nothing was written.",
+                    run.0
+                )));
+            };
+            let out =
+                raise_under_lock(c, store, journal, run, now, budget, m.total_micro_usd).await;
+            if let Err(e) = lock.release().await {
+                // Its detached session still closes when the lock drops, freeing the run.
+                tracing::warn!(run = %run.0, "the run's raise lock was not released ({e})");
+            }
+            return out;
+        }
+    }
+    wake(store, journal, run, now, budget).await
+}
+
+/// [`wake_charged`]'s raise, while it holds the run's raise lock: check the move against the
+/// caps, wake (journaling the new cap), and bring the reservation to the cap in force.
+async fn raise_under_lock(
+    c: &Charging<'_>,
+    store: &dyn SchedulerStore,
+    journal: &dyn ExecutionJournal,
+    run: RunId,
+    now: DateTime<Utc>,
+    budget: RunBudget,
+    new_total_micro_usd: u64,
+) -> Result<Outcome, CliError> {
+    match c
+        .charges
+        .check_raise(journal, run, new_total_micro_usd)
+        .await
+    {
+        Ok(()) => {}
+        Err(e @ (ChargeError::OverHeadroom { .. } | ChargeError::NotCharged(_))) => {
+            return Ok(Outcome::precondition(format!(
+                "not queued: {} — {e}. Nothing was written.",
+                run.0
+            )));
+        }
+        Err(e) => return Err(CliError::error(e.to_string())),
+    }
+    let out = wake(store, journal, run, now, budget).await;
+    // G2-4: the reservation follows the cap the journal now holds — a lowering that landed gives
+    // its difference back; a raise that did not land gives back the increment `check_raise`
+    // reserved for it. A failure here never hides the wake's own outcome: the next settle (a
+    // `worker serve` tick) brings the reservation to the cap in force (G4-3).
+    if let Err(e) = c.charges.release_to_cap(c.journal, run).await {
+        tracing::warn!(
+            run = %run.0,
+            "the run's reservation could not be brought to its money cap ({e}); the next worker \
+             tick's settle does"
+        );
+    }
+    out
 }
 
 /// `pub(crate)` **only so `cmd::gate`'s tests can reuse four fixtures** — `now`,
@@ -2996,7 +3341,109 @@ pub(crate) mod tests {
 
     /// Delegates to a real store, but every `status()` after the FIRST fails: `wake`'s
     /// pre-check reads fine, `force_wake` commits, and the post-wake re-read faults.
-    struct FailsTheReread(InMemorySchedulerStore, std::sync::atomic::AtomicUsize);
+    ///
+    /// `pub(crate)` for the answering verbs' tests (`gate decide`, `agent answer`, `tool
+    /// approve|reject`): each reads status once before its append, so the same store faults
+    /// exactly their post-wake re-read too.
+    pub(crate) struct FailsTheReread(
+        pub(crate) InMemorySchedulerStore,
+        pub(crate) std::sync::atomic::AtomicUsize,
+    );
+
+    /// Delegates to a real journal, but every `load()` after the FIRST fails with the hostile
+    /// backend fault: the pre-check folds, the append lands, `force_wake` commits, and the
+    /// post-wake JOURNAL re-read faults.
+    pub(crate) struct FailsTheJournalReread(
+        pub(crate) Arc<InMemoryJournal>,
+        pub(crate) std::sync::atomic::AtomicUsize,
+    );
+
+    #[async_trait::async_trait]
+    impl ExecutionJournal for FailsTheJournalReread {
+        async fn append(
+            &self,
+            run: RunId,
+            event: JournalEvent,
+        ) -> Result<Seq, orchestrator_core::JournalError> {
+            self.0.append(run, event).await
+        }
+        async fn load(
+            &self,
+            run: RunId,
+        ) -> Result<Vec<(Seq, JournalEvent)>, orchestrator_core::JournalError> {
+            if self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
+                return Err(hostile_backend_error(run));
+            }
+            self.0.load(run).await
+        }
+    }
+
+    /// The report every answering verb owes a re-read fault AFTER its `force_wake` committed
+    /// (#55, mirroring `wake`'s fix in 1677913): the wake was SENT, so "not queued" — and the
+    /// advice to `torii run wake` it again — is false. It says what is durable, that the
+    /// outcome could not be read back, points at `torii run status <run>`, and renders the
+    /// backend fault safe. And the run really is queued.
+    pub(crate) async fn assert_reports_wake_sent(
+        out: &Outcome,
+        run: RunId,
+        store: &InMemorySchedulerStore,
+    ) {
+        let t = &out.text;
+        assert_eq!(out.code, EXIT_PRECONDITION, "{t}");
+        assert!(!t.contains("not queued"), "the wake committed: {t}");
+        assert!(
+            !t.contains("`torii run wake"),
+            "advises waking a run whose wake was already sent: {t}"
+        );
+        assert!(t.starts_with("wake sent"), "{t}");
+        assert!(
+            t.contains("journaled durably"),
+            "names what is durable: {t}"
+        );
+        assert!(
+            t.contains("could not be read back")
+                && t.contains(&format!("torii run status {}", run.0)),
+            "{t}"
+        );
+        assert!(!t.contains(&hostile_password()), "rendered safe: {t}");
+        assert!(!t.contains('\u{1b}'), "rendered safe: {t:?}");
+        assert_eq!(
+            store.status(run).await.unwrap().unwrap().next_wake,
+            Some(now()),
+            "it is queued"
+        );
+    }
+
+    /// #55: `signal`'s STATUS re-read faults after `force_wake` committed.
+    #[tokio::test]
+    async fn signal_reports_wake_sent_when_the_status_reread_fails_after_the_wake() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = FailsTheReread(paused_store(run, None).await, Default::default());
+        let j = awaiting_journal(run, &gate(), None).await;
+
+        let out = signal(&s, &j, run, gate(), approved(), now())
+            .await
+            .expect("a post-wake fault is reported, not `?`-ed");
+
+        assert_eq!(journaled_signals(&j, run, &gate()).await.len(), 1);
+        assert_reports_wake_sent(&out, run, &s.0).await;
+    }
+
+    /// #55: `signal`'s JOURNAL re-read faults after `force_wake` committed.
+    #[tokio::test]
+    async fn signal_reports_wake_sent_when_the_journal_reread_fails_after_the_wake() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let inner = Arc::new(awaiting_journal(run, &gate(), None).await);
+        let j = FailsTheJournalReread(inner.clone(), Default::default());
+
+        let out = signal(&s, &j, run, gate(), approved(), now())
+            .await
+            .expect("a post-wake fault is reported, not `?`-ed");
+
+        assert_eq!(journaled_signals(&inner, run, &gate()).await.len(), 1);
+        assert_reports_wake_sent(&out, run, &s).await;
+    }
 
     #[async_trait::async_trait]
     impl SchedulerStore for FailsTheReread {
@@ -3167,6 +3614,13 @@ pub(crate) mod tests {
             "must say the run has no money cap to move and what to do instead: {}",
             out.text
         );
+        // Wave B review D1: the remedy must be true per backend — on Postgres every new run is
+        // money-capped without --budget-usd, so "submit with --budget-usd" is memory-only advice.
+        assert!(
+            out.text.contains("TORII_BACKEND=memory") && out.text.contains("Postgres"),
+            "the remedy must say what a new run needs on each backend: {}",
+            out.text
+        );
         assert_eq!(
             journal.load(run).await.unwrap().len(),
             before,
@@ -3240,6 +3694,32 @@ pub(crate) mod tests {
         assert_eq!(v[0]["money_budget_micro_usd"], serde_json::json!(5_000_000));
     }
 
+    /// AG-13: a run whose issuer has no hard cap carries the unbounded sentinel as its money
+    /// limit (so its spend is still ledgered) — shown as what it is, not as $9.2 trillion.
+    #[tokio::test]
+    async fn status_shows_an_unbounded_money_limit_as_no_hard_cap() {
+        let run = RunId(uuid::Uuid::new_v4());
+        let s = paused_store(run, None).await;
+        let unbounded = torii_core::run_budget::UNBOUNDED_MICRO_USD;
+        let journal = journal_with_money(run, Some(unbounded), 12_345).await;
+
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, false)
+            .await
+            .expect("status");
+        assert!(
+            out.text
+                .contains("money spent: $0.012345 / budget: none (no hard cap over the issuer)"),
+            "{}",
+            out.text
+        );
+        // JSON keeps the number: a script compares it, it does not read it.
+        let out = status(&s, &NoWakeAttemptCounts, &journal, run, true)
+            .await
+            .expect("status");
+        let v: serde_json::Value = serde_json::from_str(&out.text).expect("valid json");
+        assert_eq!(v[0]["money_budget_micro_usd"], serde_json::json!(unbounded));
+    }
+
     #[tokio::test]
     async fn status_shows_no_money_line_for_a_run_without_a_money_cap() {
         let run = RunId(uuid::Uuid::new_v4());
@@ -3307,6 +3787,7 @@ pub(crate) mod tests {
         let (s, dead, _) = prunable_store(3, long_ago(), false).await;
         let out = prune(
             &s,
+            None,
             chrono::Duration::days(7),
             now(),
             true,
@@ -3329,6 +3810,7 @@ pub(crate) mod tests {
         let (s, dead, live) = prunable_store(1, long_ago(), true).await;
         let out = prune(
             &s,
+            None,
             chrono::Duration::seconds(1),
             now(),
             true,
@@ -3362,6 +3844,7 @@ pub(crate) mod tests {
         let (s, _, live) = prunable_store(0, long_ago(), true).await;
         let out = prune(
             &s,
+            None,
             chrono::Duration::days(7),
             now(),
             false, // NOT --yes: the prompt is only skipped because the count is zero
@@ -3384,6 +3867,7 @@ pub(crate) mod tests {
         let (s, dead, _) = prunable_store(1, now() - chrono::Duration::hours(1), false).await;
         let out = prune(
             &s,
+            None,
             chrono::Duration::days(7),
             now(),
             true,
@@ -3410,9 +3894,16 @@ pub(crate) mod tests {
                 prompt = text.to_string();
                 true
             };
-            let out = prune(&s, chrono::Duration::days(7), now(), false, &mut confirm)
-                .await
-                .expect("prunes");
+            let out = prune(
+                &s,
+                None,
+                chrono::Duration::days(7),
+                now(),
+                false,
+                &mut confirm,
+            )
+            .await
+            .expect("prunes");
             assert_eq!(out.code, EXIT_OK);
         }
         assert!(prompt.contains('4'), "the count must be shown: {prompt}");
@@ -3432,9 +3923,16 @@ pub(crate) mod tests {
     async fn prune_refused_at_the_prompt_deletes_nothing() {
         let (s, dead, _) = prunable_store(2, long_ago(), false).await;
         let mut confirm = |_: &str| false;
-        let out = prune(&s, chrono::Duration::days(7), now(), false, &mut confirm)
-            .await
-            .expect("no hard error");
+        let out = prune(
+            &s,
+            None,
+            chrono::Duration::days(7),
+            now(),
+            false,
+            &mut confirm,
+        )
+        .await
+        .expect("no hard error");
         assert_eq!(out.code, EXIT_PRECONDITION);
         assert!(out.text.contains("refused"), "{}", out.text);
         assert!(out.text.contains("nothing deleted"), "{}", out.text);
@@ -3475,7 +3973,7 @@ pub(crate) mod tests {
             }
         };
 
-        let out = prune(&s, window, now(), false, &mut confirm)
+        let out = prune(&s, None, window, now(), false, &mut confirm)
             .await
             .expect("no hard error");
 
@@ -3496,6 +3994,138 @@ pub(crate) mod tests {
                 "the other operator's prune really did take them"
             );
         }
+    }
+
+    /// G4-2 (wave B re-review): a terminal run whose budget charge is still open (its final spend
+    /// not recorded yet, or a cancelled run's drive that may still spend) is KEPT — deleting its
+    /// schedule row would strand its reservation — and prune says so, rather than silently
+    /// deleting fewer runs than are terminal.
+    #[cfg_attr(
+        not(have_database_url),
+        ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+    )]
+    #[tokio::test]
+    async fn prune_keeps_a_terminal_run_whose_charge_is_open_and_says_so() {
+        let Some(url) = crate::test_guard::db_url() else {
+            return;
+        };
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let store = t.stores().scheduler;
+        let charges = torii_core::run_budget::RunCharges::new(t.pool.clone(), t.id);
+        let open = RunId(uuid::Uuid::new_v4());
+        let done = RunId(uuid::Uuid::new_v4());
+        for run in [open, done] {
+            store.enqueue(run, &empty_graph(), now()).await.unwrap();
+        }
+        store
+            .record_terminal(open, RunStatus::Completed, None)
+            .await
+            .unwrap();
+        sqlx::query(
+            "insert into runs.run_charges (tenant_id, run_id, issuer_profile_id, node_ids, \
+             limit_micro_usd) values ($1, $2, $3, '{}', 1000000)",
+        )
+        .bind(t.id)
+        .bind(open.0)
+        .bind(uuid::Uuid::new_v4())
+        .execute(&t.pool)
+        .await
+        .unwrap();
+        let later = || chrono::Utc::now() + chrono::Duration::seconds(5);
+
+        let out = prune(
+            &store,
+            Some(&charges),
+            chrono::Duration::zero(),
+            later(),
+            true,
+            &mut never_asked(),
+        )
+        .await
+        .expect("prunes");
+        assert_eq!(out.code, EXIT_OK, "{}", out.text);
+        let first = out.text.lines().next().unwrap_or_default();
+        assert!(
+            first.starts_with("nothing to prune: no eligible run"),
+            "{}",
+            out.text
+        );
+        // G5-3: a completed run older than the cutoff DOES exist — it is kept, not absent.
+        assert!(
+            !first.contains("no completed, failed or cancelled run"),
+            "the first line must not deny the run it then reports keeping: {}",
+            out.text
+        );
+        assert!(
+            out.text.contains("kept 1") && out.text.contains("charge is still open"),
+            "the run kept for its open charge must be reported: {}",
+            out.text
+        );
+
+        store
+            .record_terminal(done, RunStatus::Completed, None)
+            .await
+            .unwrap();
+        let out = prune(
+            &store,
+            Some(&charges),
+            chrono::Duration::zero(),
+            later(),
+            true,
+            &mut never_asked(),
+        )
+        .await
+        .expect("prunes");
+        assert!(out.text.starts_with("pruned: 1 "), "{}", out.text);
+        assert!(out.text.contains("kept 1"), "{}", out.text);
+        assert!(store.status(done).await.unwrap().is_none());
+        assert!(
+            store.status(open).await.unwrap().is_some(),
+            "the run whose charge is open is not pruned"
+        );
+    }
+
+    /// G5-2 (wave B re-review): once `prune_terminal` committed, the rows ARE gone — a failure
+    /// reading how many were kept for an open charge is reported beside the deleted count, never
+    /// propagated over it (the module's rule: a fault after a durable write is reported).
+    #[cfg_attr(
+        not(have_database_url),
+        ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+    )]
+    #[tokio::test]
+    async fn prune_reports_the_deleted_count_when_the_kept_count_cannot_be_read() {
+        let Some(url) = crate::test_guard::db_url() else {
+            return;
+        };
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let store = t.stores().scheduler;
+        let closed = torii_core::connect(&url, 2).await.expect("connect");
+        closed.close().await;
+        let charges = torii_core::run_budget::RunCharges::new(closed, t.id);
+        let done = RunId(uuid::Uuid::new_v4());
+        store.enqueue(done, &empty_graph(), now()).await.unwrap();
+        store
+            .record_terminal(done, RunStatus::Completed, None)
+            .await
+            .unwrap();
+
+        let out = prune(
+            &store,
+            Some(&charges),
+            chrono::Duration::zero(),
+            chrono::Utc::now() + chrono::Duration::seconds(5),
+            true,
+            &mut never_asked(),
+        )
+        .await
+        .expect("the delete committed, so prune must report it, not fail");
+        assert!(out.text.starts_with("pruned: 1 "), "{}", out.text);
+        assert!(
+            out.text.contains("could not count"),
+            "the unread kept count must be named: {}",
+            out.text
+        );
+        assert!(store.status(done).await.unwrap().is_none());
     }
 
     #[test]
@@ -3697,7 +4327,7 @@ pub(crate) mod tests {
     /// Which concurrent actor lands in the gap between `wake`'s pre-check (`status`)
     /// and its own `force_wake` call.
     #[derive(Clone, Copy)]
-    enum ConcurrentActor {
+    pub(crate) enum ConcurrentActor {
         /// A worker's tick claims the same due pause first (`paused -> waking`).
         ClaimsFirst,
         /// Another operator cancels the run first (`paused -> cancelled`).
@@ -3715,10 +4345,13 @@ pub(crate) mod tests {
     /// (the pre-check) and only then `store.force_wake` — so running the concurrent
     /// actor at the top of THIS `force_wake` lands it exactly in that gap, reproducing
     /// a real multi-process race deterministically, single-threaded, no database.
-    struct RacingStore {
-        inner: InMemorySchedulerStore,
-        run: RunId,
-        actor: ConcurrentActor,
+    ///
+    /// `pub(crate)` for `cmd::tool`'s tests: a run already claimed when the decision's own
+    /// `force_wake` lands is the path on which `tool decide` re-reads its journal.
+    pub(crate) struct RacingStore {
+        pub(crate) inner: InMemorySchedulerStore,
+        pub(crate) run: RunId,
+        pub(crate) actor: ConcurrentActor,
     }
 
     #[async_trait::async_trait]

@@ -24,6 +24,24 @@ impl PgSchedulerStore {
         Self { pool, tenant }
     }
 
+    /// G1-3 (wave B review): a drive's record found its row no longer `waking` — `cancel`
+    /// flipped it mid-drive. The status stays `cancelled`, but the drive's claim is released and
+    /// `updated_at` moves: the only signal a cancelled run's budget charge
+    /// (`torii_core::run_budget`) has that its drive has ended and its spend is final.
+    async fn release_cancelled_claim(&self, run: RunId) -> Result<(), OrchestratorError> {
+        sqlx::query(
+            "update runs.scheduled_runs set claimed_at = null, updated_at = now() \
+             where tenant_id = $1 and run_id = $2 and status = 'cancelled' \
+               and claimed_at is not null",
+        )
+        .bind(self.tenant)
+        .bind(run.0)
+        .execute(&self.pool)
+        .await
+        .map_err(store_err)?;
+        Ok(())
+    }
+
     /// AG-3: `run`'s consecutive wake attempts since its last successful drive, or `None` for
     /// a run this tenant does not have.
     /// A read for the operator (`torii run status`); the trait does not expose the counter.
@@ -114,9 +132,11 @@ impl SchedulerStore for PgSchedulerStore {
         let res = sqlx::query(
             // AG-3: `submit`'s inline drive is the run's first attempt, so a submit lost
             // mid-drive is counted when its lease is reclaimed.
+            // `updated_at` is the database's clock, like every later write: settle_pending compares
+            // it with a watermark, so a submitter's clock ahead of the DB must not move it backwards.
             "insert into runs.scheduled_runs \
              (tenant_id, run_id, graph, status, claimed_at, attempts, last_wake_error, updated_at) \
-             values ($1, $2, $3, 'waking', $4, 1, null, $4) \
+             values ($1, $2, $3, 'waking', $4, 1, null, now()) \
              on conflict (tenant_id, run_id) do nothing",
         )
         .bind(self.tenant)
@@ -142,7 +162,7 @@ impl SchedulerStore for PgSchedulerStore {
     ) -> Result<(), OrchestratorError> {
         // AG-3: a drive that recorded a pause SUCCEEDED — the consecutive-failure count and the
         // last recorded error restart, in the same conditional-on-waking UPDATE.
-        sqlx::query(
+        let res = sqlx::query(
             "update runs.scheduled_runs set status = 'paused', next_wake = $3, claimed_at = null, \
                     reason = $4, attempts = 0, last_wake_error = null, updated_at = now() \
              where tenant_id = $1 and run_id = $2 and status = 'waking'",
@@ -154,6 +174,9 @@ impl SchedulerStore for PgSchedulerStore {
         .execute(&self.pool)
         .await
         .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            self.release_cancelled_claim(run).await?;
+        }
         Ok(())
     }
 
@@ -163,7 +186,7 @@ impl SchedulerStore for PgSchedulerStore {
         status: RunStatus,
         reason: Option<&str>,
     ) -> Result<(), OrchestratorError> {
-        sqlx::query(
+        let res = sqlx::query(
             "update runs.scheduled_runs set status = $3::text::runs.run_status, next_wake = null, \
                     claimed_at = null, reason = $4, updated_at = now() \
              where tenant_id = $1 and run_id = $2 and status = 'waking'",
@@ -175,6 +198,9 @@ impl SchedulerStore for PgSchedulerStore {
         .execute(&self.pool)
         .await
         .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            self.release_cancelled_claim(run).await?;
+        }
         Ok(())
     }
 
@@ -278,7 +304,7 @@ impl SchedulerStore for PgSchedulerStore {
         retry_at: DateTime<Utc>,
         error: &str,
     ) -> Result<(), OrchestratorError> {
-        sqlx::query(
+        let res = sqlx::query(
             "update runs.scheduled_runs set status = 'paused', next_wake = $3, claimed_at = null, \
                     reason = $4, last_wake_error = $4, updated_at = now() \
              where tenant_id = $1 and run_id = $2 and status = 'waking'",
@@ -290,6 +316,9 @@ impl SchedulerStore for PgSchedulerStore {
         .execute(&self.pool)
         .await
         .map_err(store_err)?;
+        if res.rows_affected() == 0 {
+            self.release_cancelled_claim(run).await?;
+        }
         Ok(())
     }
 
@@ -366,7 +395,8 @@ impl SchedulerStore for PgSchedulerStore {
     async fn count_terminal_before(&self, before: DateTime<Utc>) -> Result<u64, OrchestratorError> {
         let (n,): (i64,) = sqlx::query_as(&format!(
             "select count(*) from runs.scheduled_runs \
-             where tenant_id = $1 and status in ({TERMINAL_STATUS_LITERALS}) and updated_at < $2"
+             where tenant_id = $1 and status in ({TERMINAL_STATUS_LITERALS}) and updated_at < $2 \
+               and {NO_OPEN_CHARGE}"
         ))
         .bind(self.tenant)
         .bind(before)
@@ -380,7 +410,8 @@ impl SchedulerStore for PgSchedulerStore {
     async fn prune_terminal(&self, before: DateTime<Utc>) -> Result<u64, OrchestratorError> {
         let res = sqlx::query(&format!(
             "delete from runs.scheduled_runs \
-             where tenant_id = $1 and status in ({TERMINAL_STATUS_LITERALS}) and updated_at < $2"
+             where tenant_id = $1 and status in ({TERMINAL_STATUS_LITERALS}) and updated_at < $2 \
+               and {NO_OPEN_CHARGE}"
         ))
         .bind(self.tenant)
         .bind(before)
@@ -396,6 +427,14 @@ impl SchedulerStore for PgSchedulerStore {
 /// allowlist, deliberately: with `not in ('paused','waking')` a status this build does not
 /// recognise would be DELETED by default; here it is kept.
 const TERMINAL_STATUS_LITERALS: &str = "'completed','failed','cancelled'";
+
+/// G4-2 (torii#49): a terminal run whose budget charge (`runs.run_charges`) is still open is not
+/// prunable — the charge is found through its schedule row, so deleting the row before the final
+/// settle would strand the run's reservation (and its last spend) forever. Interpolated into both
+/// the count and the delete, so the preview and the effect agree.
+const NO_OPEN_CHARGE: &str = "not exists (select 1 from runs.run_charges c \
+      where c.tenant_id = scheduled_runs.tenant_id and c.run_id = scheduled_runs.run_id \
+        and not c.settled)";
 
 #[cfg(test)]
 mod tests {

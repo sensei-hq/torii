@@ -291,7 +291,9 @@ pub async fn set_default_model(id: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn remove_model(id: String) -> Result<(), String> {
     if id == read_default() {
-        return Err(format!("cannot remove '{id}': it is the current default model"));
+        return Err(format!(
+            "cannot remove '{id}': it is the current default model"
+        ));
     }
 
     // Locate the on-disk file for this managed id, and confirm it IS managed.
@@ -349,7 +351,9 @@ pub async fn remove_model(id: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn pull_model(app: AppHandle, id: String) -> Result<(), String> {
     let Some(curated) = CURATED.iter().find(|c| c.id == id) else {
-        return Err(format!("unknown model id '{id}' (not in the curated catalogue)"));
+        return Err(format!(
+            "unknown model id '{id}' (not in the curated catalogue)"
+        ));
     };
     let spec = pull_spec_for(curated);
 

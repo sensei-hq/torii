@@ -93,12 +93,14 @@ mod tests {
     async fn discovery_upserts_then_reconciles_removed_tools() {
         let pool = pool().await;
         let tenant = Uuid::new_v4();
-        sqlx::query("insert into core.tenants (id, name, slug, modified_by) values ($1,'disc',$2,'disc')")
-            .bind(tenant)
-            .bind(format!("disc-{tenant}"))
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "insert into core.tenants (id, name, slug, modified_by) values ($1,'disc',$2,'disc')",
+        )
+        .bind(tenant)
+        .bind(format!("disc-{tenant}"))
+        .execute(&pool)
+        .await
+        .unwrap();
         let server: Uuid = sqlx::query_scalar(
             "insert into device.mcp_servers (tenant_id, name, transport) values ($1,'web','http') returning id",
         )
@@ -108,9 +110,13 @@ mod tests {
         .unwrap();
 
         // first discovery: two tools, both active.
-        let n = discover_and_cache(&pool, server, &FixedClient(vec![tool("read"), tool("write")]))
-            .await
-            .unwrap();
+        let n = discover_and_cache(
+            &pool,
+            server,
+            &FixedClient(vec![tool("read"), tool("write")]),
+        )
+        .await
+        .unwrap();
         assert_eq!(n, 2);
         let active: i64 = sqlx::query(
             "select count(*) from device.mcp_server_tools where mcp_server_id=$1 and is_active",

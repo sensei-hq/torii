@@ -178,7 +178,10 @@ async fn gate_a_forged_tool_is_blocked_and_the_server_is_never_reached() {
         )
         .await;
     assert_eq!(forged.outcome, ToolOutcome::BlockedNotAllowed);
-    assert!(received.lock().unwrap().is_empty(), "server must not be reached");
+    assert!(
+        received.lock().unwrap().is_empty(),
+        "server must not be reached"
+    );
 
     // the allowed tool DOES run through the real transport.
     let ok = invoker
@@ -193,7 +196,11 @@ async fn gate_a_forged_tool_is_blocked_and_the_server_is_never_reached() {
         )
         .await;
     assert_eq!(ok.outcome, ToolOutcome::Invoked);
-    assert_eq!(received.lock().unwrap().len(), 1, "allowed tool reached the server once");
+    assert_eq!(
+        received.lock().unwrap().len(),
+        1,
+        "allowed tool reached the server once"
+    );
 }
 
 // ── (b) SSRF ──
@@ -256,14 +263,26 @@ async fn gate_c_tool_io_is_redacted_before_egress_and_before_reentry() {
 
     // input redaction: the demo server never saw the raw input secret.
     let seen = received.lock().unwrap()[0].clone();
-    assert!(!seen.contains("sk-live-INPUT-SECRET"), "raw input reached the tool: {seen}");
+    assert!(
+        !seen.contains("sk-live-INPUT-SECRET"),
+        "raw input reached the tool: {seen}"
+    );
     assert!(seen.contains("[REDACTED]"));
 
     // output redaction: the demo server's own secret is stripped before it re-enters the model.
     let answer = out.output.unwrap();
-    assert!(!answer.contains("sk-live-DEMO-OUTPUT-SECRET"), "raw tool output leaked: {answer}");
+    assert!(
+        !answer.contains("sk-live-DEMO-OUTPUT-SECRET"),
+        "raw tool output leaked: {answer}"
+    );
 
     // both directions are reported in the provenance summary.
-    assert!(out.redactions.iter().any(|r| r.direction == Direction::Input));
-    assert!(out.redactions.iter().any(|r| r.direction == Direction::Output));
+    assert!(out
+        .redactions
+        .iter()
+        .any(|r| r.direction == Direction::Input));
+    assert!(out
+        .redactions
+        .iter()
+        .any(|r| r.direction == Direction::Output));
 }

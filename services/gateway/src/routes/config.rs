@@ -49,13 +49,14 @@ pub(crate) async fn resolve_feature(
     feature: &str,
     space: Option<Uuid>,
 ) -> FeatureState {
-    let v: Result<Value, _> = sqlx::query_scalar("select config.resolve_feature_state($1, $2, $3, $4)")
-        .bind(tenant)
-        .bind(role_ids)
-        .bind(feature)
-        .bind(space)
-        .fetch_one(pool)
-        .await;
+    let v: Result<Value, _> =
+        sqlx::query_scalar("select config.resolve_feature_state($1, $2, $3, $4)")
+            .bind(tenant)
+            .bind(role_ids)
+            .bind(feature)
+            .bind(space)
+            .fetch_one(pool)
+            .await;
     match v {
         Ok(j) => FeatureState {
             enabled: j.get("enabled").and_then(|b| b.as_bool()).unwrap_or(false),
@@ -102,11 +103,12 @@ pub async fn get_snapshot(
     }
 
     // Current version + component sub-versions (absent tenant row ⇒ version 0).
-    let vc: Result<Option<(i64, Value)>, _> =
-        sqlx::query_as("select version, components from config.config_versions where tenant_id = $1")
-            .bind(tenant)
-            .fetch_optional(&state.pool)
-            .await;
+    let vc: Result<Option<(i64, Value)>, _> = sqlx::query_as(
+        "select version, components from config.config_versions where tenant_id = $1",
+    )
+    .bind(tenant)
+    .fetch_optional(&state.pool)
+    .await;
     let (version, components) = match vc {
         Ok(Some((v, c))) => (v, c),
         Ok(None) => (0, json!({})),
@@ -223,12 +225,14 @@ mod tests {
     async fn config_snapshot_bumps_version_and_leaks_no_credentials() {
         let pool = pool().await;
         let tenant = Uuid::new_v4();
-        sqlx::query("insert into core.tenants (id, name, slug, modified_by) values ($1,'cfg',$2,'cfg')")
-            .bind(tenant)
-            .bind(format!("cfg-{tenant}"))
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "insert into core.tenants (id, name, slug, modified_by) values ($1,'cfg',$2,'cfg')",
+        )
+        .bind(tenant)
+        .bind(format!("cfg-{tenant}"))
+        .execute(&pool)
+        .await
+        .unwrap();
         // §D Phase 4: workspace toggles live in governance.settings (scope='workspace', jsonb bool).
         sqlx::query(
             "insert into governance.settings (tenant_id, scope, key, value, modified_by) \
@@ -252,12 +256,13 @@ mod tests {
         // two config writes → two bumps.
         bump(&pool, tenant, "settings").await;
         bump(&pool, tenant, "features").await;
-        let (version, components): (i64, Value) =
-            sqlx::query_as("select version, components from config.config_versions where tenant_id=$1")
-                .bind(tenant)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let (version, components): (i64, Value) = sqlx::query_as(
+            "select version, components from config.config_versions where tenant_id=$1",
+        )
+        .bind(tenant)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(version, 2, "two bumps → monotonic version 2");
         assert_eq!(components["settings"], serde_json::json!(1));
         assert_eq!(components["features"], serde_json::json!(1));
@@ -280,7 +285,14 @@ mod tests {
         // NO credential material anywhere in the snapshot (setting_key/feature_key/full_name are
         // fine — we scan for real secret indicators only).
         let text = snap.to_string().to_lowercase();
-        for bad in ["encrypted", "credential", "secret", "bearer", "password", "api_key"] {
+        for bad in [
+            "encrypted",
+            "credential",
+            "secret",
+            "bearer",
+            "password",
+            "api_key",
+        ] {
             assert!(!text.contains(bad), "snapshot leaked '{bad}'");
         }
 
@@ -300,12 +312,14 @@ mod tests {
         let tenant = Uuid::new_v4();
         let space = Uuid::new_v4();
         let role = Uuid::new_v4();
-        sqlx::query("insert into core.tenants (id, name, slug, modified_by) values ($1,'fs',$2,'fs')")
-            .bind(tenant)
-            .bind(format!("fs-{tenant}"))
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "insert into core.tenants (id, name, slug, modified_by) values ($1,'fs',$2,'fs')",
+        )
+        .bind(tenant)
+        .bind(format!("fs-{tenant}"))
+        .execute(&pool)
+        .await
+        .unwrap();
         // §D Phase 4: feature_policies is keyed by feature_id (FK) — use a real, mandatory=false
         // feature slug ('cost-tracking') so the resolver runs the precedence logic (a mandatory
         // feature would short-circuit to 'mandatory'). The insert resolves slug→feature_id.

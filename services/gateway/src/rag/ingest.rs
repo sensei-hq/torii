@@ -26,8 +26,16 @@ use crate::redact::{Redaction, Redactor};
 
 /// Redaction kinds that indicate a live SECRET (→ flag for rotation), vs PII (email/card).
 const SECRET_KINDS: &[&str] = &[
-    "private_key", "aws_key", "github_token", "slack_token", "provider_key", "google_key", "jwt",
-    "bearer", "basic_auth", "secret_assignment",
+    "private_key",
+    "aws_key",
+    "github_token",
+    "slack_token",
+    "provider_key",
+    "google_key",
+    "jwt",
+    "bearer",
+    "basic_auth",
+    "secret_assignment",
 ];
 
 pub struct Ingestor {
@@ -51,7 +59,11 @@ impl Ingestor {
             Ok(()) => Ok(()),
             Err(e) => {
                 let reason = e.to_string();
-                if let Err(se) = self.store.set_status(tenant, doc, "failed", Some(&reason)).await {
+                if let Err(se) = self
+                    .store
+                    .set_status(tenant, doc, "failed", Some(&reason))
+                    .await
+                {
                     tracing::error!("c5 ingest: failed to record failure for {doc}: {se}");
                 }
                 tracing::warn!("c5 ingest {doc} failed: {reason}");
@@ -61,19 +73,23 @@ impl Ingestor {
     }
 
     async fn run_inner(&self, tenant: Uuid, doc: Uuid, actor: Uuid) -> Result<(), RagError> {
-        let (version_id, version_no, storage_path) = self.store.current_version(tenant, doc).await?;
-        let (mime, space_id): (String, Option<uuid::Uuid>) =
-            sqlx::query_as("select content_type, space_id from documents where tenant_id=$1 and id=$2")
-                .bind(tenant)
-                .bind(doc)
-                .fetch_one(&self.pool)
-                .await?;
+        let (version_id, version_no, storage_path) =
+            self.store.current_version(tenant, doc).await?;
+        let (mime, space_id): (String, Option<uuid::Uuid>) = sqlx::query_as(
+            "select content_type, space_id from documents where tenant_id=$1 and id=$2",
+        )
+        .bind(tenant)
+        .bind(doc)
+        .fetch_one(&self.pool)
+        .await?;
 
         // ---- parse ------------------------------------------------------------------------------
         self.store.set_status(tenant, doc, "parsing", None).await?;
         let bytes = self.storage.get(&storage_path).await?;
         let hash = content_hash(&bytes);
-        self.store.set_version_provenance(tenant, version_id, &hash, "default").await?;
+        self.store
+            .set_version_provenance(tenant, version_id, &hash, "default")
+            .await?;
         // Isolate a parser panic on malformed input (e.g. pdf-extract) → a clean `failed` status +
         // status_reason via run(), instead of wedging the doc in `parsing` when the task aborts.
         let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -85,9 +101,13 @@ impl Ingestor {
         };
 
         // ---- redact-at-rest (BEFORE embed; whole IR so no secret slips a chunk boundary) --------
-        self.store.set_status(tenant, doc, "redacting", None).await?;
+        self.store
+            .set_status(tenant, doc, "redacting", None)
+            .await?;
         let (ir, summary) = self.redact_ir(ir);
-        let active_secret = summary.iter().any(|r| SECRET_KINDS.contains(&r.kind) && r.count > 0);
+        let active_secret = summary
+            .iter()
+            .any(|r| SECRET_KINDS.contains(&r.kind) && r.count > 0);
 
         // persist REDACTED derivatives (raw original already stored as the immutable `original`).
         self.persist_assets(tenant, doc, version_no, &ir).await?;
@@ -99,30 +119,58 @@ impl Ingestor {
         let chunks = self.chunker.chunk(&ir, &cfg)?;
         if chunks.is_empty() {
             // e.g. a scanned PDF with no text layer (OCR deferred) — ready with 0 chunks, not failed.
-            self.store.finalize(tenant, doc, version_id, 0, &self.embed_model).await?;
-            signals::record_redaction_signal(&self.pool, tenant, doc, &summary, active_secret, actor).await;
+            self.store
+                .finalize(tenant, doc, version_id, 0, &self.embed_model)
+                .await?;
+            signals::record_redaction_signal(
+                &self.pool,
+                tenant,
+                doc,
+                &summary,
+                active_secret,
+                actor,
+            )
+            .await;
             return Ok(());
         }
         // per-chunk redaction_count = placeholder occurrences (the IR was already redacted).
-        let redaction_counts: Vec<i32> =
-            chunks.iter().map(|c| c.text.matches("[REDACTED:").count() as i32).collect();
+        let redaction_counts: Vec<i32> = chunks
+            .iter()
+            .map(|c| c.text.matches("[REDACTED:").count() as i32)
+            .collect();
 
         // ---- embed (redacted text only) ---------------------------------------------------------
-        self.store.set_status(tenant, doc, "embedding", None).await?;
+        self.store
+            .set_status(tenant, doc, "embedding", None)
+            .await?;
         let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
         let embeddings = self.embedder.embed(&texts).await?; // validate_dims enforced inside
 
         // ---- index (commit chunks + atomically retire the prior version) ------------------------
         self.store.set_status(tenant, doc, "indexing", None).await?;
         self.store
-            .commit_chunks(tenant, doc, version_id, &chunks, &embeddings, &redaction_counts)
+            .commit_chunks(
+                tenant,
+                doc,
+                version_id,
+                &chunks,
+                &embeddings,
+                &redaction_counts,
+            )
             .await?;
 
         // ---- finalize + emit the redaction quality signal ---------------------------------------
         self.store
-            .finalize(tenant, doc, version_id, chunks.len() as i32, &self.embed_model)
+            .finalize(
+                tenant,
+                doc,
+                version_id,
+                chunks.len() as i32,
+                &self.embed_model,
+            )
             .await?;
-        signals::record_redaction_signal(&self.pool, tenant, doc, &summary, active_secret, actor).await;
+        signals::record_redaction_signal(&self.pool, tenant, doc, &summary, active_secret, actor)
+            .await;
         Ok(())
     }
 
@@ -156,44 +204,86 @@ impl Ingestor {
             }
         }
 
-        let summary: Vec<Redaction> =
-            totals.into_iter().map(|(kind, count)| Redaction { kind, count }).collect();
+        let summary: Vec<Redaction> = totals
+            .into_iter()
+            .map(|(kind, count)| Redaction { kind, count })
+            .collect();
         (ir, summary)
     }
 
     /// Persist the redacted normalized markdown, one table_csv per table, image bytes, and a
     /// lightweight ir_json (structure only, no raw bytes) as `document_assets`.
-    async fn persist_assets(&self, tenant: Uuid, doc: Uuid, version_no: i32, ir: &DocIR) -> Result<(), RagError> {
+    async fn persist_assets(
+        &self,
+        tenant: Uuid,
+        doc: Uuid,
+        version_no: i32,
+        ir: &DocIR,
+    ) -> Result<(), RagError> {
         let (vid, _, _) = self.store.current_version(tenant, doc).await?;
 
         let md_path = object_path(tenant, doc, version_no, "markdown", 0);
-        self.storage.put(&md_path, ir.markdown.as_bytes(), "text/markdown").await?;
+        self.storage
+            .put(&md_path, ir.markdown.as_bytes(), "text/markdown")
+            .await?;
         self.store
-            .insert_asset(tenant, doc, vid, &AssetRow {
-                kind: "markdown".into(), storage_path: md_path, content_hash: None,
-                label: Some("normalized.md".into()), sequence: Some(0), page_ref: None, caption: None,
-            })
+            .insert_asset(
+                tenant,
+                doc,
+                vid,
+                &AssetRow {
+                    kind: "markdown".into(),
+                    storage_path: md_path,
+                    content_hash: None,
+                    label: Some("normalized.md".into()),
+                    sequence: Some(0),
+                    page_ref: None,
+                    caption: None,
+                },
+            )
             .await?;
 
         for (i, t) in ir.tables.iter().enumerate() {
             let p = object_path(tenant, doc, version_no, "table_csv", i);
             self.storage.put(&p, t.csv.as_bytes(), "text/csv").await?;
             self.store
-                .insert_asset(tenant, doc, vid, &AssetRow {
-                    kind: "table_csv".into(), storage_path: p, content_hash: None,
-                    label: t.caption.clone(), sequence: Some(i as i32), page_ref: t.page_ref, caption: t.caption.clone(),
-                })
+                .insert_asset(
+                    tenant,
+                    doc,
+                    vid,
+                    &AssetRow {
+                        kind: "table_csv".into(),
+                        storage_path: p,
+                        content_hash: None,
+                        label: t.caption.clone(),
+                        sequence: Some(i as i32),
+                        page_ref: t.page_ref,
+                        caption: t.caption.clone(),
+                    },
+                )
                 .await?;
         }
 
         for (i, img) in ir.images.iter().enumerate() {
             let p = object_path(tenant, doc, version_no, "image", i);
-            self.storage.put(&p, &img.bytes, "application/octet-stream").await?;
+            self.storage
+                .put(&p, &img.bytes, "application/octet-stream")
+                .await?;
             self.store
-                .insert_asset(tenant, doc, vid, &AssetRow {
-                    kind: "image".into(), storage_path: p, content_hash: None,
-                    label: None, sequence: Some(i as i32), page_ref: img.page_ref, caption: img.caption.clone(),
-                })
+                .insert_asset(
+                    tenant,
+                    doc,
+                    vid,
+                    &AssetRow {
+                        kind: "image".into(),
+                        storage_path: p,
+                        content_hash: None,
+                        label: None,
+                        sequence: Some(i as i32),
+                        page_ref: img.page_ref,
+                        caption: img.caption.clone(),
+                    },
+                )
                 .await?;
         }
 
@@ -205,12 +295,24 @@ impl Ingestor {
             "page_count": ir.page_count,
         });
         let ir_path = object_path(tenant, doc, version_no, "ir_json", 0);
-        self.storage.put(&ir_path, ir_json.to_string().as_bytes(), "application/json").await?;
+        self.storage
+            .put(&ir_path, ir_json.to_string().as_bytes(), "application/json")
+            .await?;
         self.store
-            .insert_asset(tenant, doc, vid, &AssetRow {
-                kind: "ir_json".into(), storage_path: ir_path, content_hash: None,
-                label: Some("ir.json".into()), sequence: Some(0), page_ref: None, caption: None,
-            })
+            .insert_asset(
+                tenant,
+                doc,
+                vid,
+                &AssetRow {
+                    kind: "ir_json".into(),
+                    storage_path: ir_path,
+                    content_hash: None,
+                    label: Some("ir.json".into()),
+                    sequence: Some(0),
+                    page_ref: None,
+                    caption: None,
+                },
+            )
             .await?;
         Ok(())
     }
@@ -251,7 +353,11 @@ mod tests {
 
         let url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| "postgresql://postgres:postgres@127.0.0.1:55322/postgres".into());
-        let pool = PgPoolOptions::new().max_connections(2).connect(&url).await.expect("connect 55322");
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .expect("connect 55322");
         let tenant = Uuid::new_v4();
         let owner = Uuid::new_v4();
         // quality_signals.tenant_id → core.tenants (FK); seed a real tenant for the signal assert.
@@ -262,14 +368,22 @@ mod tests {
 
         // register + upload an ORIGINAL containing a live secret + PII.
         let meta = NewDocument {
-            title: Some("secrets".into()), original_filename: "s.md".into(),
-            content_type: "text/markdown".into(), scope: "tenant".into(), classification: "internal".into(),
-            space_id: None, collection_id: None, profile_id: owner,
+            title: Some("secrets".into()),
+            original_filename: "s.md".into(),
+            content_type: "text/markdown".into(),
+            scope: "tenant".into(),
+            classification: "internal".into(),
+            space_id: None,
+            collection_id: None,
+            profile_id: owner,
         };
         let (doc, _v, path) = store.register_document(tenant, &meta).await.unwrap();
         // secret in a HEADING (→ section_path) AND in body (→ content) — both must be redacted.
         let raw = "# Prod key sk-ABCDEFGHIJKLMNOPQRSTUVWX\n\nThe migration runs nightly. Second key sk-ZYXWVUTSRQPONMLKJIHGF and contact me@example.com.";
-        storage.put(&path, raw.as_bytes(), "text/markdown").await.unwrap();
+        storage
+            .put(&path, raw.as_bytes(), "text/markdown")
+            .await
+            .unwrap();
 
         let ingestor = Ingestor {
             pool: pool.clone(),
@@ -284,8 +398,14 @@ mod tests {
         ingestor.run(tenant, doc, owner).await.unwrap();
 
         // status = completed
-        let status: String = sqlx::query_scalar("select lifecycle::text from documents where tenant_id=$1 and id=$2")
-            .bind(tenant).bind(doc).fetch_one(&pool).await.unwrap();
+        let status: String = sqlx::query_scalar(
+            "select lifecycle::text from documents where tenant_id=$1 and id=$2",
+        )
+        .bind(tenant)
+        .bind(doc)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(status, "completed");
 
         // NO raw secret in the index (scan ALL chunk content AND section_path — the review found
@@ -297,14 +417,21 @@ mod tests {
         let leaked_sp: i64 = sqlx::query_scalar(
             "select count(*) from document_embeddings where tenant_id=$1 and section_path like '%sk-A%'")
             .bind(tenant).fetch_one(&pool).await.unwrap();
-        assert_eq!(leaked_sp, 0, "raw secret found in document_embeddings.section_path (heading leak)");
+        assert_eq!(
+            leaked_sp, 0,
+            "raw secret found in document_embeddings.section_path (heading leak)"
+        );
         let redacted: i64 = sqlx::query_scalar(
             "select count(*) from document_embeddings where tenant_id=$1 and content like '%[REDACTED:%'")
             .bind(tenant).fetch_one(&pool).await.unwrap();
         assert!(redacted > 0, "expected redaction placeholders in the index");
         let flagged: i64 = sqlx::query_scalar(
-            "select coalesce(sum(redaction_count),0) from document_embeddings where tenant_id=$1")
-            .bind(tenant).fetch_one(&pool).await.unwrap();
+            "select coalesce(sum(redaction_count),0) from document_embeddings where tenant_id=$1",
+        )
+        .bind(tenant)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert!(flagged > 0, "redaction_count not recorded");
 
         // a redaction quality signal exists.
@@ -316,14 +443,31 @@ mod tests {
         // re-ingest is idempotent: same version → chunks replaced (no version-scoped unique
         // collision), doc stays completed (regression guard for the re-ingest-collision finding).
         ingestor.run(tenant, doc, owner).await.unwrap();
-        let status2: String = sqlx::query_scalar("select lifecycle::text from documents where tenant_id=$1 and id=$2")
-            .bind(tenant).bind(doc).fetch_one(&pool).await.unwrap();
-        assert_eq!(status2, "completed", "re-ingest did not stay completed (unique collision?)");
+        let status2: String = sqlx::query_scalar(
+            "select lifecycle::text from documents where tenant_id=$1 and id=$2",
+        )
+        .bind(tenant)
+        .bind(doc)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            status2, "completed",
+            "re-ingest did not stay completed (unique collision?)"
+        );
 
         // cleanup
-        sqlx::query("delete from metering.quality_signals where tenant_id=$1").bind(tenant).execute(&pool).await.unwrap();
+        sqlx::query("delete from metering.quality_signals where tenant_id=$1")
+            .bind(tenant)
+            .execute(&pool)
+            .await
+            .unwrap();
         store.delete_document(tenant, doc).await.unwrap();
-        sqlx::query("delete from core.tenants where id=$1").bind(tenant).execute(&pool).await.unwrap();
+        sqlx::query("delete from core.tenants where id=$1")
+            .bind(tenant)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     #[test]
@@ -339,7 +483,11 @@ mod tests {
                 page_ref: None,
                 element_type: ElementType::Prose,
             }],
-            tables: vec![Table { caption: None, csv: "col\nsk-ZYXWVUTSRQPONMLKJIHGFED".into(), page_ref: None }],
+            tables: vec![Table {
+                caption: None,
+                csv: "col\nsk-ZYXWVUTSRQPONMLKJIHGFED".into(),
+                page_ref: None,
+            }],
             images: vec![],
             page_count: None,
         };
@@ -354,6 +502,9 @@ mod tests {
             assert!(!clean.contains("AKIAIOSFODNN7EXAMPLE"));
             assert!(clean.contains("[REDACTED:") || !surface.contains("sk-"));
         }
-        assert!(totals >= 3, "expected the api key, aws key, email, and second key redacted");
+        assert!(
+            totals >= 3,
+            "expected the api key, aws key, email, and second key redacted"
+        );
     }
 }

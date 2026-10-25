@@ -47,9 +47,7 @@ pub async fn build_gateway() -> Arc<Gateway> {
 
     // Always register noop as a graceful-degradation fallback so the registry
     // is never empty even if the native backend is unavailable.
-    adapters
-        .register(Arc::new(NoopAdapter))
-        .await;
+    adapters.register(Arc::new(NoopAdapter)).await;
 
     register_embedded_llama(&adapters).await;
 
@@ -70,12 +68,8 @@ async fn register_embedded_llama(adapters: &AdapterRegistry) {
 
     match EmbeddedLlamaAdapter::with_shared_backend("embedded-llama", Arc::new(resolver)) {
         Ok(adapter) => {
-            adapters
-                .register(Arc::new(adapter))
-                .await;
-            log::info!(
-                "gateway: embedded-llama adapter registered (resolver: managed -> ollama)"
-            );
+            adapters.register(Arc::new(adapter)).await;
+            log::info!("gateway: embedded-llama adapter registered (resolver: managed -> ollama)");
         }
         Err(e) => log::warn!("gateway: embedded-llama adapter unavailable: {e}"),
     }
@@ -109,7 +103,11 @@ pub(crate) fn managed_models_dir() -> PathBuf {
             let _ = std::fs::create_dir_all(parent);
         }
         match std::fs::rename(&legacy, &dir) {
-            Ok(()) => log::info!("gateway: migrated {} -> {}", legacy.display(), dir.display()),
+            Ok(()) => log::info!(
+                "gateway: migrated {} -> {}",
+                legacy.display(),
+                dir.display()
+            ),
             Err(e) => log::warn!("gateway: could not migrate {}: {e}", legacy.display()),
         }
     }

@@ -69,7 +69,10 @@ impl HttpClient {
             .await
             .map_err(|e| ToolError::Transport(e.to_string()))?;
         if !resp.status().is_success() {
-            return Err(ToolError::Transport(format!("http status {}", resp.status())));
+            return Err(ToolError::Transport(format!(
+                "http status {}",
+                resp.status()
+            )));
         }
         let is_sse = resp
             .headers()
@@ -109,7 +112,10 @@ impl McpClient for HttpClient {
         // arguments arrives as a JSON string; forward it as a JSON object (fallback: empty).
         let args: Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
         let result = self
-            .rpc("tools/call", json!({ "name": tool_name, "arguments": args }))
+            .rpc(
+                "tools/call",
+                json!({ "name": tool_name, "arguments": args }),
+            )
             .await?;
         Ok(RawToolOutput {
             text: extract_content_text(&result),
@@ -237,7 +243,8 @@ mod tests {
 
     #[test]
     fn parse_sse_json_extracts_the_rpc_response() {
-        let body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[]}}\n\n";
+        let body =
+            "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[]}}\n\n";
         let v = parse_sse_json(body).unwrap();
         assert!(v.get("result").is_some());
     }

@@ -97,6 +97,8 @@ export interface RequestRow {
 	chain_id: string | null
 	adapter: string
 	model: string
+	/** which capability the call answered (`chat`, `decision`, …) — null on pre-Phase-5 rows. */
+	capability: string | null
 	execution_location: string | null
 	input_tokens: number | null
 	output_tokens: number | null
@@ -292,6 +294,77 @@ export interface RoutingStep {
 	router: string
 	model: string
 	is_active: boolean
+	/** the chain's capability (`chat`, `decision`, `embedding`…) — what a step's models answer */
+	capability: string
+}
+
+/** One row of a measured ranking as the tenant's chain would offer it (System One). */
+export interface RankingRow {
+	category: string
+	chain_name: string
+	/** the chain step's id — the same id /rpc/routing/set-step-active takes. */
+	chain_model_id: string
+	sequence_order: number
+	model_full_name: string
+	provider: string | null
+	router_name: string | null
+	plane: string
+	context_window: number | null
+	/** 1 = best; null unless the category's verdict is `winner` — a tie is a set, not an order. */
+	rank: number | null
+	verdict: string
+	/** true/false only when there is an order to claim; null for a tie or unranked category. */
+	within_margin: boolean | null
+	/** greatest(configured margin, the category's top-model CI half-width). */
+	effective_margin: number
+	policy_revision: number | null
+	accuracy: number | null
+	ci_half_width: number | null
+	/** is this chain model in the ranking at all (a measurement exists for it)? */
+	measured: boolean
+	/** set when the evidence is a stand-in for the category. */
+	proxy: string | null
+	/** the ranking row's own change counter. */
+	revision: number | null
+	artifact_sha: string | null
+	corpus_sha: string | null
+	generated_at: string | null
+}
+
+/** A category's ranking as a whole: verdict, margin in force, counts and provenance. */
+export interface RankingCategory {
+	category: string
+	capability: string
+	verdict: string
+	effective_margin: number
+	policy_revision: number | null
+	chained: number
+	measured: number
+	admissible: number
+	ranking_revision: number | null
+	artifact_sha: string | null
+	corpus_sha: string | null
+	generated_at: string | null
+	proxy: string | null
+	/** why the resolver would (or would not) send an order — server-derived. */
+	reason: string
+	rows: RankingRow[]
+}
+
+/** One scope's margin for a category; `is_default` is the platform row. */
+export interface RankingPolicy {
+	category: string
+	is_default: boolean
+	margin: number
+	revision: number
+	modified_at: string
+	modified_by: string
+}
+
+export interface RankingsData {
+	capability: string
+	categories: RankingCategory[]
+	policies: RankingPolicy[]
 }
 
 export interface ModelRow {
@@ -305,6 +378,8 @@ export interface ModelRow {
 	provider: string
 	reachable: boolean
 	enabled: boolean
+	/** the chains that carry the model (enablement is derived from membership). */
+	chains?: string[]
 }
 
 export interface McpServer {
@@ -408,6 +483,10 @@ export const api = {
 	org: () => gwGet<{ members: Member[]; roles: Role[]; capabilities: Capability[] }>('/v1/org'),
 	models: () => gwGet<{ models: ModelRow[] }>('/v1/models'),
 	routing: () => gwGet<{ steps: RoutingStep[] }>('/v1/routing'),
+	// System One rankings — the measured store per category, with the rows this tenant's
+	// chain would offer and the margin in force. Capability `model.manage`.
+	rankings: (capability = 'decision') =>
+		gwGet<RankingsData>(`/v1/rankings?capability=${encodeURIComponent(capability)}`),
 	governance: () => gwGet<{ features: Feature[] }>('/v1/governance'),
 	// O2 analytics — server-computed over the full ledger (+ savings baseline).
 	analyticsOverview: () => gwGet<AnalyticsOverview>('/v1/analytics/overview'),
@@ -456,6 +535,14 @@ export const api = {
 	// enable/disable a fallback-chain step (the gateway skips inactive steps).
 	setRoutingStep: (id: string, is_active: boolean) =>
 		gwPost('/rpc/routing/set-step-active', { id, is_active }),
+	// set this tenant's quality margin for one ranking category (accuracy points, 0..1).
+	// The server bumps the policy revision + the tenant's routing snapshot; the ranks
+	// themselves stay measurements and are not editable here.
+	setRankingMargin: (category: string, margin: number) =>
+		gwPost<{ ok: boolean; category: string; margin: number; revision: number }>(
+			'/rpc/rankings/set-margin',
+			{ category, margin }
+		),
 	// (§D Phase 3) Model enablement is derived from chain membership — no per-model toggle.
 	// The Models screen shows `enabled` read-only (from /v1/models); manage it by editing chains.
 	// assign a role to a member (bumps the target's claims_version — self-assign signs you out).

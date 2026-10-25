@@ -281,6 +281,11 @@
 										>
 										<span class="flex min-w-0 flex-1 items-center gap-2 text-sm">
 											<span class="truncate font-semibold text-ink">{r.model}</span>
+											<!-- a decision call is a different axis, not an odd chat call: label it
+											     rather than letting it read as a chat row with a strange model -->
+											{#if r.capability && r.capability !== 'chat'}
+												<Chip tone="accent">{r.capability}</Chip>
+											{/if}
 										</span>
 										<span class="shrink-0 font-mono text-xs text-ink-mute">{money(r.cost_usd)}</span
 										>

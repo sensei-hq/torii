@@ -325,6 +325,55 @@ begin
   raise notice 'PASSED M7: resolver is service_role only, policy table has RLS';
 end $$;
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- M8 — a measured row's `revision` tracks CHANGES, not writes. It is part of the
+--      resolver's cache key, so both directions are bugs: a spurious bump throws
+--      away every cached ordering, and a missing one lets a cached order outlive
+--      the measurement it was derived from. The seeder re-writes every row on each
+--      import, so "same values → no bump" is the rule that keeps re-imports cheap.
+-- ─────────────────────────────────────────────────────────────────────────
+do $$
+declare
+  cat constant text := 'planner.select';
+  mid uuid;
+  before bigint;
+  after bigint;
+begin
+  select model_id, revision into mid, before
+    from catalog.model_rankings where category = cat order by model_id limit 1;
+  if mid is null then
+    raise exception 'FAIL M8: no seeded ranking row to test';
+  end if;
+
+  -- A no-op write (the seeder's upsert with identical values) must not bump.
+  update catalog.model_rankings
+     set accuracy = accuracy, modified_by = modified_by
+   where category = cat and model_id = mid;
+  select revision into after from catalog.model_rankings where category = cat and model_id = mid;
+  if after <> before then
+    raise exception 'FAIL M8: a no-op write bumped revision % -> %', before, after;
+  end if;
+
+  -- A real change must bump, and by exactly one.
+  update catalog.model_rankings
+     set accuracy = least(1, coalesce(accuracy, 0.5) + 0.001)
+   where category = cat and model_id = mid;
+  select revision into after from catalog.model_rankings where category = cat and model_id = mid;
+  if after <> before + 1 then
+    raise exception 'FAIL M8: a real change bumped revision % -> % (expected %)',
+      before, after, before + 1;
+  end if;
+
+  -- Attribution alone is a change: the provenance the trace reports must move.
+  update catalog.model_rankings set edited_by = 'test-editor'
+   where category = cat and model_id = mid;
+  if (select revision from catalog.model_rankings where category = cat and model_id = mid) <> after + 1 then
+    raise exception 'FAIL M8: setting edited_by did not bump revision';
+  end if;
+
+  raise notice 'PASSED M8: ranking revision bumps on change, not on rewrite';
+end $$;
+
 rollback;
 
 \echo 'PASSED ranking margin suite (transaction rolled back)'

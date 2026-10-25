@@ -26,6 +26,7 @@ suite=(
   metering_pools.sql # G3: free-tier pools (dedup) + reset windows → pool_headroom
   health_gates.sql # G4: durable cooldown/lockout; terminal locks must not fail open
   resilience_config.sql # G5: ResilienceConfig parity with the engine's defaults + guardrails
+  ranking_margin.sql # System One P4: quality margin as membership, CI floor, tenant override, isolation
 )
 
 for t in "${suite[@]}"; do

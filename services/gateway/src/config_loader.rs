@@ -29,11 +29,13 @@ use sqlx::Row;
 
 /// Map a DB `catalog.capability_types.name` value to a gateway [`Capability`].
 ///
-/// DB values: `chat`, `embedding`, `image`, `vision`, `audio`, `agent`, `video`.
+/// DB values: `chat`, `embedding`, `image`, `vision`, `audio`, `agent`, `video`,
+/// `decision` (System One: state + typed questions -> probabilities, not text).
 /// Returns `None` for unrecognised values so callers can skip them gracefully.
 pub(crate) fn map_capability(db_cap: &str) -> Option<Capability> {
     match db_cap {
         "chat" | "agent" => Some(Capability::TextChat),
+        "decision" => Some(Capability::Decision),
         "embedding" => Some(Capability::TextEmbed),
         "image" => Some(Capability::ImageGenerate),
         "vision" => Some(Capability::ImageAnalyze),
@@ -444,6 +446,7 @@ mod tests {
         assert_eq!(map_capability("embedding"), Some(Capability::TextEmbed));
         assert_eq!(map_capability("image"), Some(Capability::ImageGenerate));
         assert_eq!(map_capability("vision"), Some(Capability::ImageAnalyze));
+        assert_eq!(map_capability("decision"), Some(Capability::Decision));
         assert_eq!(map_capability("audio"), Some(Capability::AudioTranscribe));
         assert_eq!(map_capability("video"), Some(Capability::VideoGenerate));
         assert_eq!(map_capability("unknown"), None);

@@ -26,6 +26,7 @@ select
 , fallback_sequence
 , recorded_at
 , cost_estimated                   -- §D LN-4: gateway pre-call estimate (USD), snapshotted alongside actual cost_usd. Appended at END so CREATE OR REPLACE stays idempotent (can't reorder existing view cols).
+, capability                       -- System One Phase 5: which capability the call answered (`chat`, `decision`, …). Appended at END for the same reason. A `decision` call is not chat that looks odd — it is a different axis, and the ledger read model has to say so or the screen cannot.
 from metering.inference_calls;
 
 comment on view requests_ledger_for_tenant is

@@ -62,6 +62,7 @@
 			items: [
 				{ href: '/models', label: 'Models', icon: 'i-solar-cpu-bold-duotone' },
 				{ href: '/routing', label: 'Routing', icon: 'i-solar-routing-2-bold-duotone' },
+				{ href: '/rankings', label: 'Rankings', icon: 'i-solar-medal-ribbons-star-bold-duotone' },
 				{ href: '/connections', label: 'Connections', icon: 'i-solar-key-bold-duotone' },
 				{ href: '/tools', label: 'Tools & MCP', icon: 'i-solar-plug-circle-bold-duotone' }
 			]

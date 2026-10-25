@@ -281,13 +281,24 @@ async fn main() -> anyhow::Result<()> {
         .route("/tools", get(routes::ledger::get_tools))
         .route("/devices", get(routes::ledger::get_devices))
         .route("/routing", get(routes::ledger::get_routing))
+        // System One Phase 5: the measured ranking store, per category, as an operator reads it.
+        .route("/rankings", get(routes::ledger::get_rankings))
         .route("/governance", get(routes::ledger::get_governance))
         .route("/settings", get(routes::ledger::get_settings))
         // O2 · analytics read model (P12): tenant-scoped dashboards over the one ledger.
         .route("/analytics/overview", get(routes::analytics::get_overview))
-        .route("/analytics/cost-trend", get(routes::analytics::get_cost_trend))
-        .route("/analytics/model-mix", get(routes::analytics::get_model_mix))
-        .route("/analytics/plane-split", get(routes::analytics::get_plane_split))
+        .route(
+            "/analytics/cost-trend",
+            get(routes::analytics::get_cost_trend),
+        )
+        .route(
+            "/analytics/model-mix",
+            get(routes::analytics::get_model_mix),
+        )
+        .route(
+            "/analytics/plane-split",
+            get(routes::analytics::get_plane_split),
+        )
         .route("/analytics/spend", get(routes::analytics::get_spend))
         .route("/analytics/quality", get(routes::analytics::get_quality))
         .route("/analytics/export", get(routes::analytics::get_export))
@@ -311,10 +322,7 @@ async fn main() -> anyhow::Result<()> {
             "/documents/{id}/reingest",
             post(routes::documents::reingest_document),
         )
-        .route(
-            "/documents/{id}/assets",
-            get(routes::documents::get_assets),
-        )
+        .route("/documents/{id}/assets", get(routes::documents::get_assets))
         .route(
             "/spaces/{space_id}/retrieve",
             post(routes::retrieve::retrieve),
@@ -379,6 +387,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/routing/set-step-active",
             post(routes::rpc::routing_set_step),
+        )
+        .route(
+            "/rankings/set-margin",
+            post(routes::rpc::rankings_set_margin),
         )
         .route("/settings/set", post(routes::rpc::settings_set))
         .route("/mcp/set-enabled", post(routes::rpc::mcp_set_enabled))

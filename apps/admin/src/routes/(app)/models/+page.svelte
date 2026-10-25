@@ -77,6 +77,7 @@
 								<th>Route</th>
 								<th class="!text-right">Context</th>
 								<th class="!text-right">Max output</th>
+								<th>Enabled by</th>
 								<th>Status</th>
 								<th class="!text-right">Enabled</th>
 							</tr>
@@ -101,6 +102,19 @@
 									<td class="text-right font-mono text-ink-soft"
 										>{tokenLabel(m.max_output_tokens)}</td
 									>
+									<!-- enablement is chain MEMBERSHIP, so name the chains: a `decide` chain
+									     means this model answers decision calls, not chat -->
+									<td>
+										{#if m.chains?.length}
+											<span class="flex flex-wrap gap-1">
+												{#each m.chains as chain (chain)}
+													<Chip tone={chain === 'decide' ? 'accent' : 'mute'}>{chain}</Chip>
+												{/each}
+											</span>
+										{:else}
+											<span class="font-mono text-xs text-ink-faint">—</span>
+										{/if}
+									</td>
 									<td>
 										<Chip tone={m.reachable ? 'success' : 'mute'}>
 											{m.reachable ? 'reachable' : 'no endpoint'}
@@ -115,7 +129,7 @@
 							{/each}
 							{#if rows.length === 0}
 								<tr
-									><td colspan="6">
+									><td colspan="7">
 										<Empty
 											icon="i-solar-cpu-bold-duotone"
 											message={models.length === 0 ? 'No models in the catalog' : 'No models match'}

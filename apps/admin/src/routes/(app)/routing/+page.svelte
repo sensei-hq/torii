@@ -46,6 +46,8 @@
 		)
 			.map(([name, rows]) => ({
 				name,
+				/** every step of a chain shares one capability — it is a chain property */
+				capability: rows[0]?.capability ?? 'chat',
 				rows: rows.sort((a, b) => a.sequence_order - b.sequence_order)
 			}))
 			.sort((a, b) => a.name.localeCompare(b.name))
@@ -58,7 +60,7 @@
 	<PageHeader
 		eyebrow="Routing"
 		title="Spend it like it’s yours"
-		sub="Named fallback chains — the ordered router → model sequence the gateway steps through on budget pressure or provider error. Spend limits live in Organization; this is how the gateway behaves against them."
+		sub="Named fallback chains — the ordered router → model sequence the gateway steps through on budget pressure or provider error. Each chain serves one capability: a chat chain answers conversation, the decide chain answers typed decision calls. Spend limits live in Organization; this is how the gateway behaves against them."
 	>
 		{#snippet actions()}
 			<a
@@ -85,10 +87,20 @@
 		<div class="space-y-6 px-4 pb-12 sm:px-6 xl:px-12 xl:pb-16">
 			{#each chains as chain (chain.name)}
 				<Card flush>
-					<CardHead
-						title={chain.name}
-						meta={`${chain.rows.length} step${chain.rows.length === 1 ? '' : 's'}`}
-					/>
+					<CardHead title={chain.name}>
+						{#snippet right()}
+							<span class="flex items-center gap-2">
+								<!-- what these models answer: a `decision` chain serves typed decision
+								     calls, not /v1/chat, and reading it as chat was the ambiguity -->
+								<Chip tone={chain.capability === 'chat' ? 'mute' : 'accent'}>
+									{chain.capability}
+								</Chip>
+								<span class="font-mono text-xs text-ink-mute">
+									{chain.rows.length} step{chain.rows.length === 1 ? '' : 's'}
+								</span>
+							</span>
+						{/snippet}
+					</CardHead>
 					<div>
 						{#each chain.rows as s (s.id)}
 							<div

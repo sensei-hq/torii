@@ -122,8 +122,9 @@ pub async fn get_requests(
     };
     let rows: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.recorded_at desc), '[]'::json) from ( \
-           select id, chain_id, adapter, model, budget_node_id, execution_location, \
-                  input_tokens, output_tokens, cost_usd::float8 as cost_usd, \
+           select id, chain_id, adapter, model, capability, budget_node_id, \
+                  execution_location, input_tokens, output_tokens, \
+                  cost_usd::float8 as cost_usd, \
                   duration_ms, status, fallback_sequence, recorded_at \
              from metering.requests_ledger_for_tenant where tenant_id = $1 \
             order by recorded_at desc limit $2) t",
@@ -361,6 +362,9 @@ pub async fn get_models(
     // Catalog is global (catalog.models); enablement is per-tenant and DERIVED from chain
     // membership (§D Phase 3) — a model is `enabled` iff it appears in the tenant's resolved+viable
     // chains (chains_for_tenant). `reachable` (has any endpoint) stays a separate catalog fact.
+    // System One Phase 5 adds `chains`: WHICH chains carry the model, not just whether one does.
+    // Membership is the reason a model is enabled, and a `decide` chain means the model answers
+    // typed decision calls rather than chat — a fact the model row itself does not carry.
     let rows: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.provider, t.display_name), '[]'::json) from ( \
            select m.full_name, m.display_name, m.description, m.context_window, \
@@ -368,7 +372,10 @@ pub async fn get_models(
                   coalesce(p.name, 'unknown') as provider, \
                   exists(select 1 from catalog.model_endpoints e where e.model_id = m.id) as reachable, \
                   exists(select 1 from catalog.chains_for_tenant cft \
-                          where cft.tenant_id = $1 and cft.model_id = m.id) as enabled \
+                          where cft.tenant_id = $1 and cft.model_id = m.id) as enabled, \
+                  (select coalesce(json_agg(distinct cft.chain_name), '[]'::json) \
+                     from catalog.chains_for_tenant cft \
+                    where cft.tenant_id = $1 and cft.model_id = m.id) as chains \
              from catalog.models m \
              left join catalog.providers p on p.id = m.provider_id \
             where m.deprecated_on is null) t",
@@ -580,13 +587,19 @@ pub async fn get_routing(
     };
     // Read the BASE table (not effective_chain_models, which filters is_active=true) so
     // disabled steps are shown and can be re-enabled. Includes the step id for the toggle.
+    // §System One Phase 5: a chain carries a CAPABILITY, and it changes what a step means —
+    // the `decide` chain's models answer typed questions, not chat. Without it the screen
+    // labelled a decision chain "Routing" like any other and the reader had no way to tell
+    // which chains feed `/v1/chat` and which feed a `Select` decision.
     let rows: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.chain_name, t.sequence_order), '[]'::json) from ( \
-           select fcm.id, fc.name as chain_name, fcm.sequence_order, fcm.plane, fcm.is_active, \
+           select fcm.id, fc.name as chain_name, ct.name as capability, \
+                  fcm.sequence_order, fcm.plane, fcm.is_active, \
                   coalesce(r.name, '—') as router, \
                   coalesce(m.full_name, '—') as model \
              from catalog.chain_models fcm \
              join catalog.chains fc on fc.id = fcm.fallback_chain_id \
+             join catalog.capability_types ct on ct.id = fc.capability_id \
              left join catalog.models m on m.id = fcm.model_id \
              left join catalog.routers r on r.id = fcm.router_id \
             where fcm.tenant_id = $1) t",
@@ -598,6 +611,114 @@ pub async fn get_routing(
         Ok(steps) => (StatusCode::OK, Json(json!({ "steps": steps }))).into_response(),
         Err(e) => {
             tracing::error!("get_routing: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RankingQuery {
+    /// Which chain axis to resolve the ranking against. Defaults to `decision` (System One):
+    /// the rankings are measurements of decision models, and the chain that carries them is
+    /// the tenant's `decide` chain. Chat models have no measured ranking store.
+    #[serde(default)]
+    pub capability: Option<String>,
+}
+
+/// `GET /v1/rankings` — the measured ranking store as an operator sees it (§System One
+/// Phase 5). Capability `model.manage` (a platform-quality surface, not a member one).
+///
+/// One entry per benchmark CATEGORY (whatever the artifacts measured), each carrying:
+/// - the verdict and the reason the resolver would or would not send an order, from
+///   `catalog.ranking_status` — the same function the resolver's data comes from, so the
+///   screen cannot describe a different decision than the gateway makes;
+/// - the rows the tenant's chain would offer, from `catalog.ranked_chain`: rank, accuracy,
+///   the CI half-width, whether the row is within the margin, and the provenance
+///   (revision, artifact_sha, corpus_sha, generated_at);
+/// - the policy rows that apply to the category (`platform` default and the tenant's own
+///   override, if any), so the edit form can show what is configured rather than what is
+///   effective — `effective_margin` is the greater of that and the top model's CI
+///   half-width, and the two are not the same number.
+///
+/// Rows with no chain step still come back: an empty `rows` with `chained: 0` is the
+/// "no model on your chain is measured" case, and it must be visible as such rather than
+/// rendering as an empty page.
+pub async fn get_rankings(
+    Extension(claims): Extension<Claims>,
+    State(state): State<SharedState>,
+    Query(q): Query<RankingQuery>,
+) -> Response {
+    let tenant = match require_read(&state, &claims, "model.manage").await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let capability = q.capability.unwrap_or_else(|| "decision".into());
+    // Resolve the capability name against the catalog, so a typo is a 400 rather than an
+    // empty ranking that looks like "this tenant measured nothing".
+    let known: Result<Option<i32>, _> =
+        sqlx::query_scalar("select 1 from catalog.capability_types where name = $1 limit 1")
+            .bind(&capability)
+            .fetch_optional(&state.pool)
+            .await;
+    match known {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return (StatusCode::BAD_REQUEST, "unknown capability").into_response();
+        }
+        Err(e) => {
+            tracing::error!("get_rankings: capability lookup: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response();
+        }
+    }
+
+    let categories: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.category), '[]'::json) from ( \
+           select s.category, s.capability, s.verdict, s.effective_margin, s.policy_revision, \
+                  s.chained, s.measured, s.admissible, s.ranking_revision, \
+                  s.artifact_sha, s.corpus_sha, s.generated_at, s.proxy, s.reason, \
+                  (select coalesce(json_agg(r order by r.rank nulls last, r.sequence_order), \
+                                    '[]'::json) \
+                     from catalog.ranked_chain($1, $2, c.category) r) as rows \
+             from (select distinct category from catalog.model_rankings) c \
+             cross join lateral catalog.ranking_status($1, $2, c.category) s) t",
+    )
+    .bind(tenant)
+    .bind(&capability)
+    .fetch_one(&state.pool)
+    .await;
+    let categories = match categories {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("get_rankings: categories: {e}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response();
+        }
+    };
+
+    // Both scopes, flat: the UI decides precedence with a pure helper, and a platform row
+    // stays visible when a tenant override shadows it — "override 0.05 (default 0.03)" is
+    // more useful to an operator than 0.05 alone.
+    let policies: Result<Value, _> = sqlx::query_scalar(
+        "select coalesce(json_agg(t order by t.category, t.is_default desc), '[]'::json) from ( \
+           select p.category, (p.tenant_id is null) as is_default, p.margin, \
+                  p.revision, p.modified_at, p.modified_by \
+             from catalog.ranking_policies p \
+            where p.tenant_id = $1 or p.tenant_id is null) t",
+    )
+    .bind(tenant)
+    .fetch_one(&state.pool)
+    .await;
+    match policies {
+        Ok(policies) => (
+            StatusCode::OK,
+            Json(json!({
+                "capability": capability,
+                "categories": categories,
+                "policies": policies,
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("get_rankings: policies: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response()
         }
     }
@@ -848,7 +969,10 @@ mod trace_roundtrip {
             fallback_sequence: 2,
             recorded_at: Utc::now(),
         };
-        store_a.insert_inference_call(&call).await.expect("insert call");
+        store_a
+            .insert_inference_call(&call)
+            .await
+            .expect("insert call");
 
         let trace = ExecutionTrace {
             request_id: call_id.to_string(),
@@ -866,7 +990,14 @@ mod trace_roundtrip {
                     Some("429 rate limited"),
                     true,
                 ),
-                attempt(2, "ollama", "gemma2:2b", AttemptStatus::Success, None, false),
+                attempt(
+                    2,
+                    "ollama",
+                    "gemma2:2b",
+                    AttemptStatus::Success,
+                    None,
+                    false,
+                ),
             ],
             estimated_cost: None,
             actual_cost: None,

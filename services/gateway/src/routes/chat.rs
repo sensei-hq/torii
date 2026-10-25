@@ -1171,6 +1171,7 @@ mod tests {
             audio: None,
             images: None,
             videos: None,
+            decisions: None,
             model: Some("gemma2:2b".into()),
             usage: None,
             tool_calls: Vec::new(),

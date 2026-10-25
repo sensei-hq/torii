@@ -29,3 +29,7 @@
 {"chain_name":"judge","router_name":"grok","model_full_name":"grok-3","sequence_order":3,"max_retries":1,"is_active":true,"modified_at":"2026-01-01T00:00:00+00:00"}
 {"chain_name":"judge","router_name":"openrouter","model_full_name":"claude-sonnet-4-5","sequence_order":4,"max_retries":1,"is_active":true,"modified_at":"2026-01-01T00:00:00+00:00"}
 {"chain_name":"judge","router_name":"openrouter","model_full_name":"gpt-4o","sequence_order":5,"max_retries":1,"is_active":true,"modified_at":"2026-01-01T00:00:00+00:00"}
+{"chain_name": "decide", "is_active": true, "max_retries": 1, "model_full_name": "nimble", "modified_at": "2026-10-24T00:00:00+00:00", "router_name": "ollama", "sequence_order": 1}
+{"chain_name": "decide", "is_active": true, "max_retries": 1, "model_full_name": "strands-decider", "modified_at": "2026-10-24T00:00:00+00:00", "router_name": "ollama", "sequence_order": 2}
+{"chain_name": "decide", "is_active": true, "max_retries": 1, "model_full_name": "tev1:0.8b", "modified_at": "2026-10-24T00:00:00+00:00", "router_name": "ollama", "sequence_order": 3}
+{"chain_name": "decide", "is_active": true, "max_retries": 1, "model_full_name": "laya", "modified_at": "2026-10-24T00:00:00+00:00", "router_name": "ollama", "sequence_order": 4}

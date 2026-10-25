@@ -126,6 +126,10 @@ impl DocStore {
     }
 
     /// Tenant-partitioned content-hash dedup: an existing document with this exact hash, if any.
+    #[expect(
+        dead_code,
+        reason = "cross-doc content_hash dedup is stored-but-not-enforced — backlog (docs/plans/C5-rag-backend-build-plan.md § Phase D)"
+    )]
     pub async fn find_by_hash(
         &self,
         tenant: Uuid,

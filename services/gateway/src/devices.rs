@@ -2,15 +2,14 @@
 //!
 //! Side-effect-free helpers for the fleet read model + sync-policy write, kept out of the
 //! HTTP handlers so they unit-test without a DB or a wall clock (the caller passes `now`):
-//!   - [`buffer_verdict`]     — render the D4-8 `buffer_health` jsonb into a fleet health
-//!                              verdict (O3 §3.3). NULL-safe: a device that has never
-//!                              reported is `unknown`, not a crash (D4-8 is the writer and
-//!                              may not have landed yet).
-//!   - [`is_drifted`]         — is a device's last-synced `config_version` behind the tenant
-//!                              current (`config.config_versions.version`)?
+//!   - [`buffer_verdict`] — render the D4-8 `buffer_health` jsonb into a fleet health
+//!     verdict (O3 §3.3). NULL-safe: a device that has never reported is `unknown`, not a
+//!     crash (D4-8 is the writer and may not have landed yet).
+//!   - [`is_drifted`] — is a device's last-synced `config_version` behind the tenant
+//!     current (`config.config_versions.version`)?
 //!   - [`validate_sync_policy`] — fail-closed validation for a `sync_policy` write (O3 §3.4).
-//!   - [`stale_threshold_s`]  — operator-configurable stale threshold (env → const fallback,
-//!                              per `project-gateway-no-hardcoded-ops`; Residual #11).
+//!   - [`stale_threshold_s`] — operator-configurable stale threshold (env → const fallback,
+//!     per `project-gateway-no-hardcoded-ops`; Residual #11).
 //!
 //! Consumed by `routes::ledger::get_devices` (GET /v1/devices) and
 //! `routes::rpc::devices_set_sync_policy` (POST /rpc/devices/set-sync-policy).

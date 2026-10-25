@@ -6,23 +6,41 @@ No migrations — DDL is applied directly until the first versioned release.
 ## Prerequisites
 
 - PostgreSQL 15+ (via Supabase or self-hosted)
-- `dbd` CLI (`bun add -g dbd`)
+- `dbd` CLI at the version CI pins (`DBD_VERSION` in `.github/workflows/coverage.yml`, currently
+  0.27.5): `cargo install dbd-cli --version 0.27.5 --locked`
 - Database URL in `.env.local`
 
 ## Quick Start
 
-### 1. Apply DDL
+Run every command from `database/`.
 
-Apply all schemas, tables, functions, and procedures from the `ddl/` folder:
+### 1. A fresh database
+
+`deploy` applies every DDL entity, imports the seeds and applies the RLS policies in one step
+(`-e dev` adds the dev seeds, as `database/ci/bootstrap.sh` does):
 
 ```bash
-cd solution/database
-dbd apply
+dbd -e dev deploy
 ```
 
-### 2. Load Seed Data
+### Updating a database that already has the schema
 
-Import JSONL files into staging tables, then run import procedures:
+`dbd apply` re-applies DDL but does not add a column to a table that already exists. Reconcile the
+live schema to the design first, then deploy:
+
+```bash
+dbd -e dev reconcile --dry-run   # preview: CREATE / ALTER only
+dbd -e dev reconcile
+dbd -e dev deploy
+```
+
+`reconcile` is additive unless you pass `--allow-destructive` (dropping a column, a constraint or
+an enum value) or `--prune` (dropping tables no longer in the design). Check the dry run before
+either. A second `reconcile --dry-run` reports `Already in sync` once the database matches.
+
+### Re-loading seed data only
+
+`deploy` already imports the seeds. To re-load them alone, import the JSONL files into the staging tables and run the import procedures:
 
 ```bash
 dbd import

@@ -846,8 +846,8 @@ pub async fn post_chat_stream(
 /// The tools-enabled path: resolve the caller's default-deny `(role×space)` allow-list, then run
 /// the bounded agentic loop (offering ONLY allowed tools; every tool call enforced + redacted by
 /// the runtime). Budget is metered per model turn (reserve→commit each turn). Returns the answer
-/// + `governance.tools[]` provenance. On any resolver error we offer NO tools (fail-safe) rather
-/// than opening the surface.
+/// plus `governance.tools[]` provenance. On any resolver error we offer NO tools (fail-safe)
+/// rather than opening the surface.
 async fn post_chat_with_tools(
     claims: &Claims,
     state: &SharedState,
@@ -1159,7 +1159,15 @@ mod tests {
     // the per-call "why this model" data Activity/Requests replay.
     #[test]
     fn build_trace_captures_the_attempt_chain() {
-        use gateway::types::trace::{Attempt, AttemptStatus, TraceStatus};
+        use gateway::types::trace::{Attempt, AttemptStatus, RoutingDecision, TraceStatus};
+        let decision = RoutingDecision {
+            strategy: "price".into(),
+            degraded: true,
+            order: vec![],
+            // SP-DEC-2: the measured order this call was given. `None` is "the caller
+            // supplied no ranking", which is what this pre-System-One trace asserts.
+            ranking: None,
+        };
 
         fn attempt(
             sequence: u8,
@@ -1184,6 +1192,8 @@ mod tests {
         }
 
         let resp = InferenceResponse {
+            decisions: None,
+            routing: Some(decision.clone()),
             success: true,
             content: Some("hi".into()),
             embeddings: None,
@@ -1191,11 +1201,9 @@ mod tests {
             audio: None,
             images: None,
             videos: None,
-            decisions: None,
             model: Some("gemma2:2b".into()),
             usage: None,
             tool_calls: Vec::new(),
-            routing: None,
             estimated_cost: None,
             actual_cost: None,
             attempts: vec![
@@ -1221,6 +1229,9 @@ mod tests {
         let call_id = Uuid::new_v4();
         let now = Utc::now();
         let stored = build_trace(call_id, Capability::TextChat, &resp, 1_500, now);
+        // gateway 0.6+: the routing decision (strategy, degraded, ranked order) the engine made
+        // is the other half of "why this model" — the trace must keep it, not drop it.
+        assert_eq!(stored.trace.routing, Some(decision));
 
         assert_eq!(stored.inference_call_id, Some(call_id));
         assert_eq!(stored.trace.request_id, call_id.to_string());

@@ -121,7 +121,7 @@ pub async fn create_document(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.write").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // No cross-space injection: registering INTO a space requires membership/ownership of it.
     if let Some(space) = body.space_id {
@@ -182,7 +182,7 @@ pub async fn ingest_document(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.write").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if !can_access_doc(&state.pool, tenant, actor, id).await {
         return (StatusCode::NOT_FOUND, "document not found").into_response();
@@ -209,6 +209,10 @@ pub struct ReingestQuery {
     /// Optional stage to resume from (accepted for API stability; v1 always re-runs the full
     /// pipeline — a resumable partial re-run is a tracked follow-up).
     #[serde(default)]
+    #[expect(
+        dead_code,
+        reason = "C5 spec `reingest?from=<stage>` (docs/specs/C5-rag-document-intelligence.md); resumable partial re-run not built yet"
+    )]
     pub from: Option<String>,
 }
 
@@ -223,7 +227,7 @@ pub async fn reingest_document(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.write").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if !can_access_doc(&state.pool, tenant, actor, id).await {
         return (StatusCode::NOT_FOUND, "document not found").into_response();
@@ -270,7 +274,7 @@ pub async fn get_document(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.read").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let sql = format!(
         "select json_build_object( \
@@ -334,7 +338,7 @@ pub async fn list_documents(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.read").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let sql = format!(
         "select coalesce(json_agg(t order by t.created_at desc), '[]'::json) from ( \
@@ -366,6 +370,17 @@ pub async fn list_documents(
     }
 }
 
+/// One `public.document_assets` row as listed by [`get_assets`].
+type AssetListRow = (
+    Uuid,           // id
+    String,         // kind
+    Option<String>, // storage_path
+    Option<String>, // label
+    Option<i32>,    // sequence
+    Option<i32>,    // page_ref
+    Option<String>, // caption
+);
+
 /// `GET /v1/documents/{id}/assets` — capability `doc.read`, then the read predicate on the PARENT
 /// doc (404 if excluded — no existence leak). Only THEN are `document_assets` listed, each with a
 /// freshly-minted short-lived signed download URL. A URL that fails to mint is returned as `null`
@@ -377,7 +392,7 @@ pub async fn get_assets(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.read").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // Read predicate on the parent doc FIRST (404 if excluded — assets inherit the doc's access).
     let readable_sql = format!(
@@ -400,15 +415,7 @@ pub async fn get_assets(
         return (StatusCode::NOT_FOUND, "document not found").into_response();
     }
 
-    let assets: Vec<(
-        Uuid,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<i32>,
-        Option<i32>,
-        Option<String>,
-    )> = match sqlx::query_as(
+    let assets: Vec<AssetListRow> = match sqlx::query_as(
         "select id, kind::text, storage_path, label, sequence, page_ref, caption \
                from public.document_assets \
               where tenant_id = $1 and document_id = $2 \
@@ -462,7 +469,7 @@ pub async fn delete_document(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.delete").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     // Can't delete a doc you can't see (narrows doc.delete from tenant-wide to accessible docs).
     if !can_access_doc(&state.pool, tenant, actor, id).await {

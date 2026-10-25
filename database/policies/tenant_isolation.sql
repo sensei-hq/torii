@@ -27,6 +27,10 @@ begin
     -- service_role. Curated membership is as privileged as the chain it feeds.
     ('catalog', 'tiers'),
     ('catalog', 'tier_models'),
+    -- Phase 4: the ranking quality margin is routing config in the same class as
+    -- chains. The `tenant_id is null` platform default is service_role-only (the
+    -- predicate never matches NULL), which is where the resolver reads it.
+    ('catalog', 'ranking_policies'),
     ('public', 'spaces'),
     ('public', 'space_members'),
     ('governance', 'nodes'),  -- §D Phase 5: was public.budget_nodes (budget cap facet)

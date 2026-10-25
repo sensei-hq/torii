@@ -50,6 +50,11 @@ create unique index if not exists model_rankings_order_ukey
 create index if not exists model_rankings_category_idx
   on model_rankings(category, rank);
 
+-- The resolver's access path: "the ranked models of this category" (Phase 4), filtered
+-- by verdict because a tie/insufficient category contributes no order at all.
+create index if not exists model_rankings_ranked_idx
+  on model_rankings(category, verdict, rank);
+
 create index if not exists model_rankings_corpus_idx
   on model_rankings(corpus_sha, artifact_sha);
 

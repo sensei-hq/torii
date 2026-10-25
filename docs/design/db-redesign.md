@@ -40,11 +40,14 @@ Schemas map to **coarse domain × shared security posture**, organized on two ax
 | `content` | knowledge + **workspace** + **chat** + templates | User content/collaboration: spaces + membership, documents/RAG/datasets/redactions/rag-profiles, conversation threads/messages/citations, prompt templates. Owner-self + classification-aware. |
 | `audit` | audit + **history** | The change/event **record**: append-only audit_events + alerting (rules/events/channels) + siem_cursors, **and** the `past_<table>` SCD-2 twins (audit + history go hand in hand). Deny-all/service_role for `past_*` (tenant-scoped, see §7-#2); tenant-read append-only for `audit_events`. |
 | `device` | device + **tools** | Edge/integration: device fleet (enroll/revoke/snapshots/buffers/local-models) + MCP servers/tools/allow-lists. |
+| `registry` | **agents** (v2 runtime, definitions) | Orchestrator agent/skill/tool definitions + (area, kind) → chain-name bindings, per tenant; published replace-all, versioned by the `registry` component of `config_versions` (`registry.bump_generation`). Service_role-write, tenant SELECT-only. (TM-6, torii#24) |
+| `runs` | **agents** (v2 runtime, execution) | Orchestrator run state: schedule/lease, append-only journal, snapshots, per-tenant CAS blobs, scoped blackboard. Service_role-write, tenant SELECT-only. (TM-6, torii#24) |
 | `staging` | — | dbd import staging (unchanged, ignored; infra) |
 
 **8 app schemas** (`vault, core, catalog, governance, metering, content, audit, device`) + `extensions`/`staging` (infra).
 **`agents`/workflows (v2)** is *not* a v1 schema — it lands as its own schema when the v2 runtime is
-scheduled (design captured in §2 for continuity). `public` ceases to hold application tables. The §2
+scheduled (design captured in §2 for continuity). **Scheduled (TM-6, torii#24):** the gateway orchestrator's durable state landed as
+`registry` + `runs` (rows above) — DECISIONS §11, "Gateway is a library; torii owns persistence". `public` ceases to hold application tables. The §2
 catalog is grouped by *sub-domain* (rbac, routing, budget, workspace, chat, content, tools, billing,
 history, agents) — read each `#### <sub-domain>` as "→ lives in `<parent schema>`" per this table.
 

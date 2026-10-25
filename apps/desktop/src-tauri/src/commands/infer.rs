@@ -147,6 +147,7 @@ mod tests {
         let gw = crate::gateway::build_gateway().await;
 
         let req = InferenceRequest {
+            routing: None, // no per-request provider routing preferences
             capability: Capability::TextChat,
             model: Some("gemma2:2b".into()),
             router: None,
@@ -164,8 +165,6 @@ mod tests {
             budget: None,
             // MIG-3 (v0.4.6): AUTH/panel/consensus addressing — unused on the local plane.
             auth: None,
-            // SP-ROUTE-1: the local chain's own order is the policy.
-            routing: None,
             panel: None,
             consensus: None,
             // gateway v0.5.0 added these to `InferenceRequest`; mirror the non-test path.

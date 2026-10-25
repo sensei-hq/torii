@@ -1,0 +1,1194 @@
+//! TM-8c (torii#26) done-when, at the BINARY: the `torii` built from this repo runs
+//! submit → pause → signal → worker → completion against torii's database for one tenant, and
+//! `config push` writes that tenant's registry and bumps only that tenant's generation. The
+//! gateway config is torii's catalog throughout — no `--gateway-config` anywhere.
+//!
+//! The graph's only node waits for a human (`AwaitSignal`), so the run needs no model.
+
+use orchestrator_core::{ConfigSource, Graph, Node, NodeId, NodeKind};
+use std::process::{Command, Output};
+
+fn torii() -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_torii"));
+    for k in [
+        "DATABASE_URL",
+        "TORII_TENANT",
+        "TORII_FENCE_VERSION",
+        "TORII_BACKEND",
+        "TORII_REGISTRY_DIR",
+        "TORII_USER",
+    ] {
+        c.env_remove(k);
+    }
+    c
+}
+
+/// A tenant of the test's own, removed on drop (also when the test panicked).
+///
+/// AG-13: it has an org root with an UNCAPPED budget node and one user in it — the issuer every
+/// `torii()` of this tenant runs as (`TORII_USER`) — so a submit is charged and never limited.
+struct Tenant {
+    url: String,
+    id: uuid::Uuid,
+    slug: String,
+    root: uuid::Uuid,
+    user: uuid::Uuid,
+}
+
+impl Tenant {
+    async fn new(url: &str) -> Tenant {
+        let id = uuid::Uuid::new_v4();
+        let slug = format!("torii-bin-{id}");
+        let pool = torii_core::connect(url, 1).await.expect("connect");
+        sqlx::query(
+            "insert into core.tenants (id, name, slug, modified_by) values ($1, $2, $2, 'torii-bin')",
+        )
+        .bind(id)
+        .bind(&slug)
+        .execute(&pool)
+        .await
+        .expect("create the test tenant");
+        let mut t = Tenant {
+            url: url.to_string(),
+            id,
+            slug,
+            root: uuid::Uuid::new_v4(),
+            user: uuid::Uuid::nil(),
+        };
+        sqlx::query(
+            "insert into core.unit_levels (tenant_id, level, label) \
+             select $1, l, 'L' || l from generate_series(0, 4) l",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .expect("the test tenant's unit levels");
+        for q in [
+            "insert into core.org_units (tenant_id, id, parent_id, level, name) \
+             values ($1, $2, null, 0, 'Org')",
+            "insert into governance.nodes (tenant_id, id, org_unit_id, modified_by) \
+             values ($1, $2, $2, 'torii-bin')",
+        ] {
+            sqlx::query(q)
+                .bind(id)
+                .bind(t.root)
+                .execute(&pool)
+                .await
+                .expect("the test tenant's org root");
+        }
+        t.user = t.member(t.root).await;
+        t
+    }
+
+    /// A new user of this tenant, a member of `unit`.
+    async fn member(&self, unit: uuid::Uuid) -> uuid::Uuid {
+        let pool = torii_core::connect(&self.url, 1).await.expect("connect");
+        let user = uuid::Uuid::new_v4();
+        sqlx::query("insert into core.profiles (id, display_name) values ($1, 'torii-bin')")
+            .bind(user)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "insert into core.memberships (profile_id, tenant_id, assigned_by) \
+             values ($1, $2, 'torii-bin')",
+        )
+        .bind(user)
+        .bind(self.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into core.unit_members (tenant_id, unit_id, profile_id) values ($1, $2, $3)",
+        )
+        .bind(self.id)
+        .bind(unit)
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+        user
+    }
+
+    /// A `hard`-capped team under the root, with `spent` already spent, and a new user in it.
+    async fn capped_member(&self, cap: &str, spent: &str) -> uuid::Uuid {
+        let pool = torii_core::connect(&self.url, 1).await.expect("connect");
+        let team = uuid::Uuid::new_v4();
+        sqlx::query(
+            "insert into core.org_units (tenant_id, id, parent_id, level, name) \
+             values ($1, $2, $3, 2, 'Capped Team')",
+        )
+        .bind(self.id)
+        .bind(team)
+        .bind(self.root)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into governance.nodes \
+               (tenant_id, id, org_unit_id, cap_amount, enforcement, spent_amount, modified_by) \
+             values ($1, $2, $2, $3::numeric, 'hard', $4::numeric, 'torii-bin')",
+        )
+        .bind(self.id)
+        .bind(team)
+        .bind(cap)
+        .bind(spent)
+        .execute(&pool)
+        .await
+        .unwrap();
+        self.member(team).await
+    }
+
+    /// `torii` for this tenant — by SLUG, the way an operator names it — as its user.
+    fn torii(&self) -> Command {
+        let mut c = torii();
+        c.env("DATABASE_URL", &self.url)
+            .env("TORII_TENANT", &self.slug)
+            .env("TORII_USER", self.user.to_string());
+        c
+    }
+
+    async fn generation(&self) -> Option<u64> {
+        let pool = torii_core::connect(&self.url, 1).await.expect("connect");
+        torii_core::TenantStores::open(&pool, self.id)
+            .config
+            .version()
+            .await
+            .expect("version")
+    }
+}
+
+impl Drop for Tenant {
+    fn drop(&mut self) {
+        let (url, id) = (self.url.clone(), self.id);
+        let _ = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            rt.block_on(async move {
+                use sqlx::Connection;
+                if let Ok(mut c) = sqlx::PgConnection::connect(&url).await {
+                    // Its users first: a membership holds the tenant (`on delete restrict`).
+                    let _ = sqlx::query(
+                        "delete from core.profiles where id in \
+                           (select profile_id from core.memberships where tenant_id = $1)",
+                    )
+                    .bind(id)
+                    .execute(&mut c)
+                    .await;
+                    let _ = sqlx::query("delete from core.tenants where id = $1")
+                        .bind(id)
+                        .execute(&mut c)
+                        .await;
+                }
+            });
+        })
+        .join();
+    }
+}
+
+fn db_url() -> Option<String> {
+    let url = std::env::var("DATABASE_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    if url.is_none() {
+        use std::io::Write;
+        let name = std::thread::current()
+            .name()
+            .unwrap_or("<unnamed test>")
+            .to_string();
+        let _ =
+            std::io::stderr().write_all(format!("SKIP {name}: DATABASE_URL not set\n").as_bytes());
+    }
+    url
+}
+
+/// A registry dir with one agent bound to `chain`.
+fn registry(dir: &std::path::Path, chain: &str) -> std::path::PathBuf {
+    let reg = dir.join(format!("registry-{chain}"));
+    std::fs::create_dir_all(reg.join("agents")).unwrap();
+    std::fs::write(
+        reg.join("agents/researcher.md"),
+        format!(
+            "---\nname: researcher\narea: research\nkind: lead\nchain: {chain}\ntools: []\nskills: []\n---\nYou research.\n"
+        ),
+    )
+    .unwrap();
+    reg
+}
+
+fn ok(out: &Output) -> String {
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        out.status.success(),
+        "exit {:?}\nstdout: {stdout}\nstderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    stdout
+}
+
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn config_push_writes_the_tenants_registry_and_bumps_only_its_generation() {
+    let Some(url) = db_url() else { return };
+    let (a, b) = (Tenant::new(&url).await, Tenant::new(&url).await);
+    let dir = tempfile::tempdir().unwrap();
+
+    // A chain torii's catalog does not define is refused — the check is always on.
+    let out = a
+        .torii()
+        .args(["config", "push", "--yes"])
+        .arg(registry(dir.path(), "torii-chain-nobody-defined"))
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("torii-chain-nobody-defined") && err.contains("torii's catalog"),
+        "{err}"
+    );
+    assert_eq!(
+        a.generation().await,
+        Some(0),
+        "a refused push writes nothing"
+    );
+
+    // A chain the catalog defines lands — for A only.
+    ok(&a
+        .torii()
+        .args(["config", "push", "--yes"])
+        .arg(registry(dir.path(), "chat"))
+        .output()
+        .expect("spawn"));
+    assert_eq!(a.generation().await, Some(1), "A's generation moved");
+    assert_eq!(b.generation().await, Some(0), "B's generation did not");
+    let version = ok(&a
+        .torii()
+        .args(["config", "version"])
+        .output()
+        .expect("spawn"));
+    assert_eq!(
+        version.trim(),
+        "config version: 1",
+        "the CLI reads the same tenant's generation"
+    );
+}
+
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn a_run_submitted_on_postgres_pauses_is_signalled_and_a_worker_completes_it() {
+    let Some(url) = db_url() else { return };
+    let t = Tenant::new(&url).await;
+    let dir = tempfile::tempdir().unwrap();
+    ok(&t
+        .torii()
+        .args(["config", "push", "--yes"])
+        .arg(registry(dir.path(), "chat"))
+        .output()
+        .expect("spawn"));
+
+    let graph = dir.path().join("graph.json");
+    let g = Graph {
+        nodes: vec![Node {
+            id: NodeId("gate".into()),
+            kind: NodeKind::AwaitSignal { timeout: None },
+            deps: vec![],
+        }],
+    };
+    std::fs::write(&graph, serde_json::to_string(&g).unwrap()).unwrap();
+
+    // Submit: drives to the durable pause. No --gateway-config: the catalog is the config.
+    let submit = t
+        .torii()
+        .env("TORII_FENCE_VERSION", "v1")
+        .args(["run", "submit", "--graph"])
+        .arg(&graph)
+        .output()
+        .expect("spawn");
+    let submitted = ok(&submit);
+    // AG-18: the submit drive's run events reach the operator's log.
+    let log = String::from_utf8_lossy(&submit.stderr);
+    assert!(
+        log.contains(r#""type":"signal_awaited""#) && log.contains(r#""node":"gate""#),
+        "run submit must log the drive's run events:\n{log}"
+    );
+    let run = submitted
+        .lines()
+        .find_map(|l| l.strip_prefix("submitted: "))
+        .expect("the run id is announced")
+        .trim()
+        .to_string();
+    assert!(
+        submitted.contains("paused: ") && submitted.contains("at node gate"),
+        "{submitted}"
+    );
+
+    // The human answers, in another process.
+    ok(&t
+        .torii()
+        .args(["run", "signal", &run, "--node", "gate", "--payload"])
+        .arg(r#"{"decision":"approved"}"#)
+        .output()
+        .expect("spawn"));
+
+    // A worker — a third process — drives it home.
+    let worker = t
+        .torii()
+        .env("TORII_FENCE_VERSION", "v1")
+        .args(["worker", "serve", "--once"])
+        .output()
+        .expect("spawn");
+    ok(&worker);
+    // AG-18: and the worker drive reports the decision it honoured.
+    let log = String::from_utf8_lossy(&worker.stderr);
+    assert!(
+        log.contains(r#""type":"signal_received""#) && log.contains(r#""decision":"approved""#),
+        "worker serve must log the decision its drive honoured:\n{log}"
+    );
+
+    let status = ok(&t
+        .torii()
+        .args(["run", "status", &run, "--json"])
+        .output()
+        .expect("spawn"));
+    assert!(status.contains("completed"), "{status}");
+
+    // AG-13: the worker that finished the run recorded its final spend on the issuer's budget
+    // nodes and closed its charge (the submit, which left it paused, could not).
+    let pool = torii_core::connect(&t.url, 1).await.expect("connect");
+    let settled: bool = sqlx::query_scalar(
+        "select settled from runs.run_charges where tenant_id = $1 and run_id = $2::uuid",
+    )
+    .bind(t.id)
+    .bind(&run)
+    .fetch_one(&pool)
+    .await
+    .expect("the run was charged to TORII_USER");
+    assert!(settled, "worker serve settles the runs it drives");
+
+    // And the run is this tenant's: another tenant does not see it.
+    let other = Tenant::new(&url).await;
+    let out = other
+        .torii()
+        .args(["run", "status", &run])
+        .output()
+        .expect("spawn");
+    assert!(
+        !out.status.success(),
+        "another tenant must not find the run"
+    );
+}
+
+/// On Postgres the gateway config IS torii's catalog: `config push --gateway-config <file>` is
+/// refused outright — even when the file defines the chain the registry needs — so a push can
+/// never be checked against a source the API never sees, and nothing is written.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn config_push_refuses_a_gateway_config_file_on_postgres_and_writes_nothing() {
+    let Some(url) = db_url() else { return };
+    let t = Tenant::new(&url).await;
+    let dir = tempfile::tempdir().unwrap();
+    let gw = dir.path().join("gw.json");
+    std::fs::write(
+        &gw,
+        r#"{"routers":{"ollama":{"url":"http://127.0.0.1:11434"}},
+            "chains":{"file-only-chain":{"id":"file-only-chain","capability":"text_chat","models":[],"fallback_triggers":[]}}}"#,
+    )
+    .unwrap();
+    let out = t
+        .torii()
+        .args(["config", "push", "--yes", "--gateway-config"])
+        .arg(&gw)
+        .arg(registry(dir.path(), "file-only-chain"))
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success(), "a file must be refused on postgres");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--gateway-config is not accepted"), "{err}");
+    assert_eq!(t.generation().await, Some(0), "nothing was pushed");
+}
+
+/// AG-15: the tool-policy and escalation keys survive `config push` → torii's Postgres
+/// registry → load, exactly as authored — and a second push of the same directory is a no-op,
+/// so the durable form is byte-stable (a key dropped or reshaped on the way in would show up
+/// as a "changed" agent on every push).
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn ag15_agent_policy_keys_round_trip_through_the_postgres_registry() {
+    let Some(url) = db_url() else { return };
+    let t = Tenant::new(&url).await;
+    let dir = tempfile::tempdir().unwrap();
+    let reg = dir.path().join("registry-ag15");
+    std::fs::create_dir_all(reg.join("agents")).unwrap();
+    std::fs::create_dir_all(reg.join("tools")).unwrap();
+    std::fs::write(
+        reg.join("tools/deploy.json"),
+        r#"{"name":"deploy","description":"ship it","input_schema":{},"effect_class":"Pure","ttl_secs":null,"source":null}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join("agents/deployer.md"),
+        "---\nname: deployer\narea: ops\nkind: deploy\nchain: chat\ntools: [deploy]\nskills: []\n\
+         tool_limits: [deploy=2]\nconfirm_tools: [deploy]\nconfirm_timeout: 2h\n---\nYou deploy.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join("agents/reviewer.md"),
+        "---\nname: reviewer\narea: review\nkind: lead\ntools: []\nskills: []\n\
+         backed_by: human\ntimeout: 1h\nescalate_to: lead\n---\nYou review.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join("agents/lead.md"),
+        "---\nname: lead\narea: review\nkind: escalation\ntools: []\nskills: []\n\
+         backed_by: human\ntimeout: 2h\n---\nYou decide.\n",
+    )
+    .unwrap();
+
+    ok(&t
+        .torii()
+        .args(["config", "push", "--yes"])
+        .arg(&reg)
+        .output()
+        .expect("spawn"));
+
+    let pool = torii_core::connect(&url, 1).await.expect("connect");
+    let (cfg, _) = torii_core::TenantStores::open(&pool, t.id)
+        .config
+        .load_versioned()
+        .await
+        .expect("load");
+    let agent = |n: &str| {
+        cfg.agents
+            .iter()
+            .find(|a| a.name == n)
+            .unwrap_or_else(|| panic!("{n} was not stored: {cfg:?}"))
+            .clone()
+    };
+    let deployer = agent("deployer");
+    assert_eq!(deployer.tool_limits.get("deploy"), Some(&2), "{deployer:?}");
+    assert_eq!(deployer.confirm_tools, vec!["deploy".to_string()]);
+    assert_eq!(deployer.confirm_timeout, Some(chrono::Duration::hours(2)));
+    assert_eq!(agent("reviewer").escalate_to.as_deref(), Some("lead"));
+    assert_eq!(agent("lead").escalate_to, None);
+
+    let again = ok(&t
+        .torii()
+        .args(["config", "push", "--yes"])
+        .arg(&reg)
+        .output()
+        .expect("spawn"));
+    assert!(
+        again.contains("no changes"),
+        "the stored policy must compare equal to what was authored: {again}"
+    );
+}
+
+/// AG-4 (#33) done-when, at the BINARY on Postgres, per tenant: `torii run results` returns a
+/// completed run's node outputs — one small enough to sit inline in the executor's checkpoint,
+/// and one over the CAS threshold that is stored as a ref into the tenant's CAS and has to be
+/// resolved — and another tenant asking for the same run gets the not-found every unknown run
+/// gets, with nothing of the run in it.
+///
+/// No model: `gate` waits for a signal and `review` is a human-backed role, so the two outputs
+/// are a signal payload and a human answer. The answer is sized so the node's output
+/// (`{text, actor}`) serializes past the executor's 4096-byte CAS threshold while the text
+/// itself stays under the 4096-byte answer cap.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn run_results_returns_a_completed_runs_outputs_incl_a_cas_ref_and_another_tenant_gets_not_found()
+ {
+    let Some(url) = db_url() else { return };
+    let t = Tenant::new(&url).await;
+    let dir = tempfile::tempdir().unwrap();
+    let reg = dir.path().join("registry-results");
+    std::fs::create_dir_all(reg.join("agents")).unwrap();
+    std::fs::write(
+        reg.join("agents/reviewer.md"),
+        "---\nname: reviewer\narea: review\nkind: lead\ntools: []\nskills: []\n\
+         backed_by: human\n---\nYou review.\n",
+    )
+    .unwrap();
+    ok(&t
+        .torii()
+        .args(["config", "push", "--yes"])
+        .arg(&reg)
+        .output()
+        .expect("spawn"));
+
+    let graph = dir.path().join("graph.json");
+    let g = Graph {
+        nodes: vec![
+            Node {
+                id: NodeId("gate".into()),
+                kind: NodeKind::AwaitSignal { timeout: None },
+                deps: vec![],
+            },
+            Node {
+                id: NodeId("review".into()),
+                kind: NodeKind::Agent {
+                    agent: orchestrator_core::AgentRef("reviewer".into()),
+                    input: serde_json::json!("review clause 7"),
+                    phase: None,
+                },
+                deps: vec![],
+            },
+        ],
+    };
+    std::fs::write(&graph, serde_json::to_string(&g).unwrap()).unwrap();
+    let submitted = ok(&t
+        .torii()
+        .env("TORII_FENCE_VERSION", "v1")
+        .args(["run", "submit", "--graph"])
+        .arg(&graph)
+        .output()
+        .expect("spawn"));
+    let run = submitted
+        .lines()
+        .find_map(|l| l.strip_prefix("submitted: "))
+        .expect("the run id is announced")
+        .trim()
+        .to_string();
+
+    ok(&t
+        .torii()
+        .args(["run", "signal", &run, "--node", "gate", "--payload"])
+        .arg(r#"{"decision":"approved"}"#)
+        .output()
+        .expect("spawn"));
+    let answer: String = "clause seven reads fine. "
+        .repeat(200)
+        .chars()
+        .take(4090)
+        .collect();
+    let answer_file = dir.path().join("answer.txt");
+    std::fs::write(&answer_file, &answer).unwrap();
+    ok(&t
+        .torii()
+        .args([
+            "run", "agent", "answer", &run, "--node", "review", "--as", "alice",
+        ])
+        .arg("--text-file")
+        .arg(&answer_file)
+        .output()
+        .expect("spawn"));
+    ok(&t
+        .torii()
+        .env("TORII_FENCE_VERSION", "v1")
+        .args(["worker", "serve", "--once"])
+        .output()
+        .expect("spawn"));
+
+    // The text table: both nodes, the CAS-stored one marked as such.
+    let table = ok(&t
+        .torii()
+        .args(["run", "results", &run])
+        .output()
+        .expect("spawn"));
+    assert!(table.contains("completed"), "{table}");
+    assert!(
+        table
+            .lines()
+            .any(|l| l.starts_with("gate") && l.contains("approved")),
+        "{table}"
+    );
+    assert!(
+        table
+            .lines()
+            .any(|l| l.starts_with("review") && l.contains("cas ")),
+        "{table}"
+    );
+
+    // --json: the whole result, the CAS ref resolved to the answer.
+    let json: serde_json::Value = serde_json::from_str(&ok(&t
+        .torii()
+        .args(["run", "results", &run, "--json"])
+        .output()
+        .expect("spawn")))
+    .expect("--json is JSON");
+    assert_eq!(json["run"], serde_json::json!(run));
+    assert_eq!(json["status"], "completed");
+    let nodes = json["nodes"].as_array().expect("nodes");
+    let node = |id: &str| {
+        nodes
+            .iter()
+            .find(|n| n["node"] == id)
+            .unwrap_or_else(|| panic!("no {id}: {json}"))
+            .clone()
+    };
+    assert_eq!(node("gate")["stored"]["kind"], "inline", "{json}");
+    assert_eq!(node("gate")["output"]["decision"], "approved", "{json}");
+    let review = node("review");
+    assert_eq!(review["stored"]["kind"], "cas", "{json}");
+    assert_eq!(review["output"]["text"], serde_json::json!(answer));
+    assert_eq!(review["output"]["actor"], "alice");
+    // The ref really is a blob in THIS tenant's CAS.
+    let digest = review["stored"]["digest"]
+        .as_str()
+        .expect("digest")
+        .to_string();
+    let pool = torii_core::connect(&url, 1).await.expect("connect");
+    let (n,): (i64,) =
+        sqlx::query_as("select count(*) from runs.cas_blobs where tenant_id = $1 and digest = $2")
+            .bind(t.id)
+            .bind(&digest)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(n, 1, "the review output lives in the tenant's CAS");
+
+    // --node: one node.
+    let one: serde_json::Value = serde_json::from_str(&ok(&t
+        .torii()
+        .args(["run", "results", &run, "--node", "review", "--json"])
+        .output()
+        .expect("spawn")))
+    .expect("--node --json is JSON");
+    assert_eq!(one["node"], "review");
+    assert_eq!(one["output"]["text"], serde_json::json!(answer));
+    let text = ok(&t
+        .torii()
+        .args(["run", "results", &run, "--node", "review"])
+        .output()
+        .expect("spawn"));
+    assert!(
+        text.contains(&answer),
+        "--node prints the whole output: {text}"
+    );
+
+    // Another tenant: the same not-found as a run that never existed — nothing of the run.
+    let other = Tenant::new(&url).await;
+    let never = uuid::Uuid::new_v4().to_string();
+    for json in [false, true] {
+        let ask = |id: &str| {
+            let mut c = other.torii();
+            c.args(["run", "results", id]);
+            if json {
+                c.arg("--json");
+            }
+            c.output().expect("spawn")
+        };
+        let (theirs, missing) = (ask(&run), ask(&never));
+        assert_eq!(theirs.status.code(), Some(2), "{theirs:?}");
+        assert_eq!(missing.status.code(), Some(2), "{missing:?}");
+        let theirs_out = String::from_utf8_lossy(&theirs.stdout).replace(&run, "<id>");
+        let missing_out = String::from_utf8_lossy(&missing.stdout).replace(&never, "<id>");
+        assert_eq!(
+            theirs_out, missing_out,
+            "another tenant's run must read exactly like no run at all"
+        );
+        assert!(!theirs_out.contains("approved") && !theirs_out.contains("clause"));
+    }
+}
+
+/// A registry using every file of the layout: AG-15 policy keys, a human-backed escalation
+/// chain, a keyword skill, a tool, chain bindings and per-tool grants.
+fn rich_registry(dir: &std::path::Path, tag: &str) -> std::path::PathBuf {
+    let reg = dir.join(format!("registry-rich-{tag}"));
+    for sub in ["agents", "skills", "tools"] {
+        std::fs::create_dir_all(reg.join(sub)).unwrap();
+    }
+    std::fs::write(
+        reg.join("tools/deploy.json"),
+        r#"{"name":"deploy","description":"ship it","input_schema":{"type":"object"},"effect_class":"Mutation","ttl_secs":null,"source":null,"credentials":["github"]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join("skills/careful.md"),
+        "---\nname: careful\ndescription: Be careful: always\nactivate_on: [deploy, ship]\n---\nCheck twice.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join(format!("agents/deployer-{tag}.md")),
+        format!(
+            "---\nname: deployer-{tag}\narea: ops\nkind: deploy\nchains: [plan=chat]\ntools: [deploy]\n\
+             skills: [careful]\ntool_limits: [deploy=2]\nconfirm_tools: [deploy]\n\
+             confirm_timeout: 90m\n---\nYou deploy.\n\n---\nA rule line in the body.\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join("agents/reviewer.md"),
+        "---\nname: reviewer\narea: review\nkind: lead\ntools: []\nskills: []\n\
+         backed_by: human\ntimeout: 1h\nescalate_to: lead\n---\nYou review.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join("agents/lead.md"),
+        "---\nname: lead\narea: review\nkind: escalation\ntools: []\nskills: []\n\
+         backed_by: human\ntimeout: 2d\n---\nYou decide.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join("chains.json"),
+        r#"[{"area":"ops","kind":"deploy","chain":"chat"}]"#,
+    )
+    .unwrap();
+    std::fs::write(
+        reg.join("grants.json"),
+        format!(
+            r#"{{"deployer-{tag}":{{"deploy":{{"commands":["git"],"network":{{"Hosts":["github.com"]}}}}}}}}"#
+        ),
+    )
+    .unwrap();
+    reg
+}
+
+/// AG-6 (#35) done-when, at the BINARY on Postgres: `config pull` then `config push` of the
+/// result is a no-op, per tenant — and neither `config show` nor `config pull` of one tenant
+/// ever carries another tenant's registry.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn config_pull_then_push_is_a_no_op_per_tenant_and_never_shows_another_tenant() {
+    let Some(url) = db_url() else { return };
+    let (a, b) = (Tenant::new(&url).await, Tenant::new(&url).await);
+    let dir = tempfile::tempdir().unwrap();
+    for (t, tag) in [(&a, "alpha"), (&b, "beta")] {
+        ok(&t
+            .torii()
+            .args(["config", "push", "--yes"])
+            .arg(rich_registry(dir.path(), tag))
+            .output()
+            .expect("spawn"));
+    }
+
+    for (t, mine, theirs) in [(&a, "alpha", "beta"), (&b, "beta", "alpha")] {
+        let shown: serde_json::Value = serde_json::from_str(&ok(&t
+            .torii()
+            .args(["config", "show"])
+            .output()
+            .expect("spawn")))
+        .expect("config show prints JSON");
+        assert_eq!(shown["generation"], 1, "{shown}");
+        let names: Vec<String> = shown["registry"]["agents"]
+            .as_array()
+            .expect("agents")
+            .iter()
+            .map(|a| a["name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            [format!("deployer-{mine}"), "lead".into(), "reviewer".into()],
+            "show carries this tenant's agents only"
+        );
+        assert!(!shown.to_string().contains(theirs), "{shown}");
+
+        let pulled = dir.path().join(format!("pulled-{mine}"));
+        let out = ok(&t
+            .torii()
+            .args(["config", "pull"])
+            .arg(&pulled)
+            .output()
+            .expect("spawn"));
+        assert!(out.contains("pulled config v1"), "{out}");
+        let grants = std::fs::read_to_string(pulled.join("grants.json")).unwrap();
+        assert!(grants.contains(&format!("deployer-{mine}")), "{grants}");
+        for entry in walk(&pulled) {
+            let text = std::fs::read_to_string(&entry).unwrap();
+            assert!(
+                !text.contains(theirs),
+                "{} carries the other tenant's registry: {text}",
+                entry.display()
+            );
+        }
+
+        let again = ok(&t
+            .torii()
+            .args(["config", "push", "--yes"])
+            .arg(&pulled)
+            .output()
+            .expect("spawn"));
+        assert!(
+            again.contains("no changes"),
+            "pushing a pull of the live registry must change nothing: {again}"
+        );
+        assert_eq!(t.generation().await, Some(1), "a no-op push bumps nothing");
+    }
+}
+
+/// Every file under `root`, recursively.
+fn walk(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(root).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() {
+            out.extend(walk(&p));
+        } else {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// A `worker serve` child, killed on drop (also when the test panicked), its stderr in a file.
+struct Worker {
+    child: std::process::Child,
+    log: std::path::PathBuf,
+}
+
+impl Worker {
+    fn log(&self) -> String {
+        std::fs::read_to_string(&self.log).unwrap_or_default()
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// **AG-5 Done-when, at the binary:** a LONG-RUNNING `torii worker serve` (no `--once`) follows a
+/// `config push` without a restart. It boots at generation 1; the operator pushes generation 2;
+/// a run submitted under generation 2 is signalled; and that same worker process drives it to
+/// `completed`. A worker frozen at its boot generation refuses the run at the config fence and
+/// files it `failed`.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn a_long_running_worker_serve_follows_a_config_push_without_restarting() {
+    let Some(url) = db_url() else { return };
+    let t = Tenant::new(&url).await;
+    let dir = tempfile::tempdir().unwrap();
+    ok(&t
+        .torii()
+        .args(["config", "push", "--yes"])
+        .arg(registry(dir.path(), "chat"))
+        .output()
+        .expect("spawn"));
+    assert_eq!(t.generation().await, Some(1), "precondition");
+
+    let log = dir.path().join("worker.log");
+    let worker = Worker {
+        child: t
+            .torii()
+            .env("TORII_FENCE_VERSION", "v1")
+            .env("RUST_LOG", "info")
+            .args(["worker", "serve", "--interval", "50ms"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::fs::File::create(&log).unwrap())
+            .spawn()
+            .expect("spawn worker serve"),
+        log,
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !worker.log().contains("registry loaded") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the worker never booted:\n{}",
+            worker.log()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    // Generation 2: a different registry, pushed while the worker runs.
+    let reg2 = dir.path().join("registry-2");
+    std::fs::create_dir_all(reg2.join("agents")).unwrap();
+    std::fs::write(
+        reg2.join("agents/reviewer.md"),
+        "---\nname: reviewer\narea: review\nkind: lead\nchain: chat\ntools: []\nskills: []\n---\nYou review.\n",
+    )
+    .unwrap();
+    ok(&t
+        .torii()
+        .args(["config", "push", "--yes"])
+        .arg(&reg2)
+        .output()
+        .expect("spawn"));
+    assert_eq!(t.generation().await, Some(2), "precondition");
+
+    let graph = dir.path().join("graph.json");
+    let g = Graph {
+        nodes: vec![Node {
+            id: NodeId("gate".into()),
+            kind: NodeKind::AwaitSignal { timeout: None },
+            deps: vec![],
+        }],
+    };
+    std::fs::write(&graph, serde_json::to_string(&g).unwrap()).unwrap();
+    let submitted = ok(&t
+        .torii()
+        .env("TORII_FENCE_VERSION", "v1")
+        .args(["run", "submit", "--graph"])
+        .arg(&graph)
+        .output()
+        .expect("spawn"));
+    let run = submitted
+        .lines()
+        .find_map(|l| l.strip_prefix("submitted: "))
+        .expect("the run id is announced")
+        .trim()
+        .to_string();
+    // The answer is journaled before the wake, so it is durable either way; but the worker
+    // polls every 50ms and may claim the run between `signal`'s wake and its re-read, which
+    // `signal` honestly reports as `not queued` (exit 2). The run's end state is the assertion.
+    let out = t
+        .torii()
+        .args(["run", "signal", &run, "--node", "gate", "--payload"])
+        .arg(r#"{"decision":"approved"}"#)
+        .output()
+        .expect("spawn");
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        said.contains("signalled: ") || said.contains("journaled durably"),
+        "the answer must have landed: {said}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let status = loop {
+        let out = t
+            .torii()
+            .args(["run", "status", &run, "--json"])
+            .output()
+            .expect("spawn");
+        let v: serde_json::Value =
+            serde_json::from_slice(&out.stdout).expect("run status --json is JSON");
+        // `run status --json` prints an array of rows; this run is its only one.
+        let v = v[0].clone();
+        let status = v["status"].as_str().unwrap_or_default().to_string();
+        if status == "completed" || status == "failed" || std::time::Instant::now() >= deadline {
+            break v;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    };
+    assert_eq!(
+        status["status"],
+        "completed",
+        "the running worker must drive a run submitted under the pushed generation: {status}\n\
+         worker log:\n{}",
+        worker.log()
+    );
+}
+
+/// One `AwaitSignal` node: the run pauses for a person and spends nothing.
+fn signal_graph(dir: &std::path::Path) -> std::path::PathBuf {
+    let graph = dir.join("signal-graph.json");
+    let g = Graph {
+        nodes: vec![Node {
+            id: NodeId("gate".into()),
+            kind: NodeKind::AwaitSignal { timeout: None },
+            deps: vec![],
+        }],
+    };
+    std::fs::write(&graph, serde_json::to_string(&g).unwrap()).unwrap();
+    graph
+}
+
+/// AG-13 (#49) at the binary: on Postgres a run is submitted AS `TORII_USER`, its money limit is
+/// that user's headroom (here a $3 team with $0.50 spent: $2.50), `--budget-usd` may only lower
+/// it, and a raise through `run wake --budget-usd` is checked against the same caps. The limit is
+/// RESERVED (wave B review G1-1): each admitted run takes its limit out of the headroom the next
+/// one sees, and a lowering gives it back. Each refusal writes nothing.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn a_postgres_run_is_limited_to_its_issuers_headroom_and_a_raise_past_it_is_refused() {
+    let Some(url) = db_url() else { return };
+    let t = Tenant::new(&url).await;
+    let dir = tempfile::tempdir().unwrap();
+    ok(&t
+        .torii()
+        .args(["config", "push", "--yes"])
+        .arg(registry(dir.path(), "chat"))
+        .output()
+        .expect("spawn"));
+    let graph = signal_graph(dir.path());
+    let capped = t.capped_member("3", "0.5").await.to_string();
+    let submit = |run: &str, extra: &[&str]| {
+        t.torii()
+            .env("TORII_FENCE_VERSION", "v1")
+            .env("TORII_USER", &capped)
+            .args(["run", "submit", "--run-id", run, "--graph"])
+            .arg(&graph)
+            .args(extra)
+            .output()
+            .expect("spawn")
+    };
+    let status = |run: &str| {
+        t.torii()
+            .args(["run", "status", run])
+            .output()
+            .expect("spawn")
+    };
+
+    // An explicit limit below the headroom is the limit — and it is reserved.
+    let lower = uuid::Uuid::new_v4().to_string();
+    ok(&submit(&lower, &["--budget-usd", "1"]));
+    assert!(
+        ok(&status(&lower)).contains("budget: $1.00"),
+        "--budget-usd lowers the limit"
+    );
+
+    // Above what is left: refused, naming the headroom, and nothing is submitted.
+    let over = uuid::Uuid::new_v4().to_string();
+    let out = submit(&over, &["--budget-usd", "3"]);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(
+        text.contains("exceeds the headroom of $1.50") && text.contains("Capped Team"),
+        "the $1 run's reservation is out of the $2.50: {text}"
+    );
+    assert!(
+        !text.lines().any(|l| l.starts_with("submitted: ")),
+        "a refused run is never announced: {text}"
+    );
+    assert_eq!(status(&over).status.code(), Some(2), "no run was created");
+
+    // No explicit limit: the headroom that is left is the limit.
+    let run = uuid::Uuid::new_v4().to_string();
+    ok(&submit(&run, &[]));
+    let shown = ok(&status(&run));
+    assert!(
+        shown.contains("money spent: $0.00 / budget: $1.50"),
+        "the run's limit is its issuer's remaining headroom:\n{shown}"
+    );
+
+    // Nothing left at all: refused (G1-4) — a $0 limit would pause on the first priced call with
+    // nothing to raise it — and nothing is submitted.
+    let empty = uuid::Uuid::new_v4().to_string();
+    let out = submit(&empty, &[]);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(
+        text.contains("not submitted: ") && text.contains("no headroom"),
+        "{text}"
+    );
+    assert_eq!(status(&empty).status.code(), Some(2), "no run was created");
+
+    // No TORII_USER on Postgres: refused before anything is written.
+    let anon = uuid::Uuid::new_v4().to_string();
+    let out = torii()
+        .env("DATABASE_URL", &t.url)
+        .env("TORII_TENANT", &t.slug)
+        .env("TORII_FENCE_VERSION", "v1")
+        .args(["run", "submit", "--run-id", &anon, "--graph"])
+        .arg(&graph)
+        .output()
+        .expect("spawn");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("TORII_USER"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(status(&anon).status.code(), Some(2), "no run was created");
+
+    // A raise goes through the same check: the two runs hold the whole $2.50, so raising the $1
+    // run by even a cent is refused and nothing moves …
+    let out = t
+        .torii()
+        .args(["run", "wake", &lower, "--budget-usd", "1.01"])
+        .output()
+        .expect("spawn");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(text.contains("exceeds the headroom of $1.00"), "{text}");
+    assert!(ok(&status(&lower)).contains("budget: $1.00"), "unmoved");
+    // … a lowering gives its reservation back …
+    ok(&t
+        .torii()
+        .args(["run", "wake", &run, "--budget-usd", "1"])
+        .output()
+        .expect("spawn"));
+    assert!(ok(&status(&run)).contains("budget: $1.00"));
+    // … and within what that left, the cap moves.
+    ok(&t
+        .torii()
+        .args(["run", "wake", &lower, "--budget-usd", "1.5"])
+        .output()
+        .expect("spawn"));
+    assert!(ok(&status(&lower)).contains("budget: $1.50"));
+}
+
+/// AG-9 (#46): `config init --push` seeds a fresh tenant with the shipped registry through the
+/// same path as `config push` — checked against torii's catalog, generation 1, and a second
+/// one is `no changes`. `init --dir` followed by `config push` of that directory lands the
+/// identical registry on another tenant, so the two routes cannot diverge.
+#[cfg_attr(
+    not(have_database_url),
+    ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+)]
+#[tokio::test]
+async fn config_init_push_seeds_a_fresh_tenant_exactly_as_init_dir_then_push_does() {
+    let Some(url) = db_url() else { return };
+    let (a, b) = (Tenant::new(&url).await, Tenant::new(&url).await);
+
+    let pushed = ok(&a
+        .torii()
+        .args(["config", "init", "--push"])
+        .output()
+        .expect("spawn"));
+    assert!(pushed.contains("pushed: config now at v1"), "{pushed}");
+    assert_eq!(a.generation().await, Some(1));
+    assert_eq!(b.generation().await, Some(0), "another tenant is untouched");
+    let again = ok(&a
+        .torii()
+        .args(["config", "init", "--push"])
+        .output()
+        .expect("spawn"));
+    assert!(again.contains("no changes"), "{again}");
+    assert_eq!(a.generation().await, Some(1));
+
+    let dir = tempfile::tempdir().unwrap();
+    let reg = dir.path().join("registry");
+    ok(&a
+        .torii()
+        .args(["config", "init", "--dir"])
+        .arg(&reg)
+        .output()
+        .expect("spawn"));
+    ok(&b
+        .torii()
+        .args(["config", "push"])
+        .arg(&reg)
+        .output()
+        .expect("spawn"));
+
+    let show = |t: &Tenant| {
+        let out = ok(&t.torii().args(["config", "show"]).output().expect("spawn"));
+        serde_json::from_str::<serde_json::Value>(&out).expect("json")["registry"].clone()
+    };
+    let (shown_a, shown_b) = (show(&a), show(&b));
+    assert_eq!(shown_a, shown_b);
+    let planner = shown_a["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["area"] == "planning")
+        .expect("a planner was seeded");
+    assert_eq!(planner["default_planner"], true, "{planner}");
+}

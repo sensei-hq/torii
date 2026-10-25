@@ -17,7 +17,7 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uu
 # aws_lc_rs over rust_crypto: aws-lc-rs is already in the tree via rustls (no new
 # dependency), and rust_crypto would pull the `rsa` crate, which carries the unresolved
 # Marvin timing side-channel advisory (RUSTSEC-2023-0071).
-jsonwebtoken = { version = "10", default-features = false, features = ["use_pem", "aws_lc_rs"] }
+jsonwebtoken = { version = "10.3", default-features = false, features = ["use_pem", "aws_lc_rs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -55,14 +55,18 @@ quick-xml = "0.41"
 htmd = "0.5"
 image = "0.25"
 csv = "1"
-# MIG-1: real package is `sensei-gateway` (v0.4.6); alias to `gateway` so imports stay short.
-gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", tag = "v0.5.1" }
+# MIG-1: real package is `sensei-gateway`; alias to `gateway` so imports stay short. Same git ref
+# as every other sensei-* dependency in the workspace (TM-8a).
+gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", tag = "v0.12.0" }
 # X1 (P11): the Torii-owned MCP tool runtime — allow-list enforcement, SSRF egress, tool-egress
 # redaction, discovery, the agentic loop. db + net features (central plane).
 tools = { path = "../../crates/tools" }
+# TM-8: torii's shared data layer — the catalog -> GatewayConfig loader the API and the CLI
+# both use (one implementation, one gateway version).
+torii-core = { path = "../../crates/core" }
 # V5: shared BYOK credential vault (envelope crypto / KEK / store / Vault / TenantKeyCache).
 # `sqlx` = the Postgres store adapter. Aliased to `vault`; dev resolves via the workspace [patch].
-vault = { package = "sensei-vault", git = "https://github.com/sensei-hq/gateway", tag = "v0.5.1", features = ["sqlx"] }
+vault = { package = "sensei-vault", git = "https://github.com/sensei-hq/gateway", tag = "v0.12.0", features = ["sqlx"] }
 # DB auto-provision on startup: dbd deploy (fetch schema from a GitHub ref → apply + import +
 # RLS policies) via the dbd-core library — same as the sensei daemon. `deploy` is a default feature.
 dbd-core = { git = "https://github.com/sensei-hq/dbd", tag = "v0.8.1" }

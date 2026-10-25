@@ -225,19 +225,19 @@ mod tests {
 
 #[cfg(all(test, feature = "db"))]
 mod db_tests {
-    //! Live-DB (55322) resolution semantics. Ignored by default:
-    //!   `cargo test -p tools -- --ignored resolve_default_deny`
+    //! Live-DB resolution semantics. Run whenever `DATABASE_URL` is set (see `build.rs`):
+    //!   `DATABASE_URL=… cargo test -p tools resolve_default_deny`
     use super::*;
     use sqlx::postgres::PgPoolOptions;
 
     async fn pool() -> sqlx::PgPool {
         let url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgresql://postgres:postgres@127.0.0.1:55322/postgres".into());
+            .expect("DATABASE_URL (these tests are ignored without it)");
         PgPoolOptions::new()
             .max_connections(2)
             .connect(&url)
             .await
-            .expect("connect local Supabase (55322)")
+            .expect("connect to $DATABASE_URL")
     }
 
     async fn grant(
@@ -269,7 +269,10 @@ mod db_tests {
     /// drops its tools; stdio is dropped on the cloud plane; a non-member and another tenant
     /// get nothing.
     #[tokio::test]
-    #[ignore = "requires local Supabase (55322)"]
+    #[cfg_attr(
+        not(have_database_url),
+        ignore = "needs a Postgres at $DATABASE_URL with torii's schema applied + seeded"
+    )]
     async fn resolve_default_deny_role_space_plane_and_tenant_isolated() {
         let pool = pool().await;
         let a = Uuid::new_v4();

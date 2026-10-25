@@ -150,7 +150,7 @@ pub async fn list_spaces(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.read").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let rows: Result<Value, _> = sqlx::query_scalar(
         "select coalesce(json_agg(t order by t.name), '[]'::json) from ( \
@@ -193,7 +193,7 @@ pub async fn ask(
 ) -> Response {
     let (tenant, actor) = match authorize(&state, &claims, "doc.read").await {
         Ok(v) => v,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let query = body.query.trim().to_string();
     if query.is_empty() {

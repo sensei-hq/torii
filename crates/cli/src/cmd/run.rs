@@ -388,7 +388,23 @@ pub async fn list_paused(
     Ok(finish(text))
 }
 
-pub async fn cancel(store: &dyn SchedulerStore, run: RunId) -> Result<Outcome, CliError> {
+/// Cancel a non-terminal run, and settle what its charge still holds.
+///
+/// The settle is not an extra: without it a cancelled run's charge stayed open — its whole
+/// reservation held on the budget node — so the next `run submit` was refused for lack of
+/// headroom until some unrelated `worker serve` tick happened to sweep it. It is the very call
+/// that sweep makes (`RunCharges::settle_pending` → `settle`), just made now: the spend the
+/// journal holds is recorded, and the charge closes — releasing the rest of its reservation —
+/// once no drive still claims the run. A cancelled run whose drive is still spending therefore
+/// keeps its reservation for that drive to settle when it ends; that rule is `settle`'s own
+/// (G1-3), so this command does not have to reason about it.
+///
+/// `charging` is `None` on the memory backend, which has no caps to settle.
+pub async fn cancel(
+    charging: Option<&Charging<'_>>,
+    store: &dyn SchedulerStore,
+    run: RunId,
+) -> Result<Outcome, CliError> {
     if store.status(run).await?.is_none() {
         return Ok(Outcome::precondition(format!("no such run: {}", run.0)));
     }
@@ -402,14 +418,30 @@ pub async fn cancel(store: &dyn SchedulerStore, run: RunId) -> Result<Outcome, C
         .await?
         .ok_or_else(|| CliError::error(format!("run {} vanished mid-cancel", run.0)))?;
     if after.status == RunStatus::Cancelled {
-        Ok(Outcome::ok(format!("cancelled: {}", run.0)))
-    } else {
-        Ok(Outcome::precondition(format!(
-            "not cancelled: {} is already {}",
-            run.0,
-            after.status.as_str()
-        )))
+        let Some(c) = charging else {
+            return Ok(Outcome::ok(format!("cancelled: {}", run.0)));
+        };
+        // The cancel is durable, so a fault settling is REPORTED, never `?`-ed: a bare error
+        // would read as "it did not go through" for a run that is already cancelled.
+        return Ok(match c.charges.settle(c.journal, run).await {
+            Ok(_) => Outcome::ok(format!(
+                "cancelled: {} — spend settled; headroom released unless a drive still holds it",
+                run.0
+            )),
+            Err(e) => Outcome::ok(format!(
+                "cancelled: {} — but its charge was not settled: {}. The run is cancelled \
+                 either way; `torii worker serve --once` settles the charge and frees the \
+                 headroom it holds.",
+                run.0,
+                render::safe_reason(&e.to_string())
+            )),
+        });
     }
+    Ok(Outcome::precondition(format!(
+        "not cancelled: {} is already {}",
+        run.0,
+        after.status.as_str()
+    )))
 }
 
 pub async fn wake(
@@ -2562,7 +2594,7 @@ pub(crate) mod tests {
     async fn cancel_reports_the_transition_it_actually_made() {
         let run = RunId(uuid::Uuid::new_v4());
         let s = paused_store(run, Some(now())).await;
-        let out = cancel(&s, run).await.expect("cancels");
+        let out = cancel(None, &s, run).await.expect("cancels");
         assert_eq!(out.code, EXIT_OK);
         assert!(out.text.starts_with("cancelled:"), "{}", out.text);
         assert_eq!(
@@ -2582,7 +2614,7 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        let out = cancel(&s, run).await.expect("no hard error");
+        let out = cancel(None, &s, run).await.expect("no hard error");
         assert_eq!(out.code, EXIT_PRECONDITION);
         assert!(out.text.contains("not cancelled"), "{}", out.text);
         assert!(
@@ -2594,6 +2626,74 @@ pub(crate) mod tests {
             s.status(run).await.unwrap().unwrap().status,
             RunStatus::Completed,
             "and the run really is untouched"
+        );
+    }
+
+    /// The leak this command used to leave: cancelling a run flipped it to `cancelled` but left
+    /// its charge open with the whole reservation held, so the budget node's headroom was gone —
+    /// and the next `run submit` refused — until some unrelated `worker serve` tick swept it.
+    /// Cancel now settles the charge itself, which is what frees that headroom.
+    #[cfg_attr(
+        not(have_database_url),
+        ignore = "needs a Postgres at $DATABASE_URL; see README, Postgres-backed tests"
+    )]
+    #[tokio::test]
+    async fn cancel_settles_the_charge_so_it_stops_holding_headroom() {
+        let Some(url) = crate::test_guard::db_url() else {
+            return;
+        };
+        let t = crate::test_tenant::TestTenant::new(&url).await;
+        let stores = t.stores();
+        let charges = torii_core::run_budget::RunCharges::new(t.pool.clone(), t.id);
+        let run = RunId(uuid::Uuid::new_v4());
+        stores
+            .scheduler
+            .enqueue(run, &empty_graph(), now())
+            .await
+            .unwrap();
+        // A paused run's charge as admission leaves it: open, with its limit still reserved.
+        sqlx::query(
+            "insert into runs.run_charges (tenant_id, run_id, issuer_profile_id, node_ids, \
+             limit_micro_usd, reserve_node_ids, reserved_micro_usd) \
+             values ($1, $2, $3, '{}', 5000000, '{}', 5000000)",
+        )
+        .bind(t.id)
+        .bind(run.0)
+        .bind(uuid::Uuid::new_v4())
+        .execute(&t.pool)
+        .await
+        .unwrap();
+        let charging = Charging {
+            charges: &charges,
+            journal: &stores.journal,
+            user: None,
+        };
+
+        let out = cancel(Some(&charging), &stores.scheduler, run)
+            .await
+            .expect("cancels");
+
+        assert_eq!(out.code, EXIT_OK, "{}", out.text);
+        assert!(out.text.starts_with("cancelled:"), "{}", out.text);
+        assert!(
+            out.text.contains("settled"),
+            "the report must say the charge was settled, not just that the run was cancelled: {}",
+            out.text
+        );
+        let (settled, reserved): (bool, i64) = sqlx::query_as(
+            "select settled, reserved_micro_usd from runs.run_charges \
+              where tenant_id = $1 and run_id = $2",
+        )
+        .bind(t.id)
+        .bind(run.0)
+        .fetch_one(&t.pool)
+        .await
+        .unwrap();
+        assert!(settled, "the charge is closed, not left open for a sweep");
+        assert_eq!(reserved, 0, "and nothing of its reservation is still held");
+        assert_eq!(
+            stores.scheduler.status(run).await.unwrap().unwrap().status,
+            RunStatus::Cancelled
         );
     }
 

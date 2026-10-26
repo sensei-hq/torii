@@ -914,7 +914,7 @@ async fn a_cancelled_run_is_never_driven_by_a_later_worker_tick() {
 
     // The operator cancels through torii, on a fresh pool.
     let store_b = Arc::new(PgSchedulerStore::new(db.pool().await, db.tenant));
-    let cancelled = torii::cmd::run::cancel(store_b.as_ref(), run)
+    let cancelled = torii::cmd::run::cancel(None, store_b.as_ref(), run)
         .await
         .expect("cancel");
     assert_eq!(cancelled.code, torii::errors::EXIT_OK, "{}", cancelled.text);

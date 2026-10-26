@@ -740,7 +740,8 @@ async fn dispatch(cli: Cli) -> Result<Outcome, CliError> {
             RunAction::Cancel { run_id } => {
                 let run = parse_run_id(&run_id)?;
                 let d = boot::light(&env).await?;
-                cmd::run::cancel(d.scheduler_store.as_ref(), run).await
+                // The charge is settled here, not by a later worker tick (see `cmd::run::cancel`).
+                cmd::run::cancel(d.charging(None).as_ref(), d.scheduler_store.as_ref(), run).await
             }
             RunAction::Wake {
                 run_id,

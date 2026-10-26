@@ -19,7 +19,7 @@ use kernel::types::capability::Capability;
 use kernel::types::config::GatewayConfig;
 use kernel::types::decision::{DecisionQuestion, DecisionQuestions};
 use kernel::types::request::Payload;
-use orchestrator_core::{ChoiceOrder, ChoiceRef};
+use orchestrator_core::{ChoiceOrder, ChoiceOrderKind, ChoiceRef};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -41,6 +41,9 @@ pub const DEFAULT_CATEGORY: &str = "planner.select";
 const DECISION_CAPABILITY: &str = "decision";
 /// Where the rows came from, recorded on every order so a call can be re-derived.
 const ARTIFACT: &str = "torii:catalog.model_rankings";
+/// The rule a tie is broken by. Named rather than implied: a policy order must be
+/// distinguishable, after the fact, from an order a measurement produced.
+pub const POLICY_LOCAL_FIRST: &str = "policy:local-first";
 
 /// One chain candidate as the resolver function reports it: the chain step, its endpoint
 /// and the measurement columns attached to it.
@@ -50,6 +53,8 @@ pub struct Candidate {
     pub model: String,
     /// The router that serves it.
     pub router: String,
+    /// `local` or `cloud` — the tie-break axis (see [`POLICY_LOCAL_FIRST`]).
+    pub plane: Option<String>,
     /// The API model id on that router; `None` when no active endpoint resolves, in which
     /// case the chain model name is the best identifier available.
     pub api_model: Option<String>,
@@ -85,20 +90,27 @@ pub struct Snapshot {
 impl Snapshot {
     /// One line for the boot log: what will order the menu, or why nothing will.
     pub fn describe(&self) -> String {
+        let filtered = if self.filtered.is_empty() {
+            "none".to_string()
+        } else {
+            self.filtered.join(", ")
+        };
         match &self.order {
+            // A policy order is reported as exactly that: the admissible counts describe a
+            // measurement this order does not have.
+            Some(order) if order.kind == ChoiceOrderKind::Policy => format!(
+                "ordered by {} over {} models, no measurement claimed (filtered: {filtered})",
+                order.artifact.as_deref().unwrap_or("a policy"),
+                order.preferred.len()
+            ),
             Some(order) => format!(
-                "{} of {} chain models within margin, {} ranked (revision {}, filtered: {})",
+                "{} of {} chain models within margin, {} ranked (revision {}, filtered: {filtered})",
                 self.admissible,
                 self.chained,
                 order.preferred.len(),
                 self.revision
                     .map(|r| r.to_string())
                     .unwrap_or_else(|| "none".into()),
-                if self.filtered.is_empty() {
-                    "none".to_string()
-                } else {
-                    self.filtered.join(", ")
-                }
             ),
             None => format!("no ranking: {}", self.reason),
         }
@@ -139,9 +151,37 @@ pub fn compose(category: &str, rows: &[Candidate]) -> Snapshot {
 
     snapshot.reason = if rows.is_empty() {
         "the chain has no models for this capability".to_string()
+    } else if verdict.as_deref() == Some("tie") && rows.len() >= 2 {
+        // A TIE is a measured set with no order to claim, not an absence of information: the
+        // models were all measured and scored the same. Breaking it with a deterministic rule
+        // is therefore legitimate — but it is a POLICY, and it travels as an authored order so
+        // no trace ever reports it as evidence (`ChoiceOrderKind::Policy`).
+        //
+        // Local first, then the chain's authored sequence: the rule is cheap to state, stable
+        // across processes, and prefers the tier whose cost and latency the operator already
+        // paid for. Equal planes fall back to the order somebody authored.
+        let mut ranked: Vec<&Candidate> = rows.iter().collect();
+        ranked.sort_by_key(|r| (r.plane.as_deref() != Some("local"), r.sequence));
+        snapshot.order = Some(ChoiceOrder {
+            kind: ChoiceOrderKind::Policy,
+            category: category.to_string(),
+            preferred: refs(&ranked),
+            artifact: Some(POLICY_LOCAL_FIRST.to_string()),
+            // No artifact revision and no generation time: nothing was generated. Reporting
+            // the ranking's revision here would attribute the rule to a measurement.
+            revision: None,
+            generated_at: None,
+        });
+        format!(
+            "verdict tie: ordered by {POLICY_LOCAL_FIRST} ({} models, no measurement claimed)",
+            rows.len()
+        )
     } else if admissible.is_empty() {
         match verdict.as_deref() {
-            Some("tie") => "verdict tie: there is no order to claim".to_string(),
+            // A tie that reached here has fewer than two models to order.
+            Some("tie") => {
+                "verdict tie over fewer than 2 models: there is nothing to order".to_string()
+            }
             Some("insufficient") => "verdict insufficient: there is no order to claim".to_string(),
             _ if rows.iter().all(|r| r.within_margin.is_none()) => {
                 format!("no measurement for category {category}")
@@ -153,16 +193,10 @@ pub fn compose(category: &str, rows: &[Candidate]) -> Snapshot {
         // would make the gateway's stable re-rank a no-op while claiming to have ranked.
         "fewer than 2 models within margin: there is nothing to order".to_string()
     } else {
-        let preferred = admissible
-            .iter()
-            .map(|r| ChoiceRef {
-                router: Some(r.router.clone()),
-                model: Some(r.api_model.clone().unwrap_or_else(|| r.model.clone())),
-            })
-            .collect();
         snapshot.order = Some(ChoiceOrder {
+            kind: ChoiceOrderKind::Measured,
             category: category.to_string(),
-            preferred,
+            preferred: refs(&admissible),
             artifact: Some(ARTIFACT.to_string()),
             revision,
             generated_at,
@@ -171,6 +205,17 @@ pub fn compose(category: &str, rows: &[Candidate]) -> Snapshot {
     };
 
     snapshot
+}
+
+/// The candidate refs for an ordered slice: router + API model, the pair a gateway candidate
+/// answers to. The chain model name stands in when no active endpoint resolves.
+fn refs(rows: &[&Candidate]) -> Vec<ChoiceRef> {
+    rows.iter()
+        .map(|r| ChoiceRef {
+            router: Some(r.router.clone()),
+            model: Some(r.api_model.clone().unwrap_or_else(|| r.model.clone())),
+        })
+        .collect()
 }
 
 /// Which selector this boot wires.
@@ -337,7 +382,8 @@ impl RankingResolver for CatalogRanking {
         // them separately could compose an order from two different edits (§8.1b).
         let rows = sqlx::query(
             "select chain_name, model_full_name, router_name, router_model_id, sequence_order,
-                    rank, verdict::text as verdict, within_margin, revision, generated_at
+                    rank, verdict::text as verdict, within_margin, revision, generated_at,
+                    plane::text as plane
                from catalog.ranked_chain($1, $2, $3)",
         )
         .bind(self.tenant)
@@ -355,6 +401,7 @@ impl RankingResolver for CatalogRanking {
             .map(|row| Candidate {
                 model: row.get("model_full_name"),
                 router: row.get("router_name"),
+                plane: row.get("plane"),
                 api_model: row.get("router_model_id"),
                 sequence: row.get("sequence_order"),
                 rank: row.get("rank"),
@@ -380,6 +427,7 @@ mod tests {
         Candidate {
             model: model.to_string(),
             router: "ollama".to_string(),
+            plane: Some("cloud".to_string()),
             api_model: Some(model.to_string()),
             sequence,
             rank,
@@ -426,28 +474,68 @@ mod tests {
         assert_eq!(snapshot.verdict.as_deref(), Some("winner"));
     }
 
-    /// A tie claims nothing: no order, and a reason that cannot be mistaken for "measured
-    /// but nothing good enough".
+    /// A tie is a measured SET with no order to claim, so it is broken by a rule — local
+    /// models first, then the chain's authored sequence — and the result is sent as an
+    /// AUTHORED order, never as a measurement: no artifact revision, no generation time.
     #[test]
-    fn a_tie_sends_no_order_and_says_so() {
+    fn a_tie_is_broken_local_first_as_an_authored_order() {
         let mut rows = vec![
             candidate("nimble", 1, None, None),
             candidate("strands-decider", 2, None, None),
+            candidate("local-decider", 3, None, None),
         ];
         for row in &mut rows {
             row.verdict = Some("tie".to_string());
         }
-        let snapshot = compose(DEFAULT_CATEGORY, &rows);
+        rows[2].plane = Some("local".to_string());
 
-        assert!(snapshot.order.is_none(), "a tie is a set, not an order");
-        assert_eq!(snapshot.chained, 2);
-        assert_eq!(snapshot.admissible, 0);
+        let snapshot = compose(DEFAULT_CATEGORY, &rows);
+        let order = snapshot
+            .order
+            .clone()
+            .expect("a tie is broken by the policy");
+        assert_eq!(order.kind, ChoiceOrderKind::Policy);
+        assert_eq!(order.artifact.as_deref(), Some(POLICY_LOCAL_FIRST));
+        assert_eq!(
+            order.revision, None,
+            "nothing measured it, so no artifact revision is claimed"
+        );
+        assert_eq!(order.generated_at, None);
+        assert_eq!(
+            order
+                .preferred
+                .iter()
+                .map(|r| r.model.clone().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec![
+                "local-decider".to_string(),
+                "nimble".to_string(),
+                "strands-decider".to_string()
+            ],
+            "local first, then the authored sequence among equals"
+        );
         assert!(
             snapshot.reason.contains("tie"),
-            "the reason must distinguish a tie from 'nothing within margin': {}",
+            "the reason still reports the tie that caused it: {}",
             snapshot.reason
         );
-        assert!(snapshot.describe().starts_with("no ranking: verdict tie"));
+        assert!(
+            snapshot.describe().contains(POLICY_LOCAL_FIRST)
+                && snapshot.describe().contains("no measurement claimed"),
+            "the boot line must not read as a measurement: {}",
+            snapshot.describe()
+        );
+    }
+
+    /// A tie over a single model has nothing to order — the policy needs at least two names
+    /// before it means anything.
+    #[test]
+    fn a_tie_over_one_model_still_sends_nothing() {
+        let mut rows = vec![candidate("nimble", 1, None, None)];
+        rows[0].verdict = Some("tie".to_string());
+        let snapshot = compose(DEFAULT_CATEGORY, &rows);
+        assert!(snapshot.order.is_none());
+        assert!(snapshot.reason.contains("tie"), "{}", snapshot.reason);
     }
 
     /// One admissible model is not an order — the gateway's stable re-rank over a single
@@ -638,11 +726,21 @@ mod tests {
         for row in &snapshot.filtered {
             assert!(!row.is_empty());
         }
-        // Seeded measurements are a tie, so there is no order to send — and the snapshot
-        // must say that rather than inventing a sequence.
+        // Seeded measurements are a tie, so the order is the local-first POLICY — a sequence
+        // with no artifact behind it — not a measured ranking.
+        let order = snapshot
+            .order
+            .as_ref()
+            .expect("the seeded tie is broken by the policy");
+        assert_eq!(order.kind, ChoiceOrderKind::Policy);
+        assert_eq!(
+            order.preferred.len(),
+            snapshot.chained,
+            "the policy orders every chain member, not a measured subset"
+        );
         assert!(
-            snapshot.order.is_none() || snapshot.admissible >= 2,
-            "an order names at least two survivors: {snapshot:?}"
+            order.revision.is_none() && order.generated_at.is_none(),
+            "a policy order claims no artifact: {order:?}"
         );
 
         // An unmeasured category is not an empty result: `ranked_chain` returns the chain's

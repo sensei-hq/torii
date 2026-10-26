@@ -7,14 +7,16 @@
 
 use crate::cmd::run::{NoWakeAttemptCounts, WakeAttemptCounts};
 use crate::errors::{CliError, redact_url};
+use crate::ranking::{self, CatalogRanking, RankingResolver};
+use orchestrator::DecisionPlannerSelector;
 use orchestrator::agent::tools::{
     FsReadTool, FsWriteReconciler, FsWriteTool, ReconcileRegistry, ShellTool, ToolRegistry,
 };
 use orchestrator::{Executor, Scheduler, WakeRetryPolicy};
 use orchestrator_core::{
     Clock, ConfigSource, ConfigStore, ContentStore, ContextStore, ExecutionJournal,
-    OrchestratorError, PatternRedactor, RegistryHandle, RulePlannerSelector, RunId, SchedulerStore,
-    SystemClock,
+    OrchestratorError, PatternRedactor, PlannerSelector, RegistryHandle, RulePlannerSelector,
+    RunId, SchedulerStore, SystemClock,
 };
 use orchestrator_store::{
     FilesystemConfigSource, InMemoryConfigStore, InMemoryContentStore, InMemoryContextStore,
@@ -783,6 +785,10 @@ pub struct LightDeps {
     /// AG-13: the tenant's run charges — torii's caps a run is limited by and its spend recorded
     /// on. `None` on the memory backend, which has no caps.
     pub charges: Option<torii_core::run_budget::RunCharges>,
+    /// §8.2: the measured-ranking resolver. `None` on the memory backend, which has no
+    /// catalog and therefore no measurements — carrying `None` rather than an empty resolver
+    /// keeps "there is nothing to measure against" distinguishable from "nothing measured".
+    pub ranking: Option<Arc<dyn RankingResolver>>,
 }
 
 impl LightDeps {
@@ -830,6 +836,9 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                 .map_err(|e| CliError::error(format!("{ENV_TENANT}: {e}")))?;
             let stores = torii_core::TenantStores::open(&pool, tenant_id);
             let charges = torii_core::run_budget::RunCharges::new(pool.clone(), tenant_id);
+            // §8.2: the ranking resolver reads the SAME pool the stores do (a `PgPool` clone
+            // is an `Arc` clone), scoped to the tenant this boot resolved.
+            let ranking = Arc::new(CatalogRanking::new(pool.clone(), tenant_id));
             // ONE store object behind both the trait and the attempt-counter reader.
             let scheduler = Arc::new(stores.scheduler);
             Ok(Stores {
@@ -838,6 +847,7 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                     journal: Arc::new(stores.journal),
                     config_source: Arc::new(stores.config),
                     gateway_config: Some(Arc::new(CatalogGatewayConfigSource::new(pool))),
+                    ranking: Some(ranking),
                     wake_attempts: scheduler,
                     content: Arc::new(stores.content),
                     charges: Some(charges),
@@ -863,6 +873,7 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                     journal: Arc::new(InMemoryJournal::default()),
                     config_source: Arc::new(config),
                     gateway_config: None,
+                    ranking: None,
                     wake_attempts: Arc::new(NoWakeAttemptCounts),
                     content: content.clone(),
                     charges: None,
@@ -1022,6 +1033,59 @@ pub(crate) async fn heavy_with(
     // boot, rather than failing every run that reaches the chain.
     require_chains_resolve(&registry, &gw_config, &gw_source)?;
 
+    // §8.2: which planner selector this boot wires, and the measured order it carries.
+    // ABSENT configuration is the shipped rule path — pure, spend-free, no ranking — so the
+    // default stays exactly what it was; `TORII_PLANNER_SELECTOR=decision` opts into one
+    // metered decision per `Select`.
+    let selector = ranking::selector_from(
+        std::env::var(ranking::ENV_SELECTOR).ok().as_deref(),
+        std::env::var(ranking::ENV_CHAIN).ok().as_deref(),
+        std::env::var(ranking::ENV_CATEGORY).ok().as_deref(),
+    )?;
+    let (planner_selector, selector_summary): (Arc<dyn PlannerSelector>, String) = match selector {
+        ranking::Selector::Rule => (
+            Arc::new(RulePlannerSelector::new(None)),
+            "rule (no model call, no ranking)".to_string(),
+        ),
+        ranking::Selector::Decision { chain, category } => {
+            // Fail loud BEFORE the facade is built. Every check here is one a run would
+            // otherwise meet after spending: a chain that does not exist yields no
+            // candidates, a chat chain is refused by the provider, and a window too small
+            // for a decision is a 400 mid-flight.
+            ranking::require_decision_chain(&gw_config, &chain, &category)?;
+            let (order, summary) = match &light.ranking {
+                None => (
+                    None,
+                    "no ranking: this backend has no catalog to measure from".to_string(),
+                ),
+                Some(resolver) => match resolver.resolve(&chain, &category).await {
+                    Ok(snapshot) => {
+                        let summary = snapshot.describe();
+                        (snapshot.order, summary)
+                    }
+                    Err(error) => {
+                        // A resolver failure is NOT a run failure (§8.2): no ranking goes
+                        // out, the chain's authored order stands, and the log says why.
+                        tracing::warn!(
+                            chain = %chain,
+                            category = %category,
+                            %error,
+                            "ranking resolver failed; sending no ranking"
+                        );
+                        (None, format!("no ranking: resolver failed ({error})"))
+                    }
+                },
+            };
+            (
+                Arc::new(
+                    DecisionPlannerSelector::new(registry.clone(), chain.clone()).with_order(order),
+                ),
+                format!("decision, chain {chain:?}, category {category:?}, {summary}"),
+            )
+        }
+    };
+    tracing::info!(planner_selector = %selector_summary, "planner selector wired");
+
     // `Gateway::new` is the low-level, hand-wired constructor (an empty adapter
     // registry). `FacadeBuilder` is the composition root that actually registers a
     // provider adapter per router in the config — the point of reading this file at
@@ -1114,7 +1178,14 @@ pub(crate) async fn heavy_with(
         // `pinned` never touches `self.selector`, so a marker resolved at boot would be
         // a process-scoped snapshot OUTSIDE the config fence, and a `config push` could
         // never move it.
-        .with_planner_selector(Arc::new(RulePlannerSelector::new(None)));
+        //
+        // §8.2 adds one opt-in step away from that default and no further: with
+        // `TORII_PLANNER_SELECTOR=decision` the choice becomes a metered decision, and the
+        // measured ranking resolved above rides along as its order. The order is a boot
+        // snapshot by design — it is resolved once per run per category because the
+        // catalog's answer cannot change mid-run — while the registry the selector reads
+        // for its menu descriptions is the same pinned handle every run uses.
+        .with_planner_selector(planner_selector);
 
     if let Some(root) = workspace_root {
         executor = executor.with_workspace_root(root);

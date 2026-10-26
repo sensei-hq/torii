@@ -10,6 +10,7 @@ pub mod boot;
 pub mod cmd;
 pub mod diff;
 pub mod errors;
+pub mod ranking;
 pub mod render;
 
 /// Test-only: the `DATABASE_URL` skip notice every DB-gated unit test goes through. (Isolation

@@ -9,7 +9,7 @@ name = "torii_core"
 
 [dependencies]
 # One gateway version across torii (TM-8a). Dev resolves via the workspace [patch].
-gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", tag = "v0.13.0" }
+gateway = { package = "sensei-gateway", git = "https://github.com/sensei-hq/gateway", tag = "v0.14.0" }
 anyhow = "1"
 # AG-9 (#46): the shipped default registry (`defaults/`) is compiled into the binary, so
 # `torii config init` works from an install or a container with no source tree beside it.
@@ -27,10 +27,10 @@ uuid = { version = "1", features = ["serde"] }
 # The tenant-scoped orchestrator stores (TM-7). Renamed: its lib is also called
 # `orchestrator_store`, like the gateway's in-memory crate the CLI uses.
 tenant-stores = { package = "torii-orchestrator-store", path = "../orchestrator-store" }
-orchestrator-core = { package = "sensei-orchestrator-core", git = "https://github.com/sensei-hq/gateway", tag = "v0.13.0" }
+orchestrator-core = { package = "sensei-orchestrator-core", git = "https://github.com/sensei-hq/gateway", tag = "v0.14.0" }
 # AG-13 (#49): a run's money spend is folded with the engine's OWN fold (`money_spend_of`) before
 # it is recorded on the budget nodes — never a second, drifting sum.
-orchestrator = { package = "sensei-orchestrator", git = "https://github.com/sensei-hq/gateway", tag = "v0.13.0" }
+orchestrator = { package = "sensei-orchestrator", git = "https://github.com/sensei-hq/gateway", tag = "v0.14.0" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -41,4 +41,4 @@ tempfile = "3"
 # is tested DB-free against the same traits torii's Postgres stores implement. AG-6 (#35): a
 # pulled registry directory is checked by loading it back with the reader `config push` itself
 # uses. Renamed: its lib is `orchestrator_store`, like `tenant-stores`.
-gateway-store = { package = "sensei-orchestrator-store", git = "https://github.com/sensei-hq/gateway", tag = "v0.13.0" }
+gateway-store = { package = "sensei-orchestrator-store", git = "https://github.com/sensei-hq/gateway", tag = "v0.14.0" }

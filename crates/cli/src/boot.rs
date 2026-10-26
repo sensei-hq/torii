@@ -1053,7 +1053,7 @@ pub(crate) async fn heavy_with(
             // candidates, a chat chain is refused by the provider, and a window too small
             // for a decision is a 400 mid-flight.
             ranking::require_decision_chain(&gw_config, &chain, &category)?;
-            let (order, summary) = match &light.ranking {
+            let (ordering, summary) = match &light.ranking {
                 None => (
                     None,
                     "no ranking: this backend has no catalog to measure from".to_string(),
@@ -1061,7 +1061,7 @@ pub(crate) async fn heavy_with(
                 Some(resolver) => match resolver.resolve(&chain, &category).await {
                     Ok(snapshot) => {
                         let summary = snapshot.describe();
-                        (snapshot.order, summary)
+                        (snapshot.ordering, summary)
                     }
                     Err(error) => {
                         // A resolver failure is NOT a run failure (§8.2): no ranking goes
@@ -1076,10 +1076,22 @@ pub(crate) async fn heavy_with(
                     }
                 },
             };
+            let selector = DecisionPlannerSelector::new(registry.clone(), chain.clone());
+            // A measured order rides on the selector — resolved once, because evidence a
+            // step could re-measure mid-run is not evidence. A tie's turn depends on the
+            // decision being asked, so it rides on a wrapper that supplies this decision's
+            // order per call.
+            let selector: Arc<dyn PlannerSelector> = match ordering {
+                Some(ranking::Ordering::Measured(order)) => {
+                    Arc::new(selector.with_order(Some(order)))
+                }
+                Some(ranking::Ordering::Tie(rotation)) => {
+                    Arc::new(ranking::RotatingTieSelector::new(selector, rotation))
+                }
+                None => Arc::new(selector),
+            };
             (
-                Arc::new(
-                    DecisionPlannerSelector::new(registry.clone(), chain.clone()).with_order(order),
-                ),
+                selector,
                 format!("decision, chain {chain:?}, category {category:?}, {summary}"),
             )
         }

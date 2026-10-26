@@ -19,7 +19,11 @@ use kernel::types::capability::Capability;
 use kernel::types::config::GatewayConfig;
 use kernel::types::decision::{DecisionQuestion, DecisionQuestions};
 use kernel::types::request::Payload;
-use orchestrator_core::{ChoiceOrder, ChoiceOrderKind, ChoiceRef};
+use orchestrator::DecisionPlannerSelector;
+use orchestrator_core::{
+    AgentRef, ChoiceAnswer, ChoiceOrder, ChoiceOrderKind, ChoiceQuestion, ChoiceRef, ModelDispatch,
+    OrchestratorError, PlannerSelector,
+};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -42,8 +46,10 @@ const DECISION_CAPABILITY: &str = "decision";
 /// Where the rows came from, recorded on every order so a call can be re-derived.
 const ARTIFACT: &str = "torii:catalog.model_rankings";
 /// The rule a tie is broken by. Named rather than implied: a policy order must be
-/// distinguishable, after the fact, from an order a measurement produced.
-pub const POLICY_LOCAL_FIRST: &str = "policy:local-first";
+/// distinguishable, after the fact, from an order a measurement produced. The suffix is
+/// the rotation ([`TieRotation`]): local first, and the first slot inside each plane taken
+/// in turn by the decision's own question.
+pub const POLICY_TIE_ORDER: &str = "policy:local-first-rotation";
 
 /// One chain candidate as the resolver function reports it: the chain step, its endpoint
 /// and the measurement columns attached to it.
@@ -53,7 +59,7 @@ pub struct Candidate {
     pub model: String,
     /// The router that serves it.
     pub router: String,
-    /// `local` or `cloud` — the tie-break axis (see [`POLICY_LOCAL_FIRST`]).
+    /// `local` or `cloud` — the tie-break axis (see [`POLICY_TIE_ORDER`]).
     pub plane: Option<String>,
     /// The API model id on that router; `None` when no active endpoint resolves, in which
     /// case the chain model name is the best identifier available.
@@ -67,6 +73,16 @@ pub struct Candidate {
     pub within_margin: Option<bool>,
     pub revision: Option<i64>,
     pub generated_at: Option<i64>,
+}
+
+/// What will order the menu, when something will.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Ordering {
+    /// Rows a measurement ordered, with the artifact and revision behind them.
+    Measured(ChoiceOrder),
+    /// A TIE: nothing measured an order, so each decision is ordered by the rule in
+    /// [`TieRotation`] — a policy, reported as one everywhere it is used.
+    Tie(TieRotation),
 }
 
 /// The resolved state of one category: the order to send, or the reason there is none.
@@ -83,7 +99,7 @@ pub struct Snapshot {
     pub verdict: Option<String>,
     pub revision: Option<u64>,
     /// `None` ⇒ send no ranking; [`Snapshot::reason`] says why.
-    pub order: Option<ChoiceOrder>,
+    pub ordering: Option<Ordering>,
     pub reason: String,
 }
 
@@ -95,15 +111,9 @@ impl Snapshot {
         } else {
             self.filtered.join(", ")
         };
-        match &self.order {
-            // A policy order is reported as exactly that: the admissible counts describe a
-            // measurement this order does not have.
-            Some(order) if order.kind == ChoiceOrderKind::Policy => format!(
-                "ordered by {} over {} models, no measurement claimed (filtered: {filtered})",
-                order.artifact.as_deref().unwrap_or("a policy"),
-                order.preferred.len()
-            ),
-            Some(order) => format!(
+        match &self.ordering {
+            // A measured order reports the measurement it came from.
+            Some(Ordering::Measured(order)) => format!(
                 "{} of {} chain models within margin, {} ranked (revision {}, filtered: {filtered})",
                 self.admissible,
                 self.chained,
@@ -111,6 +121,15 @@ impl Snapshot {
                 self.revision
                     .map(|r| r.to_string())
                     .unwrap_or_else(|| "none".into()),
+            ),
+            // A tie is reported as exactly that: the admissible counts describe a
+            // measurement this order does not have, and the rule is named so nobody
+            // reading the log mistakes a rotation for a measured sequence.
+            Some(Ordering::Tie(tie)) => format!(
+                "ordered by {} over {} models, rotating per decision, no measurement claimed \
+                 (filtered: {filtered})",
+                POLICY_TIE_ORDER,
+                tie.planes.iter().map(Vec::len).sum::<usize>(),
             ),
             None => format!("no ranking: {}", self.reason),
         }
@@ -145,7 +164,7 @@ pub fn compose(category: &str, rows: &[Candidate]) -> Snapshot {
         filtered,
         verdict: verdict.clone(),
         revision,
-        order: None,
+        ordering: None,
         reason: String::new(),
     };
 
@@ -157,23 +176,12 @@ pub fn compose(category: &str, rows: &[Candidate]) -> Snapshot {
         // is therefore legitimate — but it is a POLICY, and it travels as an authored order so
         // no trace ever reports it as evidence (`ChoiceOrderKind::Policy`).
         //
-        // Local first, then the chain's authored sequence: the rule is cheap to state, stable
-        // across processes, and prefers the tier whose cost and latency the operator already
-        // paid for. Equal planes fall back to the order somebody authored.
-        let mut ranked: Vec<&Candidate> = rows.iter().collect();
-        ranked.sort_by_key(|r| (r.plane.as_deref() != Some("local"), r.sequence));
-        snapshot.order = Some(ChoiceOrder {
-            kind: ChoiceOrderKind::Policy,
-            category: category.to_string(),
-            preferred: refs(&ranked),
-            artifact: Some(POLICY_LOCAL_FIRST.to_string()),
-            // No artifact revision and no generation time: nothing was generated. Reporting
-            // the ranking's revision here would attribute the rule to a measurement.
-            revision: None,
-            generated_at: None,
-        });
+        // What is carried here is the GROUPS, not a sequence: local before cloud is fixed,
+        // while the first slot inside each plane turns with the decision, and this snapshot is
+        // resolved once per boot ([`TieRotation`]).
+        snapshot.ordering = Some(Ordering::Tie(tie_rotation(category, rows)));
         format!(
-            "verdict tie: ordered by {POLICY_LOCAL_FIRST} ({} models, no measurement claimed)",
+            "verdict tie: ordered by {POLICY_TIE_ORDER} ({} models, no measurement claimed)",
             rows.len()
         )
     } else if admissible.is_empty() {
@@ -193,29 +201,190 @@ pub fn compose(category: &str, rows: &[Candidate]) -> Snapshot {
         // would make the gateway's stable re-rank a no-op while claiming to have ranked.
         "fewer than 2 models within margin: there is nothing to order".to_string()
     } else {
-        snapshot.order = Some(ChoiceOrder {
+        snapshot.ordering = Some(Ordering::Measured(ChoiceOrder {
             kind: ChoiceOrderKind::Measured,
             category: category.to_string(),
             preferred: refs(&admissible),
             artifact: Some(ARTIFACT.to_string()),
             revision,
             generated_at,
-        });
+        }));
         "ordered by measurement".to_string()
     };
 
     snapshot
 }
 
+/// The tie rule (§8.1a): local models before cloud ones, and, inside each plane, the first
+/// slot taken in turn by the decision's own question.
+///
+/// The rotation exists because a fixed sequence over a tie sends every decision to the same
+/// member: "equal on the measurement" would become "one of them always answers". Taking the
+/// turn from the question — the goal the decision is asked about — spreads it while keeping
+/// each decision reproducible, which is not a nicety: the order is part of the gateway's
+/// decision memo key, so a rotation that depended on process state (a counter, a clock, a
+/// random seed) would hand the same call a different order on resume and trip
+/// `DeterminismViolation` instead of replaying it. A repeated identical question therefore
+/// gets the same order on purpose: it is the same decision, and its journal entry says so.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TieRotation {
+    /// What this rule orders; recorded on every order it produces.
+    pub category: String,
+    /// One group per plane, local first, each in the chain's AUTHORED order — the turn is
+    /// taken inside a group, so the rule never moves a cloud model ahead of a local one.
+    pub planes: Vec<Vec<ChoiceRef>>,
+}
+
+impl TieRotation {
+    /// The order THIS decision runs under. Rotation moves the start of each plane, never
+    /// its membership.
+    pub fn order_for(&self, goal: &serde_json::Value) -> ChoiceOrder {
+        let seed = fnv1a(&canonical(goal));
+        let mut preferred = Vec::new();
+        for plane in &self.planes {
+            let start = (seed % plane.len() as u64) as usize;
+            preferred.extend_from_slice(&plane[start..]);
+            preferred.extend_from_slice(&plane[..start]);
+        }
+        ChoiceOrder {
+            kind: ChoiceOrderKind::Policy,
+            category: self.category.clone(),
+            preferred,
+            // No artifact revision and no generation time: nothing was generated. Reporting
+            // the ranking's revision here would attribute the rule to a measurement.
+            artifact: Some(POLICY_TIE_ORDER.to_string()),
+            revision: None,
+            generated_at: None,
+        }
+    }
+}
+
+/// Group the tie's members by plane, local first, each group in authored order.
+fn tie_rotation(category: &str, rows: &[Candidate]) -> TieRotation {
+    let mut ordered: Vec<&Candidate> = rows.iter().collect();
+    ordered.sort_by_key(|r| (r.plane.as_deref() != Some("local"), r.sequence));
+
+    let mut planes: Vec<Vec<ChoiceRef>> = Vec::new();
+    let mut plane_open: Option<bool> = None;
+    for row in ordered {
+        let is_cloud = row.plane.as_deref() != Some("local");
+        if plane_open != Some(is_cloud) {
+            planes.push(Vec::new());
+            plane_open = Some(is_cloud);
+        }
+        planes
+            .last_mut()
+            .expect("a group was just pushed")
+            .push(ref_of(row));
+    }
+
+    TieRotation {
+        category: category.to_string(),
+        planes,
+    }
+}
+
+/// A stable digest of the decision's question: FNV-1a over the goal's canonical JSON.
+///
+/// Any stable function would do; this one needs no dependency and no salt. `serde_json`'s
+/// own rendering is canonical enough for the purpose — the map is ordered (sorted keys by
+/// default), and a resumed drive rebuilds the same value from the same journal entry.
+fn canonical(goal: &serde_json::Value) -> String {
+    serde_json::to_string(goal).unwrap_or_default()
+}
+
+fn fnv1a(bytes: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// Applies [`TieRotation`] to every decision a [`DecisionPlannerSelector`] makes.
+///
+/// The selector resolves its order ONCE, which is right for a measurement (a decision per
+/// step would re-ask a question whose answer cannot change mid-run) and wrong for a turn:
+/// a boot-time sequence over a tie sends every decision to the same member. So the part of
+/// the rule that depends on the decision is applied here, by lending the selector a
+/// dispatch that supplies this decision's order.
+///
+/// It supplies an order for a TIE only, and is only ever built for one — `Ordering::Tie` is
+/// the sole caller. A measured order therefore never passes through this type, so nothing
+/// here can replace evidence with a rule.
+pub struct RotatingTieSelector {
+    inner: DecisionPlannerSelector,
+    rotation: TieRotation,
+}
+
+impl RotatingTieSelector {
+    pub fn new(inner: DecisionPlannerSelector, rotation: TieRotation) -> Self {
+        Self { inner, rotation }
+    }
+}
+
+#[async_trait::async_trait]
+impl PlannerSelector for RotatingTieSelector {
+    async fn select(
+        &self,
+        goal: &serde_json::Value,
+        candidates: &[AgentRef],
+        dispatch: &dyn ModelDispatch,
+    ) -> Result<AgentRef, OrchestratorError> {
+        let rotating = RotatingDispatch {
+            inner: dispatch,
+            rotation: &self.rotation,
+            goal,
+        };
+        self.inner.select(goal, candidates, &rotating).await
+    }
+}
+
+/// The lent dispatch that replaces the selector's boot-time order with this decision's
+/// rotation. `complete` passes straight through: the tie rule is about which model answers
+/// a decision, not about what a text completion says.
+struct RotatingDispatch<'a> {
+    inner: &'a dyn ModelDispatch,
+    rotation: &'a TieRotation,
+    goal: &'a serde_json::Value,
+}
+
+#[async_trait::async_trait]
+impl ModelDispatch for RotatingDispatch<'_> {
+    async fn complete(
+        &self,
+        system: &str,
+        user: &str,
+        chain: Option<&str>,
+    ) -> Result<String, OrchestratorError> {
+        self.inner.complete(system, user, chain).await
+    }
+
+    async fn choose(
+        &self,
+        question: &ChoiceQuestion,
+        chain: Option<&str>,
+        // Deliberately ignored: the inner selector carries the boot-time sequence this
+        // wrapper exists to replace (see [`RotatingTieSelector`]).
+        _order: Option<&ChoiceOrder>,
+    ) -> Result<ChoiceAnswer, OrchestratorError> {
+        let order = self.rotation.order_for(self.goal);
+        self.inner.choose(question, chain, Some(&order)).await
+    }
+}
+
 /// The candidate refs for an ordered slice: router + API model, the pair a gateway candidate
 /// answers to. The chain model name stands in when no active endpoint resolves.
 fn refs(rows: &[&Candidate]) -> Vec<ChoiceRef> {
-    rows.iter()
-        .map(|r| ChoiceRef {
-            router: Some(r.router.clone()),
-            model: Some(r.api_model.clone().unwrap_or_else(|| r.model.clone())),
-        })
-        .collect()
+    rows.iter().map(|r| ref_of(r)).collect()
+}
+
+fn ref_of(row: &Candidate) -> ChoiceRef {
+    ChoiceRef {
+        router: Some(row.router.clone()),
+        model: Some(row.api_model.clone().unwrap_or_else(|| row.model.clone())),
+    }
 }
 
 /// Which selector this boot wires.
@@ -450,7 +619,9 @@ mod tests {
         ];
         let snapshot = compose(DEFAULT_CATEGORY, &rows);
 
-        let order = snapshot.order.expect("an order");
+        let Some(Ordering::Measured(order)) = snapshot.ordering else {
+            panic!("a winner sends a measured order");
+        };
         assert_eq!(order.category, DEFAULT_CATEGORY);
         assert_eq!(order.artifact.as_deref(), Some(ARTIFACT));
         assert_eq!(order.revision, Some(3));
@@ -474,11 +645,8 @@ mod tests {
         assert_eq!(snapshot.verdict.as_deref(), Some("winner"));
     }
 
-    /// A tie is a measured SET with no order to claim, so it is broken by a rule — local
-    /// models first, then the chain's authored sequence — and the result is sent as an
-    /// AUTHORED order, never as a measurement: no artifact revision, no generation time.
-    #[test]
-    fn a_tie_is_broken_local_first_as_an_authored_order() {
+    /// A measured tie: one local model and two cloud ones, all scored the same.
+    fn tie_rows() -> Vec<Candidate> {
         let mut rows = vec![
             candidate("nimble", 1, None, None),
             candidate("strands-decider", 2, None, None),
@@ -488,31 +656,40 @@ mod tests {
             row.verdict = Some("tie".to_string());
         }
         rows[2].plane = Some("local".to_string());
+        rows
+    }
 
-        let snapshot = compose(DEFAULT_CATEGORY, &rows);
-        let order = snapshot
-            .order
-            .clone()
-            .expect("a tie is broken by the policy");
+    /// A tie is a measured SET with no order to claim, so it is broken by a rule — local
+    /// models before cloud ones, with a turn inside each plane — and the result is an
+    /// AUTHORED order, never a measurement: no artifact revision, no generation time.
+    #[test]
+    fn a_tie_is_broken_local_first_as_an_authored_order() {
+        let snapshot = compose(DEFAULT_CATEGORY, &tie_rows());
+        let Some(Ordering::Tie(tie)) = snapshot.ordering.clone() else {
+            panic!("a tie is broken by the policy");
+        };
+        assert_eq!(tie.planes.len(), 2, "one group per plane, local first");
+        assert_eq!(
+            tie.planes[0]
+                .iter()
+                .map(|r| r.model.clone().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec!["local-decider".to_string()],
+            "the local plane is its own group, ahead of the cloud one"
+        );
+
+        let order = tie.order_for(&serde_json::json!({ "goal": "pick a planner" }));
         assert_eq!(order.kind, ChoiceOrderKind::Policy);
-        assert_eq!(order.artifact.as_deref(), Some(POLICY_LOCAL_FIRST));
+        assert_eq!(order.artifact.as_deref(), Some(POLICY_TIE_ORDER));
         assert_eq!(
             order.revision, None,
             "nothing measured it, so no artifact revision is claimed"
         );
         assert_eq!(order.generated_at, None);
         assert_eq!(
-            order
-                .preferred
-                .iter()
-                .map(|r| r.model.clone().unwrap_or_default())
-                .collect::<Vec<_>>(),
-            vec![
-                "local-decider".to_string(),
-                "nimble".to_string(),
-                "strands-decider".to_string()
-            ],
-            "local first, then the authored sequence among equals"
+            order.preferred.first().and_then(|r| r.model.clone()),
+            Some("local-decider".to_string()),
+            "local first, whatever the turn lands on"
         );
         assert!(
             snapshot.reason.contains("tie"),
@@ -520,10 +697,117 @@ mod tests {
             snapshot.reason
         );
         assert!(
-            snapshot.describe().contains(POLICY_LOCAL_FIRST)
-                && snapshot.describe().contains("no measurement claimed"),
+            snapshot.describe().contains(POLICY_TIE_ORDER)
+                && snapshot.describe().contains("no measurement claimed")
+                && snapshot.describe().contains("rotating per decision"),
             "the boot line must not read as a measurement: {}",
             snapshot.describe()
+        );
+    }
+
+    /// The turn is a function of the question and nothing else: one decision always replays
+    /// to the same order (its memo key contains that order), while different decisions start
+    /// the cloud plane at different members. Rotation moves the start, never the membership,
+    /// and never across the local/cloud boundary.
+    #[test]
+    fn the_turn_is_taken_by_the_question_and_is_stable_for_it() {
+        let snapshot = compose(DEFAULT_CATEGORY, &tie_rows());
+        let Some(Ordering::Tie(tie)) = snapshot.ordering else {
+            panic!("a tie is broken by the policy");
+        };
+
+        let mut cloud_firsts = std::collections::BTreeSet::new();
+        for i in 0..32 {
+            let goal = serde_json::json!({ "goal": format!("task {i}") });
+            let order = tie.order_for(&goal);
+            assert_eq!(
+                order,
+                tie.order_for(&goal),
+                "the same question must get the same order"
+            );
+
+            let names: Vec<String> = order
+                .preferred
+                .iter()
+                .filter_map(|r| r.model.clone())
+                .collect();
+            assert_eq!(
+                names.len(),
+                3,
+                "rotation never drops or duplicates a member"
+            );
+            assert_eq!(names[0], "local-decider", "the local plane stays first");
+            cloud_firsts.insert(names[1].clone());
+        }
+        assert_eq!(
+            cloud_firsts.len(),
+            2,
+            "both cloud members take the first cloud slot across decisions: {cloud_firsts:?}"
+        );
+    }
+
+    /// Records the order each decision was asked to run under and answers a fixed key.
+    #[derive(Default)]
+    struct OrderRecording {
+        seen: std::sync::Mutex<Vec<Option<ChoiceOrder>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelDispatch for OrderRecording {
+        async fn complete(
+            &self,
+            _system: &str,
+            _user: &str,
+            _chain: Option<&str>,
+        ) -> Result<String, OrchestratorError> {
+            Err(OrchestratorError::Gateway(
+                "the tie rule is about decisions, not text".into(),
+            ))
+        }
+
+        async fn choose(
+            &self,
+            _question: &ChoiceQuestion,
+            _chain: Option<&str>,
+            order: Option<&ChoiceOrder>,
+        ) -> Result<ChoiceAnswer, OrchestratorError> {
+            self.seen.lock().expect("order lock").push(order.cloned());
+            Ok(ChoiceAnswer {
+                choice: "alpha".into(),
+                confidence: 0.5,
+            })
+        }
+    }
+
+    /// The wrapper is what makes the turn reach the wire: the inner selector's boot-time
+    /// order is replaced by THIS decision's rotation, so a resolved-once snapshot does not
+    /// send every decision to the same member.
+    #[tokio::test]
+    async fn the_rotating_selector_sends_this_decisions_order() {
+        let snapshot = compose(DEFAULT_CATEGORY, &tie_rows());
+        let Some(Ordering::Tie(rotation)) = snapshot.ordering else {
+            panic!("a tie is broken by the policy");
+        };
+        let selector = RotatingTieSelector::new(
+            DecisionPlannerSelector::new(
+                std::sync::Arc::new(orchestrator_core::Registry::default()),
+                "decide",
+            ),
+            rotation.clone(),
+        );
+        let candidates = [AgentRef("alpha".into()), AgentRef("beta".into())];
+        let goal = serde_json::json!({ "goal": "task 7" });
+        let dispatch = OrderRecording::default();
+
+        selector
+            .select(&goal, &candidates, &dispatch)
+            .await
+            .expect("a tie orders the menu, it does not refuse it");
+
+        assert_eq!(
+            dispatch.seen.lock().expect("order lock").as_slice(),
+            &[Some(rotation.order_for(&goal))],
+            "the decision goes out under this question's turn"
         );
     }
 
@@ -534,7 +818,7 @@ mod tests {
         let mut rows = vec![candidate("nimble", 1, None, None)];
         rows[0].verdict = Some("tie".to_string());
         let snapshot = compose(DEFAULT_CATEGORY, &rows);
-        assert!(snapshot.order.is_none());
+        assert!(snapshot.ordering.is_none());
         assert!(snapshot.reason.contains("tie"), "{}", snapshot.reason);
     }
 
@@ -547,7 +831,7 @@ mod tests {
             candidate("laya", 2, Some(2), Some(false)),
         ];
         let snapshot = compose(DEFAULT_CATEGORY, &rows);
-        assert!(snapshot.order.is_none());
+        assert!(snapshot.ordering.is_none());
         assert!(
             snapshot.reason.contains("fewer than 2"),
             "{}",
@@ -567,7 +851,7 @@ mod tests {
             ..candidate("nimble", 1, None, None)
         }];
         let snapshot = compose(DEFAULT_CATEGORY, &unmeasured);
-        assert!(snapshot.order.is_none());
+        assert!(snapshot.ordering.is_none());
         assert!(
             snapshot.reason.contains("no measurement"),
             "{}",
@@ -575,7 +859,7 @@ mod tests {
         );
 
         let empty = compose(DEFAULT_CATEGORY, &[]);
-        assert!(empty.order.is_none());
+        assert!(empty.ordering.is_none());
         assert_eq!(empty.chained, 0);
         assert!(empty.reason.contains("no models"), "{}", empty.reason);
     }
@@ -726,12 +1010,12 @@ mod tests {
         for row in &snapshot.filtered {
             assert!(!row.is_empty());
         }
-        // Seeded measurements are a tie, so the order is the local-first POLICY — a sequence
-        // with no artifact behind it — not a measured ranking.
-        let order = snapshot
-            .order
-            .as_ref()
-            .expect("the seeded tie is broken by the policy");
+        // Seeded measurements are a tie, so the ordering is the local-first POLICY with its
+        // per-decision turn — a rule with no artifact behind it — not a measured ranking.
+        let Some(Ordering::Tie(tie)) = snapshot.ordering.as_ref() else {
+            panic!("the seeded tie is broken by the policy");
+        };
+        let order = tie.order_for(&serde_json::json!({ "goal": "seeded" }));
         assert_eq!(order.kind, ChoiceOrderKind::Policy);
         assert_eq!(
             order.preferred.len(),
@@ -755,7 +1039,7 @@ mod tests {
             unknown.chained, snapshot.chained,
             "the chain's rows come back even when nothing was measured"
         );
-        assert!(unknown.order.is_none());
+        assert!(unknown.ordering.is_none());
         assert!(
             unknown.reason.contains("no measurement"),
             "{}",

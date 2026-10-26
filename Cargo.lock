@@ -5998,7 +5998,7 @@ dependencies = [
 
 [[package]]
 name = "sensei-cloud-providers"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -6017,7 +6017,7 @@ dependencies = [
 
 [[package]]
 name = "sensei-gateway"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -6037,7 +6037,7 @@ dependencies = [
 
 [[package]]
 name = "sensei-kernel"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6054,7 +6054,7 @@ dependencies = [
 
 [[package]]
 name = "sensei-local-engine"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -6073,7 +6073,7 @@ dependencies = [
 
 [[package]]
 name = "sensei-local-providers"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -6089,7 +6089,7 @@ dependencies = [
 
 [[package]]
 name = "sensei-orchestrator"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -6112,7 +6112,7 @@ dependencies = [
 
 [[package]]
 name = "sensei-orchestrator-core"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -6127,7 +6127,7 @@ dependencies = [
 
 [[package]]
 name = "sensei-orchestrator-store"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -6137,7 +6137,7 @@ dependencies = [
 
 [[package]]
 name = "sensei-orchestrator-testkit"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "chrono",
  "sensei-orchestrator-core",
@@ -6148,7 +6148,7 @@ dependencies = [
 
 [[package]]
 name = "sensei-vault"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "aes-gcm",
  "async-trait",

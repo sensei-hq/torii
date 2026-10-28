@@ -14,8 +14,8 @@
 
 use std::sync::Arc;
 
-use orchestrator::test_support::metered_gateway;
 use orchestrator::Executor;
+use orchestrator::test_support::metered_gateway;
 use orchestrator_core::{Graph, Node, NodeId, NodeKind, RunId};
 use orchestrator_store::InMemoryJournal;
 use torii_core::metering::PgGatewayStore;

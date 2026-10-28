@@ -7,8 +7,12 @@ import {
 	csvFilename,
 	fallbackRate,
 	groupByStatus,
+	filteredOut,
 	leafNodes,
 	nodePct,
+	rankingInForce,
+	rankingLine,
+	routeOrder,
 	summarizeTrace,
 	toCsv,
 	triageSummary,
@@ -18,6 +22,34 @@ import {
 import type { BudgetNode, RequestRow, RoutingTrace } from './api'
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
+/**
+ * One persisted `ExecutionTrace`, as `GET /v1/requests/{id}/trace` serves it. Default: a call that
+ * answered on its first candidate, with no order recorded and nothing withheld — the shape the API's
+ * chat-path writer leaves, and the one the ranking/skipped reads have to survive. Each test supplies
+ * the half it is about.
+ */
+const trace = (over: Partial<RoutingTrace> = {}): RoutingTrace => ({
+	request_id: 'r1',
+	capability: 'text_chat',
+	status: 'success',
+	duration_ms: 900,
+	candidates: [],
+	skipped: [],
+	attempts: [
+		{
+			sequence: 1,
+			adapter: 'ollama',
+			model: 'gemma2:2b',
+			api_model_id: 'gemma2:2b',
+			status: 'success',
+			duration_ms: 900,
+			fallback_triggered: false
+		}
+	],
+	created_at: '2026-07-25T10:37:00Z',
+	...over
+})
+
 const row = (over: Partial<RequestRow> = {}): RequestRow => ({
 	id: Math.random().toString(36).slice(2),
 	chain_id: 'chat',
@@ -234,26 +266,6 @@ describe('attemptTone', () => {
 
 // ── summarizeTrace ────────────────────────────────────────────────────────────────
 describe('summarizeTrace', () => {
-	const trace = (over: Partial<RoutingTrace> = {}): RoutingTrace => ({
-		request_id: 'r1',
-		capability: 'text_chat',
-		status: 'success',
-		duration_ms: 900,
-		attempts: [
-			{
-				sequence: 1,
-				adapter: 'ollama',
-				model: 'gemma2:2b',
-				api_model_id: 'gemma2:2b',
-				status: 'success',
-				duration_ms: 900,
-				fallback_triggered: false
-			}
-		],
-		created_at: '2026-07-25T10:37:00Z',
-		...over
-	})
-
 	test('no trace / empty attempts → empty string', () => {
 		expect(summarizeTrace(null, 'chat')).toBe('')
 		expect(summarizeTrace(trace({ attempts: [] }), 'chat')).toBe('')
@@ -318,6 +330,118 @@ describe('summarizeTrace', () => {
 		)
 		expect(s).toContain('failed')
 		expect(s).toContain('503 unavailable')
+	})
+})
+
+// ── the ranking in force, and who it left out ────────────────────────────────
+describe('rankingInForce / rankingLine / routeOrder / filteredOut', () => {
+	/**
+	 * A run's decision call: ordered by a measured ranking for `planner.select`, with one ref the
+	 * admitted candidates could not answer and two candidates the gates withheld (a window this
+	 * request does not fit, and a router in cooldown — the two reasons an operator most often asks
+	 * about). Written by the engine, which is the only writer that has selection's own detail.
+	 */
+	const ranked = (over: Partial<RoutingTrace> = {}): RoutingTrace =>
+		trace({
+			capability: 'decision',
+			routing: {
+				strategy: 'grouped_weighted',
+				degraded: false,
+				order: [
+					{
+						endpoint: 'openai:gpt-4o-mini',
+						priority: 0,
+						cost: 0.0003,
+						reliability: 0.98,
+						weight: 4.2
+					},
+					{
+						endpoint: 'anthropic:claude-sonnet-4-5',
+						priority: 1,
+						cost: 0.009,
+						reliability: null,
+						weight: null
+					}
+				],
+				ranking: {
+					category: 'planner.select',
+					source: { artifact: 'torii:catalog.model_rankings', revision: 7 },
+					matched: 2,
+					unmatched: ['ollama:qwen3:8b']
+				}
+			},
+			skipped: [
+				{
+					router: 'ollama',
+					model: 'qwen3:8b',
+					reason: "estimated 12000 input tokens exceeds the model's 8192-token context window"
+				},
+				{ router: 'grok', model: 'grok-4-fast', reason: 'router cooling down' }
+			],
+			...over
+		})
+
+	test('a trace with no order records no ranking — not a zero, and not an invented category', () => {
+		expect(rankingInForce(null)).toBeNull()
+		expect(rankingInForce(trace())).toBeNull()
+		expect(rankingLine(null)).toBe('')
+	})
+
+	test('an unmeasured order is no ranking either, however ordered the call was', () => {
+		const unmeasured = trace({
+			routing: { strategy: 'priority', degraded: false, order: [], ranking: null }
+		})
+		expect(rankingInForce(unmeasured)).toBeNull()
+		expect(rankingLine(rankingInForce(unmeasured))).toBe('')
+	})
+
+	test('the ranking in force is named by category, artifact and revision — the §9.6 half', () => {
+		const r = rankingInForce(ranked())
+		expect(r).toEqual({
+			category: 'planner.select',
+			artifact: 'torii:catalog.model_rankings',
+			revision: 7,
+			matched: 2,
+			unmatched: ['ollama:qwen3:8b']
+		})
+		expect(rankingLine(r)).toBe(
+			'Measured for planner.select — torii:catalog.model_rankings revision 7: 2 of 3 refs named a candidate.'
+		)
+	})
+
+	test('a ranking with no source still reads, and counts one ref as one ref', () => {
+		const r = rankingInForce(
+			trace({
+				routing: {
+					strategy: 'priority',
+					degraded: true,
+					order: [],
+					ranking: { category: 'triage.severity', source: null, matched: 1, unmatched: [] }
+				}
+			})
+		)
+		expect(r?.artifact).toBeNull()
+		expect(r?.revision).toBeNull()
+		expect(rankingLine(r)).toBe('Measured for triage.severity: 1 of 1 ref named a candidate.')
+	})
+
+	test('the order is what the walk WOULD try, endpoints in order, [] when none is recorded', () => {
+		expect(routeOrder(ranked())).toEqual(['openai:gpt-4o-mini', 'anthropic:claude-sonnet-4-5'])
+		expect(routeOrder(trace())).toEqual([])
+		expect(routeOrder(null)).toEqual([])
+	})
+
+	test('the filtered-out models keep the gate reason that withheld each one', () => {
+		expect(filteredOut(ranked())).toEqual([
+			{
+				router: 'ollama',
+				model: 'qwen3:8b',
+				reason: "estimated 12000 input tokens exceeds the model's 8192-token context window"
+			},
+			{ router: 'grok', model: 'grok-4-fast', reason: 'router cooling down' }
+		])
+		expect(filteredOut(trace())).toEqual([])
+		expect(filteredOut(null)).toEqual([])
 	})
 })
 
@@ -397,8 +521,17 @@ describe('toCsv', () => {
 		const lines = csv.split('\r\n')
 		expect(lines).toHaveLength(3)
 		expect(lines[0]).toBe(
-			'Time,Model,Adapter,Chain,Plane,Input tokens,Output tokens,Cost USD,Duration ms,Status,ID'
+			'Time,Model,Adapter,Chain,Run,Plane,Input tokens,Output tokens,Cost USD,Duration ms,Status,ID'
 		)
+	})
+
+	test('exports the orchestrator run, blank for a call made outside one', () => {
+		const run = '9f1c2b3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d'
+		const lines = toCsv([row({ run_id: run }), row({ run_id: null })]).split('\r\n')
+		const at = lines[0].split(',').indexOf('Run')
+		expect(at).toBeGreaterThan(-1)
+		expect(lines[1].split(',')[at]).toBe(run)
+		expect(lines[2].split(',')[at]).toBe('')
 	})
 
 	test('quotes/escapes cells containing commas, quotes, or newlines (no column bleed)', () => {
@@ -422,7 +555,7 @@ describe('toCsv', () => {
 
 	test('empty ledger still yields the header row alone', () => {
 		expect(toCsv([])).toBe(
-			'Time,Model,Adapter,Chain,Plane,Input tokens,Output tokens,Cost USD,Duration ms,Status,ID'
+			'Time,Model,Adapter,Chain,Run,Plane,Input tokens,Output tokens,Cost USD,Duration ms,Status,ID'
 		)
 	})
 })

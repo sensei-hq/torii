@@ -56,6 +56,13 @@ test('matchesRequest: null chain_id does not throw + is treated as empty', () =>
 	expect(matchesRequest(row({ chain_id: null }), 'sonnet', 'all')).toBe(true)
 })
 
+test('matchesRequest: needle finds every call of one run (System One §9.2)', () => {
+	const run = '9f1c2b3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d'
+	expect(matchesRequest(row({ run_id: run }), '9f1c2b3d', 'all')).toBe(true)
+	// a chat call (no run) never matches a run's id
+	expect(matchesRequest(row({ run_id: null }), '9f1c2b3d', 'all')).toBe(false)
+})
+
 test('matchesEvent: empty needle matches; needle searches action/target/actor', () => {
 	expect(matchesEvent(ev(), '')).toBe(true)
 	expect(matchesEvent(ev(), 'role.assigned')).toBe(true)

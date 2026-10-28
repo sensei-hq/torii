@@ -147,7 +147,86 @@ export interface RequestRow {
 	status: string
 	/** which position in the fallback chain answered (1 = primary, >1 = fell back). */
 	fallback_sequence: number
+	/**
+	 * the orchestrator run this call was made inside (System One §9.2) — null for chat, the
+	 * judge, and any call outside a run. Optional because a gateway that predates the
+	 * projection simply omits the key; a null and an absent run are the same fact.
+	 */
+	run_id?: string | null
 	recorded_at: string
+}
+
+// ── one orchestrator run (System One §9.2) — the run detail read ────────────────
+/** The unit a run's spend is charged to: the DEEPEST charged `core.org_units` row. */
+export interface RunAttribution {
+	id: string
+	name: string
+	/** tier ordinal (0 = org root … 4 = service); the label is the tenant's own. */
+	level: number
+	/** the tenant's label for that tier (`Organization`, `Team`, …) — never hardcoded here. */
+	level_label: string | null
+}
+
+/** A run's spend as the ledger records it, aggregated over the run's own calls. */
+export interface RunTotals {
+	calls: number
+	failed: number
+	cost_usd: number
+	input_tokens: number
+	output_tokens: number
+}
+
+/**
+ * One run's accounting header. Two money figures on purpose: `booked_usd` is what governance
+ * has booked to the run's budget nodes (a watermark that moves at settle), `totals.cost_usd`
+ * is the sum of the calls themselves (always current). They legitimately differ mid-run.
+ */
+export interface RunDetail {
+	run_id: string
+	/** `runs.scheduled_runs.status`: waking | paused | completed | failed | cancelled. Null when
+	 *  the driver has not written a schedule row yet — a charge is legible before it does. */
+	status: string | null
+	/** the scheduler's last pause/fail reason, when it recorded one. */
+	reason: string | null
+	submitted_at: string | null
+	updated_at: string | null
+	/** the run's spend has been booked to its budget nodes and the charge closed. */
+	settled: boolean
+	/** the money limit admitted at submit (`0` = admitted with no money cap). */
+	limit_usd: number
+	/** what governance has actually booked to those nodes so far. */
+	booked_usd: number
+	attributed_to: RunAttribution | null
+	totals: RunTotals
+}
+
+/** `GET /v1/runs/{id}` — the run plus every call it made (oldest-last). */
+export interface RunResponse {
+	run: RunDetail
+	calls: RequestRow[]
+}
+
+/**
+ * A keyset cursor for the run ledger: the last row of the page in hand, identified the way the
+ * gateway orders rows. Both halves are the row's own `submitted_at` and `run_id`, so the list
+ * never depends on the gateway echoing a cursor back at it.
+ */
+export interface RunCursor {
+	submitted_at: string
+	run_id: string
+}
+
+/**
+ * `GET /v1/runs` — a page of runs, newest first. Each row is the SAME header the detail serves
+ * (the gateway projects both from one expression), so a run cannot read differently in this
+ * list than on its own screen.
+ *
+ * `has_more` is about the ledger rather than the page: it is true when runs exist older than the
+ * last row here, so the list knows whether offering to walk back would actually find anything.
+ */
+export interface RunsResponse {
+	runs: RunDetail[]
+	has_more: boolean
 }
 
 // ── Analytics (O2) — server-computed rollups over the FULL ledger + the savings baseline
@@ -215,17 +294,92 @@ export interface RoutingAttempt {
 	fallback_triggered: boolean
 }
 
+/** One candidate a selection admitted, before the walk — mirrors the server `CandidateInfo`. */
+export interface TraceCandidate {
+	model: string
+	router: string
+	priority: number
+}
+
 /**
- * The per-call routing trace behind a request — the "why this model" chain. Mirrors the
- * server `ExecutionTrace` (trace.rs); `candidates`/`skipped` are empty from the chat path
- * today, so only `attempts` is surfaced.
+ * One candidate the pipeline withheld, with the gate's own reason — mirrors the server
+ * `SkippedInfo`. `reason` is the server's rendered `SkipReason` (not a code), so it reads as
+ * the sentence the gateway would put in `AllGated`'s diagnostics: `estimated 12000 input
+ * tokens exceeds the model's 8192-token context window`, `router cooling down`, …
+ */
+export interface SkippedCandidate {
+	model: string
+	router: string
+	reason: string
+}
+
+/** One candidate's place in the order selection handed the walk — server `RoutedCandidate`. */
+export interface RoutedCandidate {
+	/** `"{router}:{model}"`. */
+	endpoint: string
+	priority: number
+	/** estimated cost; `null` for an unpriced (free) candidate. */
+	cost: number | null
+	/** windowed success rate; `null` means UNMEASURED, which is not the same as `0`. */
+	reliability: number | null
+	/** the draw weight, when the weighted default ran; `null` means it never entered a draw. */
+	weight: number | null
+}
+
+/**
+ * The measured order a call was given, when it was given one — mirrors the server
+ * `RankingApplied`. `unmatched` is the interesting half in production: an artifact's roster
+ * drifts from a deployment's availability, so a ref naming a model this deployment cannot
+ * answer is recorded rather than rejected.
+ */
+export interface RankingApplied {
+	/** the task category the order was measured for, e.g. `planner.select`. */
+	category: string
+	/** the artifact the rows came from, and its monotonic revision — recorded, never consulted. */
+	source: { artifact: string; revision?: number; generated_at?: number } | null
+	/** how many of the ranking's refs an admitted candidate answered. */
+	matched: number
+	/** refs no admitted candidate answered, in the ranking's own order. */
+	unmatched: string[]
+}
+
+/** Why the candidates came out in this order — mirrors the server `RoutingDecision`. */
+export interface RoutingDecisionRecord {
+	/** the strategy that ACTUALLY ran (`grouped_weighted`, `price`, `latency`, …). */
+	strategy: string
+	/** a metric sort had too few samples to reorder anything, so it degraded to priority order. */
+	degraded: boolean
+	/**
+	 * the candidates in the order the engine WOULD try them — after any `order` re-rank, and the
+	 * whole list even when the walk stopped early. `attempts` is the record of what it did try.
+	 */
+	order: RoutedCandidate[]
+	/** the measurement behind that order, when the caller supplied one. */
+	ranking?: RankingApplied | null
+}
+
+/**
+ * The per-call routing trace behind a request — the "why this model" explanation. Mirrors the
+ * server `ExecutionTrace` (trace.rs), which the engine persists beside the call row it
+ * describes (System One §9.6), so a run's calls carry one.
+ *
+ * The two halves of "why" are `routing` — the ORDER selection handed the walk, plus the
+ * category and revision of the measurement it was obeyed under — and `skipped` — the models
+ * that never got a chance, each with its gate's reason. `attempts` is what the walk actually
+ * tried, which it can stop before the tail of `order` is reached.
  */
 export interface RoutingTrace {
 	request_id: string
 	capability: string
 	status: 'success' | 'failed'
 	duration_ms: number
+	/** every candidate selection admitted, before the walk. */
+	candidates: TraceCandidate[]
+	/** the withheld candidates and why — the "filtered-out models" half. */
+	skipped: SkippedCandidate[]
 	attempts: RoutingAttempt[]
+	/** absent when no strategy ran at all (a direct router+model pin orders nothing). */
+	routing?: RoutingDecisionRecord | null
 	created_at: string
 }
 
@@ -490,7 +644,13 @@ export const api = {
 		})
 		if (error) throw new Error(error.message)
 	},
-	signOut: () => sb().auth.signOut(),
+	signOut: async () => {
+		const { error } = await sb().auth.signOut()
+		// Clear the server cookie before the caller navigates away: the sign-out above is a hard nav,
+		// which would cancel an in-flight mirror and leave a session the server still trusts.
+		await postSession(null)
+		if (error) throw new Error(error.message)
+	},
 	hasSession: async () => !!(await sb().auth.getSession()).data.session,
 	// the signed-in user's shell identity — real email (from the session) + server-resolved
 	// role (whoami). Replaces the mock "Aiko · Administrator" default in AppShell.
@@ -517,6 +677,28 @@ export const api = {
 	requests: (limit = 100) => gwGet<{ requests: RequestRow[] }>(`/v1/requests?limit=${limit}`),
 	// the per-call routing trace ("why this model") for one request — fetched on row select.
 	requestTrace: (id: string) => gwGet<{ trace: RoutingTrace | null }>(`/v1/requests/${id}/trace`),
+	// System One §9.2: one orchestrator run — its lifecycle, spend, charged unit, and every
+	// call it made. The run id comes from a call's `run_id`; this is the join it buys.
+	run: (id: string) => gwGet<RunResponse>(`/v1/runs/${encodeURIComponent(id)}`),
+	// the page those rows come from — same header shape, one row per admitted run. `before` walks
+	// back through the ledger with a keyset cursor (so runs admitted while an operator reads can
+	// neither duplicate nor skip a row), `status` narrows to one lifecycle, and `failedOnly`
+	// narrows to runs with a failed call — all three narrow the WHOLE ledger server-side, since a
+	// filter applied to the page in hand would answer a different question than the one asked.
+	// The failures flag is sent only when on: the gateway reads an absent flag as "every run", so
+	// there is nothing for `false` to say.
+	runs: (
+		opts: { limit?: number; before?: RunCursor | null; status?: string; failedOnly?: boolean } = {}
+	) => {
+		const q = new URLSearchParams({ limit: String(opts.limit ?? 50) })
+		if (opts.before) {
+			q.set('before', opts.before.submitted_at)
+			q.set('before_id', opts.before.run_id)
+		}
+		if (opts.status && opts.status !== 'all') q.set('status', opts.status)
+		if (opts.failedOnly) q.set('failed_calls', 'true')
+		return gwGet<RunsResponse>(`/v1/runs?${q}`)
+	},
 	budgets: () => gwGet<{ nodes: BudgetNode[]; requests: BudgetRequest[] }>('/v1/budgets'),
 	connections: () => gwGet<{ providers: Provider[] }>('/v1/connections'),
 	apikeys: () => gwGet<{ keys: ApiKey[] }>('/v1/apikeys'),

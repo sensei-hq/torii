@@ -3,7 +3,7 @@
 // figure is computed from the real gateway reads (/v1/requests, /v1/budgets) — no mock
 // data. Three concerns: exception triage (group the ledger by outcome status), the
 // member budget cascade (walk the budget tree), and CSV export of the request table.
-import type { BudgetNode, RequestRow, RoutingTrace } from './api'
+import type { BudgetNode, RequestRow, RoutingTrace, SkippedCandidate } from './api'
 import { money } from './overview'
 
 export { money }
@@ -39,6 +39,78 @@ export function summarizeTrace(trace: RoutingTrace | null, chainId: string | nul
 	const reason = firstFail?.error ? ` (${firstFail.adapter} failed: ${firstFail.error})` : ''
 	const noun = fallbacks === 1 ? 'fallback' : 'fallbacks'
 	return `Answered by ${winner.model} via ${winner.adapter} (${via}) after ${fallbacks} ${noun}${reason}.`
+}
+
+// ── the ranking in force, and who it left out ────────────────────────────────
+// `summarizeTrace` above answers "what answered, and what did it have to get past". These answer the
+// other two questions an operator asks of a call: WHAT ORDER was in force (and under whose
+// measurement), and WHO never got a chance — the fields the engine writes (routing, skipped) and
+// the API's own chat-path writer leaves empty (§9.6).
+
+/** The measured ranking a call was ordered by, as the trace records it. */
+export interface RankingInForce {
+	/** the task category the order was measured for, e.g. `planner.select`. */
+	category: string
+	/** the artifact the rows came from, when the ranking named one. */
+	artifact: string | null
+	/** that artifact's monotonic revision — the "which ranking" half of the answer. */
+	revision: number | null
+	/** how many of the ranking's refs an admitted candidate answered. */
+	matched: number
+	/** refs no admitted candidate answered, in the ranking's own order. */
+	unmatched: string[]
+}
+
+/**
+ * The measured ranking behind a call, or `null` when the trace records none — either the caller
+ * supplied no ranking (an authored policy order, or no order at all) or the call predates the
+ * field. `null` is the honest answer, not a zero: nothing was measured for this call.
+ */
+export function rankingInForce(trace: RoutingTrace | null): RankingInForce | null {
+	const r = trace?.routing?.ranking
+	if (!r) return null
+	return {
+		category: r.category,
+		artifact: r.source?.artifact ?? null,
+		revision: r.source?.revision ?? null,
+		matched: r.matched,
+		unmatched: r.unmatched
+	}
+}
+
+/**
+ * One line naming the measurement a call's order was obeyed under: the category it was measured
+ * for, the artifact revision that was in force, and how many of the refs it names an admitted
+ * candidate answered. `''` when no measurement was claimed — the screen then says so itself
+ * rather than inventing a category, because the trace genuinely has none.
+ */
+export function rankingLine(ranking: RankingInForce | null): string {
+	if (!ranking) return ''
+	const named = ranking.matched + ranking.unmatched.length
+	const where = ranking.artifact
+		? ` — ${ranking.artifact}${ranking.revision == null ? '' : ` revision ${ranking.revision}`}`
+		: ''
+	const refs = `${ranking.matched} of ${named} ref${named === 1 ? '' : 's'} named a candidate`
+	return `Measured for ${ranking.category}${where}: ${refs}.`
+}
+
+/**
+ * The order selection handed the walk, as `router:model` — the ranking in force, whether it was
+ * measured or authored. The walk may end before the tail is reached (`allow_fallback: false`, or a
+ * terminal error), so this is what it WOULD have tried; `attempts` is what it did. `[]` when the
+ * trace records no order.
+ */
+export function routeOrder(trace: RoutingTrace | null): string[] {
+	return (trace?.routing?.order ?? []).map((c) => c.endpoint)
+}
+
+/**
+ * The models the pipeline withheld before the call — each with the gate's own rendered reason, so
+ * "why wasn't the cheap local model used" is answerable from the screen. `[]` when nothing was
+ * withheld (or the trace records none).
+ */
+export function filteredOut(trace: RoutingTrace | null): SkippedCandidate[] {
+	return trace?.skipped ?? []
 }
 
 // ── exception triage: group the ledger by outcome status ─────────────────────
@@ -277,6 +349,9 @@ const CSV_COLUMNS: { key: keyof RequestRow; header: string }[] = [
 	{ key: 'model', header: 'Model' },
 	{ key: 'adapter', header: 'Adapter' },
 	{ key: 'chain_id', header: 'Chain' },
+	// the orchestrator run the call was made inside (§9.2) — the export's only way to group a
+	// run's spend back onto the rows that bought it. Empty for chat and the judge.
+	{ key: 'run_id', header: 'Run' },
 	{ key: 'execution_location', header: 'Plane' },
 	{ key: 'input_tokens', header: 'Input tokens' },
 	{ key: 'output_tokens', header: 'Output tokens' },

@@ -1,5 +1,6 @@
 <script>
 	import { onMount } from 'svelte'
+	import { resolve } from '$app/paths'
 	import { AppShell, PageHeader, Card, CardHead, Chip, Meter, Async, Empty } from '@torii/ui'
 	import { api } from '$lib/api'
 	import { matchesRequest } from '$lib/filters'
@@ -286,6 +287,14 @@
 											{#if r.capability && r.capability !== 'chat'}
 												<Chip tone="accent">{r.capability}</Chip>
 											{/if}
+											<!-- which orchestrator run made this call (System One §9.2). Short id in
+											     the chip, full id on hover — the grey badge exists so a run's
+											     exceptions read as one group rather than unrelated failures. -->
+											{#if r.run_id}
+												<span title={`Run ${r.run_id}`}>
+													<Chip tone="mute">run {r.run_id.slice(0, 8)}</Chip>
+												</span>
+											{/if}
 										</span>
 										<span class="shrink-0 font-mono text-xs text-ink-mute">{money(r.cost_usd)}</span
 										>
@@ -397,6 +406,24 @@
 									fallback chain, and the error that triggered each step) surfaces here.
 								</p>
 							</div>
+						{/if}
+
+						<!-- System One §9.2: a selected call can belong to a run, and the run's own screen
+						     is where its spend and attribution live. This is the drill-down, so the link
+						     belongs here rather than as a second click target inside the row button. -->
+						{#if selected?.run_id}
+							<a
+								href={resolve('/runs/[id]', { id: selected.run_id })}
+								class="flex items-center gap-2 border-t border-paper-edge px-6 py-3 text-xs text-ink-soft transition-colors hover:bg-paper-mute/40"
+							>
+								<span class="i-solar-wallet-2-bold-duotone h-3.5 w-3.5 shrink-0"></span>
+								<span class="min-w-0 flex-1 truncate">
+									Made inside run <b class="font-mono font-semibold text-ink"
+										>{selected.run_id.slice(0, 8)}</b
+									> — open its calls, spend and attribution.
+								</span>
+								<span class="i-solar-arrow-right-linear h-3.5 w-3.5 shrink-0"></span>
+							</a>
 						{/if}
 					</Card>
 				</div>

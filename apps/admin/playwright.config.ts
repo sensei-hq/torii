@@ -20,6 +20,10 @@ export default defineConfig({
 	// Excluded whenever fidelity is not running, so the rest of the suite is unaffected.
 	testIgnore: mockups.enabled ? [] : ['**/fidelity.spec.ts'],
 	timeout: 30_000,
+	// Compile the routes the suite opens once, before the workers start: a cold Vite compile pays
+	// for itself on the first request, and with parallel workers that first request is several
+	// routes at once — see e2e/globalSetup.ts.
+	globalSetup: './e2e/globalSetup.ts',
 	webServer: [
 		{
 			command: 'bun run dev -- --port 4273',

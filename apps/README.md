@@ -57,7 +57,12 @@ bun run lint
 # Or drive everything via the Makefile
 make help          # build / test / check / lint / e2e / clean / clean-cache / clean-all
 
-# Web E2E — fast, no build required (~7 s)
+# Web E2E — fast, no build required (~7 s). The authed specs need the local Supabase stack
+# (:55321/:55322), the gateway (:8787) and the seeded owner from e2e/helpers.ts. The Runs spec
+# also seeds its own ledger rows through psql (DATABASE_URL, default the local Supabase DB) and
+# removes them afterwards — a fresh dev database has no inference calls to read.
+# Playwright runs the spec files in parallel — safe because e2e/globalSetup.ts compiles the
+# routes they open once, before any worker starts. `--workers=1` still works if you prefer it.
 cd apps/admin && bun run test:e2e
 
 # Tauri E2E — builds the full Tauri app first (~3 min incremental; ~20 min cold after `make clean`)

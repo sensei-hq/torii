@@ -43,7 +43,9 @@
 					label: 'Usage patterns',
 					icon: 'i-solar-clipboard-list-bold-duotone',
 					live: true
-				}
+				},
+				// System One §9.2: runs are their own object (a budget charge), not a filter on calls.
+				{ href: '/runs', label: 'Runs', icon: 'i-solar-play-circle-bold-duotone' }
 			]
 		},
 		{

@@ -10,7 +10,8 @@ import type { AuditEvent, RequestRow } from './api'
 export function matchesRequest(r: RequestRow, needle: string, plane: string): boolean {
 	if (plane !== 'all' && (r.execution_location ?? '') !== plane) return false
 	if (!needle) return true
-	return `${r.model} ${r.chain_id ?? ''} ${r.status} ${r.execution_location ?? ''}`
+	// run_id is in the haystack so an operator can pull up every call of one run (§9.2).
+	return `${r.model} ${r.chain_id ?? ''} ${r.status} ${r.execution_location ?? ''} ${r.run_id ?? ''}`
 		.toLowerCase()
 		.includes(needle)
 }

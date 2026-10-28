@@ -789,6 +789,11 @@ pub struct LightDeps {
     /// catalog and therefore no measurements — carrying `None` rather than an empty resolver
     /// keeps "there is nothing to measure against" distinguishable from "nothing measured".
     pub ranking: Option<Arc<dyn RankingResolver>>,
+    /// System One §9.2: the ledger the run executor records its model calls through — the
+    /// same `PgGatewayStore` the API writes chat with, so a run's calls land in
+    /// `metering.inference_calls` attributed to the run. `None` on the memory backend, which
+    /// has no ledger table: a store-less boot stays byte-identical.
+    pub metering: Option<Arc<dyn gateway::store::GatewayStore>>,
 }
 
 impl LightDeps {
@@ -841,6 +846,13 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
             let ranking = Arc::new(CatalogRanking::new(pool.clone(), tenant_id));
             // ONE store object behind both the trait and the attempt-counter reader.
             let scheduler = Arc::new(stores.scheduler);
+            // §9.2: the run executor's ledger writer. Same tenant, same pool (a clone is an
+            // `Arc` clone) as the API's, so the two cannot describe the ledger differently.
+            let metering: Arc<dyn gateway::store::GatewayStore> =
+                Arc::new(torii_core::metering::PgGatewayStore {
+                    pool: pool.clone(),
+                    tenant_id,
+                });
             Ok(Stores {
                 light: LightDeps {
                     scheduler_store: scheduler.clone(),
@@ -851,6 +863,7 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                     wake_attempts: scheduler,
                     content: Arc::new(stores.content),
                     charges: Some(charges),
+                    metering: Some(metering),
                 },
                 context: Arc::new(stores.context),
             })
@@ -877,6 +890,8 @@ async fn open_stores(env: &EnvConfig) -> Result<Stores, CliError> {
                     wake_attempts: Arc::new(NoWakeAttemptCounts),
                     content: content.clone(),
                     charges: None,
+                    // No ledger table to write: the memory backend is the gap by design.
+                    metering: None,
                 },
                 context: Arc::new(InMemoryContextStore::new(content)),
             })
@@ -1116,7 +1131,14 @@ pub(crate) async fn heavy_with(
     let registered = builder.registry().clone();
     let facade = builder.build().await;
     require_adapters(&registered.list().await, &configured_routers, &gw_source)?;
-    let gateway = Arc::new(facade.gateway);
+    // System One §9.2: the executor's calls are ledger rows, not journal state only. The
+    // engine's own write is best-effort and bounded, so a sick store still cannot hold a run.
+    // A store-less boot (the memory backend) is unchanged — `facade.gateway` with no store
+    // records nothing, exactly as before.
+    let gateway = match light.metering.clone() {
+        Some(store) => Arc::new(facade.gateway.with_store(store)),
+        None => Arc::new(facade.gateway),
+    };
 
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     // AG-18: hooks on EVERY drive. This executor is the only one the binary builds, and both

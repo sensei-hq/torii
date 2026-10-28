@@ -267,6 +267,10 @@ async fn main() -> anyhow::Result<()> {
             "/requests/{id}/trace",
             get(routes::ledger::get_request_trace),
         )
+        // System One §9.2: one orchestrator run — its calls, spend and charged unit — and the
+        // page of runs an operator starts from.
+        .route("/runs", get(routes::ledger::get_runs))
+        .route("/runs/{id}", get(routes::ledger::get_run))
         .route("/budgets", get(routes::ledger::get_budgets))
         .route("/apikeys", get(routes::ledger::get_apikeys))
         .route("/connections", get(routes::ledger::get_connections))

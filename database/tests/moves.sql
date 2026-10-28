@@ -1086,4 +1086,33 @@ begin
   raise notice 'M-ln-4b cost_usd→cost_actual + session_id/project_id dropped + conversation_id added + shield contract intact ✓';
 end $$;
 
+\echo '== System One §9.2: run attribution on the ledger =='
+
+-- M-s1-9.2 — every model call made inside an orchestrator run is stamped with that run id, and the
+-- /v1/requests shield exposes it (else the column is write-only: a run's spend is visible but the
+-- rows that bought it are not). No FK on purpose — accounting history must not block or cascade with
+-- a run (same rule run_charges states), so a deleted run leaves its calls readable.
+do $$
+declare fk_count int;
+begin
+  if not exists (select 1 from information_schema.columns
+                  where table_schema='metering' and table_name='inference_calls' and column_name='run_id') then
+    raise exception 'FAIL: inference_calls.run_id missing (run-attributed calls cannot be recorded)'; end if;
+  if (select data_type from information_schema.columns
+       where table_schema='metering' and table_name='inference_calls' and column_name='run_id') <> 'uuid' then
+    raise exception 'FAIL: inference_calls.run_id must be uuid (matches runs.run_charges.run_id)'; end if;
+  if (select is_nullable from information_schema.columns
+       where table_schema='metering' and table_name='inference_calls' and column_name='run_id') <> 'YES' then
+    raise exception 'FAIL: inference_calls.run_id must be nullable (chat/judge calls have no run)'; end if;
+  select count(*) into fk_count from pg_constraint
+   where contype='f' and conrelid='metering.inference_calls'::regclass
+     and pg_get_constraintdef(oid) ilike '%run_id%';
+  if fk_count <> 0 then
+    raise exception 'FAIL: inference_calls.run_id gained an FK — accounting history must outlive the run'; end if;
+  if not exists (select 1 from information_schema.columns
+                  where table_schema='metering' and table_name='requests_ledger_for_tenant' and column_name='run_id') then
+    raise exception 'FAIL: requests_ledger_for_tenant does not expose run_id (/v1/requests cannot show it)'; end if;
+  raise notice 'M-s1-9.2 inference_calls.run_id (uuid, nullable, no FK) + requests_ledger shield ✓';
+end $$;
+
 \echo '== §D moves tests done =='

@@ -27,6 +27,7 @@ select
 , recorded_at
 , cost_estimated                   -- §D LN-4: gateway pre-call estimate (USD), snapshotted alongside actual cost_usd. Appended at END so CREATE OR REPLACE stays idempotent (can't reorder existing view cols).
 , capability                       -- System One Phase 5: which capability the call answered (`chat`, `decision`, …). Appended at END for the same reason. A `decision` call is not chat that looks odd — it is a different axis, and the ledger read model has to say so or the screen cannot.
+, run_id                           -- System One §9.2: the orchestrator run this call was made inside; NULL for chat, the judge, and anything outside a run. Appended at END (same CREATE OR REPLACE constraint). Without it the column is write-only: an operator can see a run spent money but not which ledger rows that money bought.
 from metering.inference_calls;
 
 comment on view requests_ledger_for_tenant is

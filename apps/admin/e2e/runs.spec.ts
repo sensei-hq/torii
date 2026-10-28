@@ -184,10 +184,48 @@ test.describe('runs', () => {
 		await expect(filtered).toContainText('8192-token context window')
 		await expect(filtered).toContainText('router cooling down')
 
-		// the other call has no trace recorded: the panel says so rather than showing an empty
-		// chain, which is the difference between "nothing to explain" and "explanation lost".
+		// the other call has no trace recorded — the chat path persists one only for a served call —
+		// and the panel says so rather than showing an empty chain: "nothing to explain" and
+		// "explanation lost" are different statements.
 		await calls.nth(1).click()
 		await expect(page.locator('[data-call-row]').first()).toHaveAttribute('aria-expanded', 'false')
 		await expect(page.locator('[data-trace]')).toContainText('No routing trace recorded')
+	})
+
+	test('a failed call opens to its attempts and the order it was handed', async ({ page }) => {
+		// The run whose whole chain failed. Its ledger row names only the last error, so the trace
+		// is the entire explanation: what the walk tried, and the order it was given
+		// (System One §9.6 writes a failed trace, not only a served one).
+		await page.locator(`[data-run-row="${RUNS.failed}"]`).click()
+		await expect(page).toHaveURL(new RegExp(`/runs/${RUNS.failed}$`))
+
+		const calls = page.locator('[data-call-row]')
+		await expect(calls).toHaveCount(1)
+		await calls.first().click()
+		await expect(calls.first()).toHaveAttribute('aria-expanded', 'true')
+
+		const trace = page.locator('[data-trace]')
+		await expect(trace.locator('[data-why]')).toContainText('All 2 routing attempts failed')
+		await expect(trace.locator('[data-attempt]')).toHaveCount(2)
+		await expect(trace.locator('[data-attempt]').nth(1)).toContainText('claude-sonnet-4-5')
+		// the reason each attempt was refused is the provider's own, not a flattened summary
+		await expect(trace).toContainText('upstream 429: rate limited')
+		await expect(trace).toContainText('upstream 500: internal error')
+
+		// The order it was handed survives the failure, which is the half a failed call could not show
+		// before: the walk had an order even though no candidate answered.
+		const ranking = trace.locator('[data-ranking]')
+		await expect(ranking).toContainText('grouped_weighted')
+		await expect(ranking.locator('[data-ranking-order]')).toContainText(
+			'openai:gpt-4o-mini → anthropic:claude-sonnet-4-5'
+		)
+		// This call was given an authored order and no measurement, and the screen says that rather
+		// than attaching a ranking category the trace does not record.
+		await expect(ranking.locator('[data-ranking-source]')).toContainText(
+			'No measured ranking was in force for this call'
+		)
+		await expect(trace.locator('[data-ranking-unmatched]')).toHaveCount(0)
+		// nothing was withheld before this walk, so the filtered-out block is absent rather than empty
+		await expect(trace.locator('[data-filtered]')).toHaveCount(0)
 	})
 })

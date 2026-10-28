@@ -10,8 +10,8 @@ import { signIn } from './helpers'
 const nodeNames = (page: Page): Locator => page.getByRole('textbox', { name: 'Node name' })
 
 /** Re-open Organization via CLIENT-side nav (Overview → Members & roles) so the page re-mounts
- *  and re-reads /v1/budgets. A full `page.reload()` would hard-load and the client-only session
- *  guard bounces that to /signin, so it can't be used to test persistence. */
+ *  and re-reads /v1/budgets. A hard load keeps the session now, but this stays client-side so the
+ *  test exercises a re-mount rather than a cold boot of the whole app. */
 async function reopenOrg(page: Page): Promise<void> {
 	await page.getByRole('link', { name: /^overview$/i }).click()
 	await expect(page.locator('main h1')).toBeVisible({ timeout: 10_000 })

@@ -1,14 +1,30 @@
 import { test, expect } from '@playwright/test'
 
-// Deterministic, no auth required. Phase-0 behaviour: the (app) guard bounces an
-// unauthenticated visitor to /signin, which renders the real Seiki sign-in page.
+// Deterministic, no auth required. `/` is a `roles: '*'` rule in kavach.config.js, so the server
+// turns an unauthenticated request away before SvelteKit renders anything — the sign-in page that
+// follows is the real Seiki one, not a 404. The (app) layout's client guard is only a backstop now.
 test('unauthenticated / redirects to the sign-in page', async ({ page }) => {
 	await page.goto('/')
 	await expect(page.locator('app[data-style="rokkit"]')).toBeVisible()
-	await expect(page).toHaveURL(/\/signin$/)
-	await expect(page.getByRole('heading', { name: /sign in to the admin portal/i })).toBeVisible()
+	// Still 15s, but no longer for hydration: on a cold dev server the first request compiles the
+	// route, and that compile time is what the assertion would otherwise be measuring.
+	await expect(page).toHaveURL(/\/signin$/, { timeout: 15_000 })
+	await expect(page.getByRole('heading', { name: /sign in to the admin portal/i })).toBeVisible({
+		timeout: 15_000
+	})
 	// Magic-link is the primary CTA; the password path is a secondary, revealed option.
 	await expect(page.getByRole('button', { name: /email me a magic link/i })).toBeVisible()
+})
+
+// The flip side of the deep link that now works when signed in: kavach.config.js admits /runs for
+// signed-in members, and this pins that it did not become public. Default-deny turns the request
+// away server-side, so a shared run URL leaks nothing.
+test('an unauthenticated deep link to a run is still turned away', async ({ page }) => {
+	await page.goto('/runs/c0000001-0000-4000-8000-000000000001')
+	await expect(page).toHaveURL(/\/signin$/, { timeout: 15_000 })
+	await expect(page.getByRole('heading', { name: /sign in to the admin portal/i })).toBeVisible({
+		timeout: 15_000
+	})
 })
 
 // Regression guard for the reset cascade-layer bug: an unlayered `@unocss/reset` made the

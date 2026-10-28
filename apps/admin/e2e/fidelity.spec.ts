@@ -382,8 +382,7 @@ const REQ_CARD_MOCK: Anchor = { text: 'falling back · 24h', mode: 'contains' }
 const REQ_STAT: Anchor = { text: 'calls · 24h', mode: 'exact' }
 
 /** Sign into the app and click through to the Requests screen. Uses the in-app nav link
- *  (client-side SvelteKit routing) — a full `goto('/requests')` would hard-load and the
- *  client-only session guard bounces that to /signin. */
+ *  (client-side SvelteKit routing) — the same path a user takes, without a cold boot. */
 async function gotoAppRequests(app: Page): Promise<void> {
 	await signIn(app)
 	await app

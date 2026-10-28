@@ -7,7 +7,7 @@
 //     table) — the gateway enforces capability + tenant isolation server-side.
 // UX gating uses `whoami().capabilities` (advisory); the server is the only gate.
 
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js'
 
 import { GATEWAY_URL, SUPABASE_ANON_KEY, SUPABASE_URL } from './env'
 import { setFeaturePayload, WORKSPACE_SCOPE, type FeatureScope } from './governance'
@@ -21,8 +21,48 @@ function sb(): SupabaseClient {
 		_sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 			auth: { persistSession: true, autoRefreshToken: true }
 		})
+		// Every path that establishes a session — password, magic link, OAuth callback — and every
+		// refresh of one ends in an auth event, so a single subscription keeps the server's copy in
+		// step without each screen (or each flow) remembering to do it.
+		//
+		// A null session is only mirrored on a real sign-out: `INITIAL_SESSION` also reports null on
+		// a first visit, and posting that would race the sign-in's own sync and clear a fresh cookie.
+		_sb.auth.onAuthStateChange((event, session) => {
+			if (session) void postSession(session)
+			else if (event === 'SIGNED_OUT') void postSession(null)
+		})
 	}
 	return _sb
+}
+
+/** Kavach's session endpoint — must match `routes.session` in kavach.config.js. */
+const SESSION_ENDPOINT = '/auth/session'
+
+/**
+ * Mirror the browser session into the httpOnly `session` cookie the server-side guard reads.
+ *
+ * The guard (hooks.server.js → kavach) judges every request by a cookie, while the browser's
+ * session lives in localStorage, which the server cannot see. The two therefore never met: a hard
+ * load of any authed route — a reload, a bookmark, a shared run URL — was refused and bounced to
+ * /signin even with a perfectly good session. Kavach owns that cookie (httpOnly, so only a server
+ * response can write it), and its session endpoint is the supported way to hand it one: the server
+ * re-validates the tokens with Supabase and sets the cookie.
+ *
+ * Synced on every auth event rather than once at sign-in: the cookie's lifetime is the access
+ * token's, so a tab left open would otherwise drift back to the bouncing behaviour within the hour.
+ */
+async function postSession(session: Session | null): Promise<void> {
+	if (typeof window === 'undefined') return
+	try {
+		await fetch(SESSION_ENDPOINT, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			// kavach's shape: a null session means "signed out", and the server clears the cookie.
+			body: JSON.stringify({ event: session ? 'SIGNED_IN' : 'SIGNED_OUT', session })
+		})
+	} catch {
+		/* the client-side guard still covers navigation; a failed mirror is not a failed sign-in */
+	}
 }
 
 async function authHeader(): Promise<Record<string, string>> {

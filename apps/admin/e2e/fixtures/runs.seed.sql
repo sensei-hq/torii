@@ -21,7 +21,9 @@
 --             `planner.select` (artifact revision 7, one ref no candidate could answer) and the
 --             two candidates the pipeline withheld, each with its gate's own reason. Those two
 --             are what the run detail's ranking and filtered-out blocks read.
---   c0000002  failed   with a reason, 1 call whose trace has 2 failed attempts
+--   c0000002  failed   with a reason, 1 call whose FAILED trace has 2 failed attempts and the
+--             order it was handed — but no measured ranking, because this caller supplied none;
+--             the panel says so rather than inventing a category (§9.6 writes failed traces too)
 --   c0000003  paused   with a reason, no calls
 --   c0000004  no schedule row (charge-only) — "No schedule"
 --   c0000005  cancelled, no calls
@@ -107,7 +109,9 @@ select (select tenant from _ctx), r.run_id, (select issuer from _ctx),
 
 -- ── calls, with the routing traces the run detail expands ───────────────────────
 -- c0000001: a served decision call that fell back once (2 attempts, the newest row on the
--- screen) and a failed one below it, which has no trace — the screen's "no trace recorded" case.
+-- screen) and a failed CHAT call below it with no trace — the screen's "no trace recorded" case.
+-- The chat route is a separate writer from the engine and traces only a served call, so this
+-- row is honest: a run's failed DECISION call does get a trace (see c0000002 below).
 -- A run's decision call rather than a chat one because a MEASURED ranking is a claim about a
 -- decision order: `dispatch::routing_for` maps the executor's measured `ChoiceOrder` into
 -- `RoutingPreferences::ranking`, and only that mapping carries a category and an artifact revision.
@@ -172,14 +176,21 @@ values
          'unmatched', jsonb_build_array('ollama:qwen3:8b'))),
      'created_at', now() - interval '25 seconds'),
    now() - interval '25 seconds'),
-  -- failed: every candidate refused it.
+  -- failed: every candidate refused it, and the trace is the whole explanation — the ledger row
+  -- names only the last error. Candidates, the order the walk was handed and the attempts all
+  -- survive a failure (`engine/execute.rs::build_trace` writes this shape for an exhausted walk);
+  -- the cost fields do not, because nothing was served. No `ranking` here on purpose: this caller
+  -- supplied no measured order, and the screen must say that rather than name a category the
+  -- trace does not have.
   ((select tenant from _ctx), 'c1000002-0000-4000-8000-000000000001',
    jsonb_build_object(
      'request_id', 'c1000002-0000-4000-8000-000000000001',
      'capability', 'decision',
      'status', 'failed',
      'duration_ms', 610,
-     'candidates', '[]'::jsonb,
+     'candidates', jsonb_build_array(
+       jsonb_build_object('model', 'gpt-4o-mini', 'router', 'openai', 'priority', 0),
+       jsonb_build_object('model', 'claude-sonnet-4-5', 'router', 'anthropic', 'priority', 1)),
      'skipped', '[]'::jsonb,
      'attempts', jsonb_build_array(
        jsonb_build_object('sequence', 1, 'adapter', 'openai', 'model', 'gpt-4o-mini',
@@ -189,6 +200,14 @@ values
                           'api_model_id', 'claude-sonnet-4-5-20250929', 'status', 'failed',
                           'duration_ms', 310, 'error', 'upstream 500: internal error',
                           'fallback_triggered', false)),
+     'routing', jsonb_build_object(
+       'strategy', 'grouped_weighted',
+       'degraded', false,
+       'order', jsonb_build_array(
+         jsonb_build_object('endpoint', 'openai:gpt-4o-mini', 'priority', 0,
+                            'cost', 0.0003, 'reliability', null, 'weight', null),
+         jsonb_build_object('endpoint', 'anthropic:claude-sonnet-4-5', 'priority', 1,
+                            'cost', 0.009, 'reliability', null, 'weight', null))),
      'created_at', now() - interval '110 seconds'),
    now() - interval '110 seconds');
 

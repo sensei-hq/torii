@@ -7,6 +7,7 @@
 pub mod config;
 pub mod defaults;
 pub mod events;
+pub mod metering;
 pub mod pricing;
 pub mod registry;
 pub mod registry_dir;

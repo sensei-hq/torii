@@ -225,6 +225,7 @@ pub async fn judge_response(
         error_type: None,
         fallback_sequence: run.attempts,
         recorded_at: chrono::Utc::now(),
+        run_id: None,
     };
     let store = PgGatewayStore {
         pool: state.pool.clone(),

@@ -36,6 +36,7 @@ create table if not exists inference_calls (
 , org_unit_id        uuid
 , execution_location core.execution_location                       -- {local,cloud} enum (nullable)
 , hold_id            uuid
+, run_id            uuid                                              -- System One §9.2: the orchestrator run this call was made inside (was `runs.journal_events` only). No FK on purpose: this is accounting history, so it must not block a run removal, and it must not be cascaded away with one — the same rule run_charges states for its own run_id.
 , primary key (tenant_id, id)
   -- §D Ledger Normalize LN-3a→LN-4b: sessions retired; the vestigial session_id/project_id were DROPPED
   -- (LN-4b) and replaced by the nullable conversation_id declared above (content.conversations writer = P7).
@@ -66,6 +67,12 @@ create index if not exists idx_inference_calls_org_unit
   on inference_calls(tenant_id, org_unit_id)
   where org_unit_id is not null;
 
+-- System One §9.2: the calls of one run, for the run detail and for "what did this run spend".
+-- Partial: every chat call is NULL here, and there are far more of those.
+create index if not exists idx_inference_calls_run
+  on inference_calls(tenant_id, run_id)
+  where run_id is not null;
+
 comment on table inference_calls is
 'Append-only ledger of every model inference routed through the gateway.
 - Matches GatewayStore::InferenceCall exactly (gateway crate, store.rs).
@@ -77,5 +84,7 @@ comment on table inference_calls is
 - duration_ms is bigint (Rust u64) to handle pathological long calls without overflow.
 - fallback_sequence (u8) indicates which position in the fallback chain succeeded.
 - conversation_id is a nullable link to content.conversations (LN-4b; writer = P7).
+- run_id is the orchestrator run a call was made inside (System One §9.2), stamped by the store
+  from the per-task run scope of the executor. NULL for chat, the judge, and any call outside a run.
 - RW7 columns (budget attribution + execution_location + hold_id) are declared inline above.
 - Written by service_role (bypasses RLS); clients SELECT via RLS (tenant_isolation.sql).';

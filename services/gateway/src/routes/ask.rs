@@ -418,6 +418,7 @@ pub async fn ask(
         error_type: None,
         fallback_sequence: resp.attempts.len() as u8,
         recorded_at: Utc::now(),
+        run_id: None,
     };
     if let Err(e) = store.insert_inference_call(&call).await {
         tracing::warn!("ask: persist inference_call failed (best-effort): {e}");

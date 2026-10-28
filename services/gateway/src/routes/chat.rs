@@ -535,6 +535,7 @@ pub async fn post_chat(
             error_type: None,
             fallback_sequence: resp.attempts.len() as u8,
             recorded_at: Utc::now(),
+            run_id: None,
         };
 
         let store = PgGatewayStore {
@@ -769,6 +770,7 @@ pub async fn post_chat_stream(
                         error_type: None,
                         fallback_sequence: resp.attempts.len() as u8,
                         recorded_at,
+                        run_id: None,
                     };
 
                     let store = PgGatewayStore {
@@ -1087,6 +1089,7 @@ impl ModelTurn for GatewayModelTurn<'_> {
             error_type: None,
             fallback_sequence: resp.attempts.len() as u8,
             recorded_at: Utc::now(),
+            run_id: None,
         };
         if store.insert_inference_call(&call).await.is_ok() {
             let stored_trace = build_trace(

@@ -4,7 +4,7 @@
 // (see docs/code-review.md H1). `tsconfig.json` `paths` maps the three modules core consumes to
 // this file, so the typecheck stops here. RUNTIME is unaffected — bun (and vitest's inlined vite
 // transform) resolve the real packages. The code already treats these APIs loosely (guard.ts casts
-// the sentry shape to the real runtime). Upstream fix tracked at jerrythomas/kavach#25 (publish
+// the sentry shape to the real runtime). Upstream fix tracked at sensei-hq/kavach#25 (publish
 // @kavach/* with dist/*.d.ts + extension-ful imports); drop this stub + the `paths` entries once it lands.
 export const createSentry: (...args: any[]) => any
 export const getAdapter: (...args: any[]) => any

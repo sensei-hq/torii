@@ -6,7 +6,7 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 // resolve those (`Cannot find module '.../src/types'`). Inline the @kavach packages so vitest
 // transforms them through vite's resolver (which adds the `.js`) — the same way the admin/desktop
 // apps already consume them via vite. Upstream packaging bug (docs/code-review.md H1) tracked at
-// jerrythomas/kavach#25; this keeps `bun run test` green without vendoring or a global-link dep.
+// sensei-hq/kavach#25; this keeps `bun run test` green without vendoring or a global-link dep.
 // Remove once @kavach/* publish `dist/` + extension-ful imports.
 //
 // The svelte plugin compiles runes STATE modules (`*.svelte.ts`, e.g. auth/session): without it
